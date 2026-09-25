@@ -9,7 +9,7 @@
  * tool failure is information for the model, not a crash for the loop.
  */
 
-import { open, rename, stat, writeFile } from "node:fs/promises";
+import { open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -277,6 +277,20 @@ export function createReadFileTool(): Tool {
   };
 }
 
+function lineDiff(before: string, after: string): string {
+  const oldLines = before.split(/\r?\n/);
+  const nextLines = after.split(/\r?\n/);
+  const lines: string[] = [];
+  const limit = Math.max(oldLines.length, nextLines.length);
+  for (let index = 0; index < limit; index += 1) {
+    if (oldLines[index] === nextLines[index]) continue;
+    if (index < oldLines.length) lines.push(`- ${oldLines[index]}`);
+    if (index < nextLines.length) lines.push(`+ ${nextLines[index]}`);
+  }
+  const shown = lines.slice(0, 40);
+  return lines.length > 40 ? `${shown.join("\n")}\n…其余 ${lines.length - 40} 行未显示` : shown.join("\n");
+}
+
 /**
  * Replace one existing UTF-8 text file inside the workspace.
  *
@@ -320,7 +334,9 @@ export function createEditFileTool(): Tool {
       if (info.nlink > 1) return fail("edit_file", "hard-linked files are denied");
       if (info.size > WRITE_FILE_MAX_BYTES) return fail("edit_file", `${target} is ${info.size} bytes, over the ${WRITE_FILE_MAX_BYTES}-byte limit`);
       if (!context.approve) return fail("edit_file", "no approval channel is configured");
-      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?`);
+      const current = await readFile(resolved, "utf8");
+      const diff = lineDiff(current, content);
+      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}`);
       if (!approved) return fail("edit_file", "operator declined");
       const temporary = `${resolved}.${process.pid}.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });

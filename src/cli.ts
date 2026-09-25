@@ -184,7 +184,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
       systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. edit_file replaces one existing file only after the operator approves. Respect denied paths; never pretend a tool succeeded.",
       ...(interactive && io ? { approve: async (prompt: string) => {
-        io.write(`${prompt}\n旧内容不会显示全文。回答“是”才替换。\n`);
+        io.write(`${prompt}\n回答“是”才替换。\n`);
         const answer = await io.ask("批准？> ");
         return answer?.trim() === "是";
       } } : {}),

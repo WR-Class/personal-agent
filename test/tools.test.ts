@@ -77,13 +77,16 @@ describe("edit_file", () => {
   it("replaces one existing file only after approval", async () => {
     await writeFile(join(workspace(), "editable.txt"), "old text", "utf8");
     let asked = 0;
+    let prompt = "";
     const registry = new ToolRegistry([createEditFileTool()]);
     const result = await registry.execute(call("edit_file", { path: "editable.txt", content: "new text" }), {
       workspaceRoot: workspace(),
-      approve: async () => { asked += 1; return true; },
+      approve: async (text) => { asked += 1; prompt = text; return true; },
     });
     assert.equal(result.isError, undefined);
     assert.equal(asked, 1);
+    assert.match(prompt, /- old text/);
+    assert.match(prompt, /\+ new text/);
     assert.equal(await readFile(join(workspace(), "editable.txt"), "utf8"), "new text");
   });
 
