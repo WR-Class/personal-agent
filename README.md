@@ -45,6 +45,19 @@ npm.cmd start -- --echo
 
 Echo 是明确的离线回显，不是真实大模型，不会主动调用工具。首次向导也可输入 `echo`；此选择不保存，下一次可重新配置。
 
+## 版本控制与 CI
+
+仓库**只覆盖 `personal-agent/`**——工作区根目录下的 `_research/`、`restore/` 等外部参考树不在其中，也不应被纳入。`.gitignore` 排除 `node_modules/`、`.personal-agent/`（Agent home，保存明文密钥时密钥就在这里）、`.test-artifacts/`；`.gitattributes` 固定 LF，使文档里的完整性哈希在新克隆上**逐字节一致**（已验证：克隆后重算得到相同摘要）。
+
+CI 在 `.github/workflows/ci.yml`：Windows 运行器 + Node `22.x`/`24.x` 矩阵，步骤与本地相同（`npm ci` → `npm run build` → `npm test`）。这些步骤已在**干净克隆**上手工实跑通过（Node 24）。两点必须说明：**CI 从未在真实运行器上执行过**（本地仓库没有远端），且 **Node 22.x 未在本机测过**（本机只有 24）——这个矩阵存在的意义正是去测 `engines` 声称的下限。
+
+首次提交使用的是**仓库局部**身份（`personal-agent <personal-agent@localhost>`，未改动你的全局 git 配置）。要换成你自己：
+
+```powershell
+git config user.name "你的名字"; git config user.email "你的邮箱"
+git commit --amend --reset-author --no-edit   # 只改最近一个提交的作者
+```
+
 ## 对话中的命令
 
 | 命令 | 用途 |

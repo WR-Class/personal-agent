@@ -179,6 +179,8 @@ SSE 流式批后（新增 `test/streaming.test.ts`，改 `openai-adapter.ts`/`cl
 201c0fb5e7e54fcf40e2412b1196d36588b070ab0744b09c84e1df3749a0d731
 ```
 
+版本控制与 CI 批**不改变此值**：该批只动了文档、`.gitattributes` 与新冒烟现场，而哈希集合是 `src`/`test`/`scripts` 加四个配置文件——`.gitattributes` **刻意不在**哈希集合内，它恰恰是用来保证集合内文件字节稳定（LF）的。已用 `git clone` 验证：新克隆中重算得到**同一个** 34 文件摘要。
+
 同文件集下若**去掉末尾 LF**再哈希，则得到 `dd3a731b44e31589793b7b11e04b698af9e0899fd7b9767a00bc1aad84e234d6`。两者不同，**此前记录的数值无法反查其属于哪一种写法**（源码已改变，旧值不可重算），因此本节此前各值只能用来说明"代码确实变过"。从本批起以保留末尾 LF 的写法为本算法唯一口径，后续必须沿用同一写法，否则数值不可比。
 
 每次值变化都是预期结果（源码确实改变），不是完整性校验失败。首次用 PowerShell `[System.IO.Path]::GetRelativePath` 计算失败（该 API 在 PowerShell 5.1 不存在），得到的结果已丢弃、未使用；上列数值均由改为手工相对路径的同一算法得到。
@@ -199,7 +201,7 @@ SSE 流式批后（新增 `test/streaming.test.ts`，改 `openai-adapter.ts`/`cl
 | 摘要保真 | 原始消息逐字节保留、边界=实测消息数（伪造过大/过小被拒）、摘要逐字进入后续 prompt、被覆盖轮不再发送、未完成工具批次拒绝、空摘要不写入、二次压缩续写且旧摘要不再发送、总结调用无 tools、旧的 ignorable 读者看到完整历史、`summary` kind 往返与畸形行报错 | 摘要质量（本批只保证不改写、不越界、不丢消息，不评价好坏）、超长摘要自身的压缩策略 |
 | 协议 | text HTTP映射、401、数值/角色/version、畸形usage不污染assistant、工具参数按受支持Schema子集校验、不支持关键字明确拒绝、HTTP响应1MiB上限按字节判定、**本机真实socket roundtrip（wire形状/工具结果回传/tool_call_id）**、真实HTTP失败不泄漏正文、200非JSON、finish_reason=length拒绝、真实socket上deadline中断、**推理：`reasoning_content` 解析、`reasoning_tokens` 取子集而非增量、缺失即缺失（不虚构空串/0）、`null` 视为无、非字符串拒绝、推理不回传到请求体、真实端点显示与落盘实测**、**SSE：分片拼接、末尾usage保留、`null` usage 不覆盖、工具调用跨分片按index组装、断流拒绝、空流/畸形分片拒绝、流式下字节上限与abort、只在显式要求时改请求体的真实socket验证、真实端点流式工具往返** | 外部托管Provider实测、TLS/代理、限流、缺失usage语义、完整JSON Schema标准、其它推理字段命名（`reasoning`/`reasoning_details`未适配）、**增量显示（本项目不做，整段缓冲）**、服务端中途断流的真实复现（只用构造分片测过） |
 | 执行/预算 | 工具顺序、maxSteps、pre-abort、取消后第二工具未执行、文件256KiB硬上限（含恰好达限与超1字节）、无界流提前中断、每步/整轮工具超预算不执行且不留未配对组、deadline 停止循环 | 增长文件竞态、上下文/token预算、真实慢Provider计时 |
-| 工程 | strict typecheck、显式TS test入口、字面量固定「运行期预算展示」、血统演算验证（RAM预算与M1阈值一致） | 支持Node范围、TS下限、零测试判失败、CI/发行/Git、测试辅助函数绑定失败时的归因（已改为指名报错，但根因未确证） |
+| 工程 | strict typecheck、显式TS test入口、字面量固定「运行期预算展示」、血统演算验证（RAM预算与M1阈值一致）、**仓库已版本控制**（50 个跟踪文件、两个提交、工作树干净）、**`.gitattributes` 固定 LF 后「新克隆=工作树」完整性哈希逐字节一致（34 文件，`201c0fb5…`）**、**CI 的三个步骤在干净克隆上实跑通过**（`npm ci` 3 包 0 漏洞 → `tsc --noEmit` → 201/200/0/1） | **CI 从未在真实运行器上执行**（本地仓库无远端）、**Node 22.x 未测**（本机只有 24）、非 Windows 平台未测、测试辅助函数绑定失败时的归因（已改为指名报错，但根因未确证） |
 
 类型声明不是运行时校验；测试源码存在不是“本次已通过”；review意见不是运行证据；环境重写不是OS隔离。
 
