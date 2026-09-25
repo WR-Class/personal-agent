@@ -83,7 +83,7 @@ Runtime → tool-environment → security-config
 | [reliability.test.ts](../test/reliability.test.ts) | Runtime争用/嵌套/真实子进程、header、坏尾行、显式恢复、CLI诊断、每事件flush计数与失败上抛、重复审计记录拒绝、`/resume` 未完成批次提示 |
 | [session-format.test.ts](../test/session-format.test.ts) | 旧v1 golden fixture：逐字节冻结行形状与key顺序、重放一致、半批次恢复语义、幂等与只追加、`summary` kind 往返与畸形行 |
 | [fault-injection.test.ts](../test/fault-injection.test.ts) | 逐写点故障注入：注入器子类覆写唯一写入漏斗，12 个注入点（写前失败/撕裂写入）断言前缀一致、状态可诊断、恢复不重跑工具、原字节不被改写 |
-| [compaction.test.ts](../test/compaction.test.ts) | 摘要保真：原始消息逐字节保留、边界=实测消息数、摘要逐字入 prompt、被覆盖轮不再发送、未完成工具批次/空摘要拒绝、二次压缩续写、总结调用无tools |
+| [compaction.test.ts](../test/compaction.test.ts) | 摘要保真：原始消息逐字节保留、边界=实测消息数、摘要逐字入 prompt、用户和助手原文仍发送、旧工具结果省略、路径/报错/命令仍在、未完成工具批次/空摘要拒绝、二次压缩续写、总结调用无tools |
 | [provider-integration.test.ts](../test/provider-integration.test.ts) | 本机真实socket联调：wire形状、工具结果回传、HTTP失败不泄漏正文、200非JSON、length拒绝、真实abort、真实CLI一次运行且密钥不入stdout/日志 |
 | [preflight.test.ts](../test/preflight.test.ts) | 联调准备：探测不发密钥/不读正文、401算可达、密钥内容长度片段均不打印、残缺配置不判ready、坏tokenizer阻止"可尝试"、非UTF-8输出不打印乱码、TTY状态如实报告、exit 3/0 门槛 |
 | [streaming.test.ts](../test/streaming.test.ts) | SSE：分片拼接与末尾usage保留、`null` usage 不覆盖真实值、**工具调用跨分片按 index 组装**、断流（无`[DONE]`且无`finish_reason`）拒绝、空流/畸形分片/非字符串拒绝、字节上限、真实socket上 abort、只在 `--stream` 时改请求体且渲染结果与非流式一致（仅按定义变化的 `用时` 墙钟字段归一比较）；**传输失败点名原因**（`bad port`/拒绝连接），abort 语义不被改写 |

@@ -70,13 +70,13 @@ describe("conversation compaction", () => {
     const after = await store.history("fidelity-basic");
     assert.deepEqual(after, before, "history is byte-identical after compaction");
 
-    // And the next prompt carries the summary verbatim, with the covered messages gone.
+    // The summary is an index. The covered conversation stays verbatim.
     const send = await agent.send("second question");
     const texts = send.history.map((message) => message.content).join("\n");
     assert.ok(texts.includes(`SUMMARY: the user asked about ${MARKER}`), "the summary reaches the model verbatim");
-    assert.ok(!texts.includes("first question"), "the covered turn is no longer sent");
+    assert.ok(texts.includes("first question"), "the covered user message stays verbatim");
     assert.ok(texts.includes("second question"), "the new turn is sent");
-    assert.equal(send.compactedMessages, 2, "the send says how much it replaced");
+    assert.equal(send.compactedMessages, 2, "the send says how much the summary covers");
   });
 
   it("records a boundary it actually observed, and refuses a forged one", async () => {
@@ -168,7 +168,7 @@ describe("conversation compaction", () => {
     const send = await agent.send("question three");
     const texts = send.history.map((message) => message.content).join("\n");
     assert.ok(texts.includes("SUMMARY-SECOND"));
-    assert.ok(!texts.includes("SUMMARY-FIRST"), "the superseded summary is not also sent");
+    assert.ok(texts.includes("question one"), "the earlier user text stays verbatim");
     assert.equal(send.compactedMessages, 4);
   });
 
@@ -224,6 +224,30 @@ describe("conversation compaction", () => {
     assert.equal((summaryEvents[0] as { ignorable?: boolean }).ignorable, true);
     // Dropping it leaves exactly the conversation that was there before.
     assert.equal((await store.history("legacy-reader")).length, 2);
+  });
+
+  it("omits an old tool result but keeps the path, error, and command verbatim", async () => {
+    const store = new SessionStore({ root: home });
+    const agent = runtime("verbatim-tool", [
+      { content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: "{\"path\":\"notes.txt\"}" }] },
+      { content: "command: npm test. error: boom at src/auth.ts:42" },
+      { content: "INDEX" },
+      { content: "next" },
+    ]);
+    await agent.send("read it");
+    await agent.compact();
+    const send = await agent.send("continue");
+    const tool = send.history.find((message) => message.role === "tool");
+    assert.ok(tool);
+    assert.match(tool.content, /omitted/);
+    assert.ok(!tool.content.includes("SIDE-CHANNEL-CONTENT"), "the bulky tool body is not sent again");
+    const text = send.history.map((message) => message.content).join("\n");
+    assert.ok(text.includes("src/auth.ts:42"));
+    assert.ok(text.includes("npm test"));
+    const call = send.history.find((message) => message.toolCalls?.length);
+    assert.ok(call?.toolCalls?.[0]?.arguments.includes("notes.txt"), "the tool call arguments stay verbatim");
+    const stored = (await store.history("verbatim-tool")).find((message) => message.role === "tool");
+    assert.ok(stored?.content.includes("SIDE-CHANNEL-CONTENT"), "the log still has the original result");
   });
 
   it("is refused while a send is in flight, and refuses to compact an empty session", async () => {

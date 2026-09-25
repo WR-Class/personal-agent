@@ -32,7 +32,7 @@ it("interactive /compact records a boundary, says what it did, and keeps /histor
   assert.equal(await main(["--home",f.home,"--workspace",f.workspaceRoot,"--session","c1","--echo"],{},ui.io),0);
   const text=ui.output.join("");
   // Both compactions report a boundary; the second says it continued from the first.
-  assert.match(text,/已压缩前 2 条消息/);
+  assert.match(text,/已记录前 2 条消息的索引/);
   assert.match(text,/已在上一次摘要（2 条）/);
   // The transcript is untouched: /history still lists every turn.
   assert.match(text,/user: one[\s\S]*assistant: echo: one/);

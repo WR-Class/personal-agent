@@ -92,7 +92,7 @@ export async function runInteractive(options: InteractiveOptions): Promise<numbe
           active = new AbortController();
           try {
             const result = await runtime.compact(active.signal);
-            io.write(`已压缩前 ${result.covers} 条消息（摘要 ${result.summaryLength} 字符）；原始消息全部保留，/history 仍可见。\n`);
+            io.write(`已记录前 ${result.covers} 条消息的索引（${result.summaryLength} 字符）。用户和助手原文保留，旧工具结果在后续 prompt 中省略；/history 仍是全文。\n`);
             if (already) io.write(`注：本次摘要已在上一次摘要（${already.covers} 条）基础上续写，不是重新总结全部历史。\n`);
           } catch (error) {
             if (active.signal.aborted) io.write("压缩已取消；未写入摘要。\n");

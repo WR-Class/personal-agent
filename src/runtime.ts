@@ -728,14 +728,14 @@ export class AgentRuntime {
   /**
    * Build the message list the model sees.
    *
-   * When the session has been compacted, the messages the summary covers are
-   * replaced by the summary itself, which is inserted verbatim as a system
-   * message immediately after the real system prompt. The summary text is never
-   * truncated or paraphrased on the way in: a summary that arrives altered would
-   * make the recorded `covers` boundary a lie about what the model was told.
+   * A summary is an index, not a replacement. User and assistant messages stay
+   * verbatim, because a rewritten summary can drop a path, an error, or a command.
+   * Only tool results inside the covered range are omitted: they are the bulky,
+   * reproducible part. The latest tool round is never covered, because `covers`
+   * is the message count observed before the current send.
    *
-   * `extra` is always appended after the boundary, so a turn that is being sent
-   * right now can never be inside the compacted range.
+   * The summary text itself is never truncated or paraphrased. An altered summary
+   * would make the recorded boundary a lie about what the model was told.
    */
   private async buildPrompt(extra?: ChatMessage): Promise<ChatMessage[]> {
     const past = await this.store.history(this.sessionId);
@@ -745,10 +745,14 @@ export class AgentRuntime {
       const covered = Math.min(compaction.covers, past.length);
       const summary: ChatMessage = {
         role: "system",
-        content: `Earlier conversation compacted; the first ${covered} message(s) are summarized below. ` +
-          `The full transcript is still in the session log.\n\n${compaction.summary}`,
+        content: `Earlier tool results were omitted after message ${covered}. ` +
+          `User and assistant messages below stay verbatim. The full transcript is still in the session log.\n\n${compaction.summary}`,
       };
-      return extra ? [...system, summary, ...past.slice(covered), extra] : [...system, summary, ...past.slice(covered)];
+      const visible = past.map((message, index) =>
+        index < covered && message.role === "tool"
+          ? { ...message, content: `[tool result omitted; ${message.content.length} chars remain in the session log]` }
+          : message);
+      return extra ? [...system, summary, ...visible, extra] : [...system, summary, ...visible];
     }
     return extra ? [...system, ...past, extra] : [...system, ...past];
   }
