@@ -9,7 +9,7 @@
  * tool failure is information for the model, not a crash for the loop.
  */
 
-import { open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -387,6 +387,36 @@ export function createCreateFileTool(): Tool {
   };
 }
 
+/** Delete one existing file. Directories and recursive deletion are refused. */
+export function createDeleteFileTool(): Tool {
+  return {
+    name: "delete_file",
+    description: "Delete one existing file inside the workspace. Never deletes a directory.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "Existing file, relative to the workspace root." } }, required: ["path"] },
+    readOnly: false,
+    async execute(args, context) {
+      const target = args.path;
+      if (typeof target !== "string" || target.length === 0) return fail("delete_file", "'path' must name a file");
+      let resolved: string;
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      catch (error) { return fail("delete_file", (error as Error).message); }
+      let info;
+      try { info = await stat(resolved); }
+      catch { return fail("delete_file", `no such file: ${target}`); }
+      if (!info.isFile()) return fail("delete_file", `not a regular file: ${target}`);
+      if (info.nlink > 1) return fail("delete_file", "hard-linked files are denied");
+      if (!context.approve) return fail("delete_file", "no approval channel is configured");
+      const askedAt = Date.now();
+      const preview = info.size <= WRITE_FILE_MAX_BYTES ? (await readFile(resolved, "utf8")).split(/\r?\n/).slice(0, 40).join("\n") : "文件超过预览上限";
+      const approved = await context.approve(`Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("delete_file", "approval expired");
+      if (!approved) return fail("delete_file", "operator declined");
+      await rm(resolved, { force: false, recursive: false });
+      return { content: `deleted ${target}` };
+    },
+  };
+}
+
 /**
  * The set of tools advertised to the model, and the only path from a model's
  * {@link ToolCall} to an actual side effect.
@@ -426,7 +456,7 @@ export class ToolRegistry {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
     // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && tool.name !== "edit_file" && tool.name !== "create_file") return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);

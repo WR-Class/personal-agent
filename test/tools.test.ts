@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
-import { ToolRegistry, createCreateFileTool, createEditFileTool, createReadFileTool } from "../src/tools.ts";
+import { access } from "node:fs/promises";
+import { ToolRegistry, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -124,10 +125,10 @@ describe("edit_file", () => {
 
   it("keeps every other side-effect tool closed", async () => {
     const registry = new ToolRegistry([{
-      name: "delete_file", description: "no", parameters: { type: "object" }, readOnly: false,
+      name: "move_file", description: "no", parameters: { type: "object" }, readOnly: false,
       async execute() { return { content: "ran" }; },
     }]);
-    const result = await registry.execute(call("delete_file", {}), { workspaceRoot: workspace() });
+    const result = await registry.execute(call("move_file", {}), { workspaceRoot: workspace() });
     assert.match(result.content, /side-effect tools are disabled/);
   });
 });
@@ -144,6 +145,18 @@ describe("create_file", () => {
       workspaceRoot: workspace(), approve: async () => true,
     });
     assert.match(again.content, /already exists/);
+  });
+});
+
+describe("delete_file", () => {
+  it("deletes one approved file and refuses a directory", async () => {
+    await writeFile(join(workspace(), "gone.txt"), "bye", "utf8");
+    const registry = new ToolRegistry([createDeleteFileTool()]);
+    const result = await registry.execute(call("delete_file", { path: "gone.txt" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.equal(result.isError, undefined);
+    await assert.rejects(() => access(join(workspace(), "gone.txt")));
+    const directory = await registry.execute(call("delete_file", { path: "nested" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.match(directory.content, /not a regular file/);
   });
 });
 
