@@ -7,42 +7,35 @@
  * incomplete. A readiness check that cannot fail is decoration.
  */
 
-import { createServer } from "node:http";
-import type { Server } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+
+import { closeAllServers, startTestServer } from "./server-fixture.ts";
+import type { TestServer } from "./server-fixture.ts";
 
 import { formatPreflight, preflight } from "../src/preflight.ts";
 import { parseArgs, main } from "../src/cli.ts";
 import { createTestFixture } from "./fixtures.ts";
 
 const fixture = await createTestFixture("preflight");
-const servers: Server[] = [];
+const servers: TestServer[] = [];
 
 after(async () => {
-  for (const server of servers) await new Promise<void>((done) => server.close(() => done()));
+  await closeAllServers(servers);
 });
 
 async function serve(handler: (url: string, headers: Record<string, unknown>) => { status: number; body?: string }) {
   const seen: Array<{ url: string; headers: Record<string, unknown> }> = [];
-  const server = createServer((request, response) => {
+  const server = await startTestServer((request, response) => {
     seen.push({ url: request.url ?? "", headers: request.headers });
     const outcome = handler(request.url ?? "", request.headers);
     response.writeHead(outcome.status, { "content-type": "application/json" });
     response.end(outcome.body ?? "{}");
   });
-  // Named, not left to an unhandled 'error' event: a refused bind would otherwise
-  // be attributed to whichever test happened to be running.
-  await new Promise<void>((ready, fail) => {
-    server.once("error", (error) => fail(new Error(`test server could not bind a loopback port: ${(error as Error).message}`)));
-    server.listen(0, "127.0.0.1", () => ready());
-  });
   servers.push(server);
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("no port");
-  return { baseUrl: `http://127.0.0.1:${address.port}/v1`, seen };
+  return { baseUrl: `http://127.0.0.1:${server.port}/v1`, seen };
 }
 
 const SECRET = "PREFLIGHT-KEY-DO-NOT-PRINT-7731";

@@ -9,20 +9,21 @@
  * mid-stream still works.
  */
 
-import { createServer } from "node:http";
-import type { Server } from "node:http";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+
+import { closeAllServers, startTestServer } from "./server-fixture.ts";
+import type { TestServer } from "./server-fixture.ts";
 
 import { createOpenAIChatAdapter, parseSseCompletion } from "../src/openai-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
 import { main } from "../src/cli.ts";
 import { SessionStore } from "../src/session-store.ts";
 
-const servers: Server[] = [];
+const servers: TestServer[] = [];
 
 after(async () => {
-  for (const server of servers) await new Promise<void>((done) => server.close(() => done()));
+  await closeAllServers(servers);
 });
 
 /** One SSE `data:` line carrying a chat-completion chunk. */
@@ -38,7 +39,7 @@ const USAGE = { prompt_tokens: 18, completion_tokens: 205, total_tokens: 223,
   completion_tokens_details: { reasoning_tokens: 200 } };
 
 async function serveSse(reply: (body: string) => string, stallMs = 0, onRequest?: (body: string) => void) {
-  const server = createServer((request, response) => {
+  const server = await startTestServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (piece) => { body += piece; });
@@ -53,14 +54,8 @@ async function serveSse(reply: (body: string) => string, stallMs = 0, onRequest?
       else send();
     });
   });
-  await new Promise<void>((ready, fail) => {
-    server.once("error", (error) => fail(new Error(`test server could not bind a loopback port: ${(error as Error).message}`)));
-    server.listen(0, "127.0.0.1", () => ready());
-  });
   servers.push(server);
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("no port");
-  return { baseUrl: `http://127.0.0.1:${address.port}/v1` };
+  return { baseUrl: `http://127.0.0.1:${server.port}/v1` };
 }
 
 const reasoningThen = (answer: string) =>
@@ -196,6 +191,42 @@ describe("SSE over a real socket", () => {
   });
 });
 
+describe("transport failures are explained, not just reported", () => {
+  it("names the reason when the provider port is one fetch refuses to reach", async () => {
+    // Deterministic and needs no server: fetch rejects these ports before any I/O, so
+    // the failure is instant. That instant failure is what made a test server bound to
+    // such a port look like an unexplained intermittent test failure.
+    const adapter = createOpenAIChatAdapter({ baseUrl: "http://127.0.0.1:6666/v1", apiKey: "k", model: "m" });
+    await assert.rejects(() => adapter.chat({ messages: [{ role: "user", content: "hi" }] }),
+      (error: Error) => {
+        assert.match(error.message, /bad port/, "the operator must see why, not just 'fetch failed'");
+        return true;
+      });
+  });
+
+  it("names a refused connection, and still lets an abort through untouched", async () => {
+    const refused = createOpenAIChatAdapter({ baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", model: "m" });
+    await assert.rejects(() => refused.chat({ messages: [{ role: "user", content: "hi" }] }),
+      (error: Error) => {
+        assert.notEqual(error.message, "fetch failed", "an unexplained bare message is not acceptable");
+        return true;
+      });
+
+    // Abort semantics must survive the wrapping: the runtime distinguishes a cancelled
+    // turn from a failed one by the caller's own signal.
+    const { baseUrl } = await serveSse(() => reasoningThen("late"), 5_000);
+    const adapter = createOpenAIChatAdapter({ baseUrl, apiKey: "k", model: "m", stream: true, timeoutMs: 10_000 });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 150);
+    await assert.rejects(() => adapter.chat({ messages: [{ role: "user", content: "hi" }] }, controller.signal),
+      (error: Error) => {
+        assert.equal(controller.signal.aborted, true);
+        assert.doesNotMatch(error.message, /bad port|ECONNREFUSED/, "the abort is not rewritten into a transport reason");
+        return true;
+      });
+  });
+});
+
 describe("CLI streaming flag", () => {
   it("streams only when asked, and produces the same visible answer either way", async () => {
     // The server answers according to what was actually asked for, which is also how
@@ -229,7 +260,18 @@ describe("CLI streaming flag", () => {
 
     assert.deepEqual(streamFlags, [false, true], "only the --stream run asked to stream");
     // Transport choice changes nothing the operator sees: same answer, same budget line.
-    assert.equal(plainOutput, streamedOutput, "streaming changes the transport, not the rendered result");
+    //
+    // `用时` is legitimately different every run — it is a wall-clock measurement, and
+    // under parallel load the two runs really do take different times. Comparing the
+    // whole rendered string byte-for-byte made this test fail 6 times in 12 concurrent
+    // runs for a reason that had nothing to do with streaming, so the one field that is
+    // *defined* to vary is normalized, and its presence is asserted separately so the
+    // normalization cannot hide its removal.
+    const withoutElapsed = (text: string) => text.replace(/用时 [\d.]+s\/[\d.]+s/g, "用时 <计时>/<上限>");
+    assert.match(plainOutput, /用时 [\d.]+s\/[\d.]+s/, "the elapsed field exists and is only excluded from the comparison");
+    assert.equal(withoutElapsed(plainOutput), withoutElapsed(streamedOutput),
+      "streaming changes the transport, not the rendered result");
+    assert.notEqual(plainOutput, "", "and the comparison compared something");
     const store = new SessionStore({ root: fixture.home });
     assert.deepEqual(await store.history("plain"), await store.history("streamed"),
       "and nothing about what gets stored");

@@ -4,8 +4,8 @@
 
 ## 1. 项目边界与目录
 
-- `src/`：15 个 TypeScript ESM 模块，Node 直接运行。
-- `test/`：8 个 .test.ts + 1 个 fixture helper。
+- `src/`：16 个 TypeScript ESM 模块，Node 直接运行。
+- `test/`：13 个 .test.ts + `fixtures.ts` 与 `server-fixture.ts` 两个 helper。
 - `scripts/show-tool-environment.mjs`：显示环境字典的诊断脚本，不是进程隔离验证。
 - `.personal-agent/`：默认会话、Provider 配置和 scratch；独立于 DSH home。
 - `.test-artifacts/`：保留的独占测试目录/归属标记；不自动递归清理。
@@ -86,7 +86,9 @@ Runtime → tool-environment → security-config
 | [compaction.test.ts](../test/compaction.test.ts) | 摘要保真：原始消息逐字节保留、边界=实测消息数、摘要逐字入 prompt、被覆盖轮不再发送、未完成工具批次/空摘要拒绝、二次压缩续写、总结调用无tools |
 | [provider-integration.test.ts](../test/provider-integration.test.ts) | 本机真实socket联调：wire形状、工具结果回传、HTTP失败不泄漏正文、200非JSON、length拒绝、真实abort、真实CLI一次运行且密钥不入stdout/日志 |
 | [preflight.test.ts](../test/preflight.test.ts) | 联调准备：探测不发密钥/不读正文、401算可达、密钥内容长度片段均不打印、残缺配置不判ready、坏tokenizer阻止"可尝试"、非UTF-8输出不打印乱码、TTY状态如实报告、exit 3/0 门槛 |
-| [streaming.test.ts](../test/streaming.test.ts) | SSE：分片拼接与末尾usage保留、`null` usage 不覆盖真实值、**工具调用跨分片按 index 组装**、断流（无`[DONE]`且无`finish_reason`）拒绝、空流/畸形分片/非字符串拒绝、字节上限、真实socket上 abort、只在 `--stream` 时改请求体且渲染结果与非流式逐字相同 |
+| [streaming.test.ts](../test/streaming.test.ts) | SSE：分片拼接与末尾usage保留、`null` usage 不覆盖真实值、**工具调用跨分片按 index 组装**、断流（无`[DONE]`且无`finish_reason`）拒绝、空流/畸形分片/非字符串拒绝、字节上限、真实socket上 abort、只在 `--stream` 时改请求体且渲染结果与非流式一致（仅按定义变化的 `用时` 墙钟字段归一比较）；**传输失败点名原因**（`bad port`/拒绝连接），abort 语义不被改写 |
 | [fixtures.ts](../test/fixtures.ts) | 独占保留目录，home/store/workspace分离与owner标记 |
+| [server-fixture.ts](../test/server-fixture.ts) | 共享测试服务器：持久 error 监听（记录并在 after 汇报）、EADDRINUSE 与 **fetch 禁连端口**（WHATWG bad-port 列表）换端口重试、`closeAllConnections()` 防 keep-alive 拖住清理 |
+| [server-fixture.test.ts](../test/server-fixture.test.ts) | 夹具自身契约：抽到的端口真的可 fetch 且永不在禁连列表、记录的错误由 `closeAllServers` 汇报且不漏关任何服务器 |
 
 [package.json](../package.json)：start源码CLI；test显式TS glob；build仅typecheck。[tsconfig](../tsconfig.json)：strict/noUncheckedIndexedAccess。当前已验证Node24；声明的更宽范围不等于全部验证。

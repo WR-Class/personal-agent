@@ -16,9 +16,10 @@
  * accounting behave as expected, or anything about TLS, proxies, or rate limits.
  */
 
-import { createServer } from "node:http";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { createTestFixture } from "./fixtures.ts";
+import { closeAllServers, startTestServer } from "./server-fixture.ts";
+import type { TestServer } from "./server-fixture.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -31,12 +32,12 @@ import { ToolRegistry, createReadFileTool } from "../src/tools.ts";
 import { main } from "../src/cli.ts";
 
 const fixture = await createTestFixture("provider-integration");
-const servers: Server[] = [];
+const servers: TestServer[] = [];
 // The tool loop below reads this through the real read_file tool.
 await writeFile(join(fixture.workspaceRoot, "notes.txt"), "SIDE-CHANNEL-CONTENT\n", "utf8");
 
 after(async () => {
-  for (const server of servers) await new Promise<void>((done) => server.close(() => done()));
+  await closeAllServers(servers);
 });
 
 interface Captured {
@@ -52,7 +53,7 @@ interface Captured {
  */
 async function serve(reply: (captured: Captured, index: number) => { status?: number; headers?: Record<string, string>; body?: string; stallMs?: number }) {
   const captured: Captured[] = [];
-  const server = createServer((request, response) => {
+  const started = await startTestServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
@@ -73,27 +74,8 @@ async function serve(reply: (captured: Captured, index: number) => { status?: nu
       else send();
     });
   });
-  await listenOnEphemeralPort(server);
-  servers.push(server);
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("no port");
-  return { baseUrl: `http://127.0.0.1:${address.port}/v1`, captured };
-}
-
-/**
- * Bind to an ephemeral loopback port, naming any failure.
- *
- * Without an `error` listener a refused bind surfaces as an unhandled 'error'
- * event, which node:test attributes to whichever test happens to be running: the
- * failure is real, fast, and says nothing about its cause. Windows can allocate an
- * ephemeral port that is already taken under parallel load, so this path is not
- * hypothetical.
- */
-async function listenOnEphemeralPort(server: Server): Promise<void> {
-  await new Promise<void>((ready, fail) => {
-    server.once("error", (error) => fail(new Error(`test server could not bind a loopback port: ${(error as Error).message}`)));
-    server.listen(0, "127.0.0.1", () => ready());
-  });
+  servers.push(started);
+  return { baseUrl: `http://127.0.0.1:${started.port}/v1`, captured };
 }
 
 function completion(content: string, extra: Record<string, unknown> = {}) {

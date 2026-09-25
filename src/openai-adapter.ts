@@ -164,6 +164,30 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
   const doFetch = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 120_000;
 
+  /**
+   * `doFetch`, with the transport reason surfaced.
+   *
+   * `fetch` reports every transport failure as one opaque `TypeError: fetch failed` and
+   * keeps the actual reason in `cause` — `bad port` when the provider URL uses a port
+   * fetch refuses to touch at all (the WHATWG bad-port list; this project's own test
+   * servers were bitten by it), `ECONNREFUSED` when nothing is listening, a DNS or TLS
+   * message otherwise. Reporting only the outer message leaves the operator with
+   * nothing to act on, so the cause is appended when it says something new.
+   *
+   * An aborted request is re-thrown untouched: the abort is the caller's own signal,
+   * and rewriting it would stop the runtime telling a cancelled turn from a failed one.
+   */
+  async function sendRequest(url: string, init: RequestInit & { signal: AbortSignal }): Promise<Response> {
+    try { return await doFetch(url, init); }
+    catch (error) {
+      if (init.signal.aborted) throw error;
+      const cause = (error as { cause?: unknown }).cause;
+      const detail = cause instanceof Error ? cause.message : undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(detail && detail !== message ? `${message}: ${detail}` : message);
+    }
+  }
+
   return {
     id: "openai-chat",
     defaultModel: options.model,
@@ -171,7 +195,7 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
       const timeout = AbortSignal.timeout(timeoutMs);
       const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-      const response = await doFetch(`${options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+      const response = await sendRequest(`${options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",

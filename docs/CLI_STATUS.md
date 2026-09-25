@@ -32,6 +32,8 @@ npm.cmd start
 
 它**不是**增量显示：本项目把响应体整段读入并受同一上限约束后才解析 SSE，所以**不会**逐字实时打印（`ponytail:` 记在 `parseSseCompletion` 上，升级路径是从 `for await` 循环喂同一个组装器）。默认关闭，因为流式会改变请求体，严格的服务器不该连默认路径都被拒绝。
 
+**传输失败点名原因**：`fetch` 对一切传输失败都只抛一句 `TypeError: fetch failed`，真实原因藏在 `.cause` 里。适配器现在把它上浮——例如 `fetch failed: bad port`（fetch 按 WHATWG 禁连端口列表对某些端口**一律拒绝**，任何 I/O 之前就失败）、`ECONNREFUSED`（没有服务在听）、DNS/TLS 消息——而用户主动取消（abort）保持原语义，不被改写成传输原因。
+
 `--preflight` 是**联调准备检查**（不与 prompt/`--list`/`--echo` 混用）：报告配置完整性、**未鉴权**端点可达性、tokenizer 命令可执行性、真实 TTY 状态。它**不发送密钥、不读响应正文、不读凭据文件、不消耗 token**；退出码 `0` = 可以尝试，`3` = 不可尝试（缺完整环境变量配置，或已配置的 tokenizer 命令无法运行），`2` = 参数/路径错误。分步操作与证据要求见 [联调 Runbook](LIVE_INTEGRATION.md)。
 
 算子行（`[步骤 …]`）现在会在 provider 上报推理 token 时追加 `· 推理 N`；`N` 是**输出 token 中**由 provider 标为推理的部分，不是额外增量，也不参与上限计算。若 provider 给出推理文本（`reasoning_content`），会在答案**之前**以 `[思考] …` 打印；推理文本**不落盘、不回传**（见 [SAFETY](SAFETY.md)）。
