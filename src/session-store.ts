@@ -128,13 +128,25 @@ export interface SummaryEvent {
   summary: string;
 }
 
+/** A denied or expired file approval. Ignorable so older readers skip it. */
+export interface AuditEvent {
+  v: number;
+  kind: "audit";
+  ignorable: true;
+  at: string;
+  tool: string;
+  decision: "denied" | "expired";
+  reason: string;
+}
+
 export type SessionEvent =
   | SessionHeaderEvent
   | MessageEvent
   | UsageEvent
   | ToolCallEvent
   | ToolResultEvent
-  | SummaryEvent;
+  | SummaryEvent
+  | AuditEvent;
 
 /** Raised when a line cannot be read as a session event; carries its position. */
 export class SessionCorruptionError extends Error {
@@ -343,6 +355,19 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
         at: requireString(record, "at", "summary"),
         covers,
         summary: requireString(record, "summary", "summary"),
+      };
+    }
+    case "audit": {
+      const decision = record.decision;
+      if (decision !== "denied" && decision !== "expired") throw new Error("audit.decision must be denied or expired");
+      return {
+        v: CURRENT_EVENT_VERSION,
+        kind,
+        ignorable: true,
+        at: requireString(record, "at", "audit"),
+        tool: requireString(record, "tool", "audit"),
+        decision,
+        reason: requireString(record, "reason", "audit"),
       };
     }
     default:
@@ -570,6 +595,15 @@ export class SessionStore {
       at: new Date().toISOString(),
       covers: summary.covers,
       summary: summary.summary,
+    };
+    await this.append(sessionId, event);
+    return event;
+  }
+
+  /** Record one denied or expired approval without changing the conversation. */
+  async appendAudit(sessionId: string, audit: Pick<AuditEvent, "tool" | "decision" | "reason">): Promise<AuditEvent> {
+    const event: AuditEvent = {
+      v: CURRENT_EVENT_VERSION, kind: "audit", ignorable: true, at: new Date().toISOString(), ...audit,
     };
     await this.append(sessionId, event);
     return event;

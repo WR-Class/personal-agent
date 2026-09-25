@@ -9,7 +9,7 @@
 | canonicalPath/保护根 | native realpath、现存祖先、home/scratch/config/cache/data包含；拒绝所知系统/宿主根 | 检查后被恶意替换、未知备份位置自动识别 |
 | 工具env白名单 | 不继承DSH_HOME/API key/NODE_OPTIONS等；重建home/temp/XDG/AppData，冻结对象 | OS用户身份改变、PATH中程序可信、插件不能读取process.env |
 | requireToolEnvironment | 缺失或非本模块发行对象拒绝 | 所有受信代码不能绕过helper |
-| 文件写入 | 六个文件操作共用 `approveExact`。已有 grant 必须同时匹配工具名、参数 JSON 和到期时间，否则重新询问。批量批准给每个子操作签发精确 grant | 路径竞态仍未被专项测试消除；拒绝目前返回工具错误，尚未写独立审计事件 |
+| 文件写入 | 六个文件操作共用 `approveExact`。grant 匹配工具名、参数 JSON 和到期时间。批准后、写入前再次检查规范路径。拒绝和过期写入 `audit` 事件。保护目录在批准前拒绝 | 复查不能消除另一个进程在两次检查之间替换文件的可能 |
 | readOnly gate | false/缺失声明不执行 | 恶意代码谎称true；暂无不可信插件宿主 |
 | 文件大小 | stat瞬间256KiB预检 + 句柄级有界读取的256KiB硬上限 | 检查后被替换的竞态、read-then-open窗口 |
 | 模型/事件验证 | 基础形状、角色字段、数值、header；新send前配对检查；工具参数按受支持Schema子集校验，不支持关键字明确拒绝 | 完整JSON Schema语义、所有历史迁移/协议组合 |

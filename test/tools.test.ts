@@ -212,6 +212,33 @@ describe("patch_file", () => {
   });
 });
 
+describe("M2 closeout", () => {
+  it("denies a protected path before approval", async () => {
+    await mkdir(join(workspace(), ".personal-agent"), { recursive: true });
+    await writeFile(join(workspace(), ".personal-agent", "secret.txt"), "secret", "utf8");
+    let asked = 0;
+    const result = await new ToolRegistry([createEditFileTool()]).execute(
+      call("edit_file", { path: ".personal-agent/secret.txt", content: "changed" }),
+      { workspaceRoot: workspace(), approve: async () => { asked += 1; return true; } },
+    );
+    assert.match(result.content, /sensitive path/);
+    assert.equal(asked, 0);
+    assert.equal(await readFile(join(workspace(), ".personal-agent", "secret.txt"), "utf8"), "secret");
+  });
+
+  it("records an operator denial without writing", async () => {
+    await writeFile(join(workspace(), "editable.txt"), "old", "utf8");
+    const audits: Array<{ decision: string }> = [];
+    const result = await new ToolRegistry([createEditFileTool()]).execute(
+      call("edit_file", { path: "editable.txt", content: "new" }),
+      { workspaceRoot: workspace(), approve: async () => false, audit: async (event) => { audits.push(event); } },
+    );
+    assert.match(result.content, /declined/);
+    assert.equal(audits[0]?.decision, "denied");
+    assert.equal(await readFile(join(workspace(), "editable.txt"), "utf8"), "old");
+  });
+});
+
 describe("read_file tool and path confinement", () => {
   it("reads a file inside the workspace", async () => {
     const result = await makeRegistry().execute(call("read_file", { path: "hello.txt" }), {

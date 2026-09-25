@@ -663,6 +663,7 @@ export class AgentRuntime {
       protectedRoots: this.protectedRoots,
       ...(signal ? { signal } : {}),
       ...(this.approve ? { approve: this.approve } : {}),
+      audit: (event) => this.store.appendAudit(this.sessionId, event).then(() => undefined),
     };
     for (const call of calls) {
       // Complete pending tool correlations even after cancellation, but never start another executor.

@@ -45,6 +45,8 @@ export interface ToolContext {
   approve?(prompt: string): Promise<boolean>;
   /** Exact grants already approved by a parent operation. */
   grants?: readonly FileGrant[];
+  /** Records a denial without changing the conversation. */
+  audit?(event: { tool: string; decision: "denied" | "expired"; reason: string }): Promise<void>;
 }
 
 /** Raised when a tool needs an environment that the caller did not rebuild. */
@@ -102,6 +104,11 @@ function fail(tool: string, message: string): ToolResult {
   return { content: `${tool}: ${message}`, isError: true };
 }
 
+async function denied(name: string, reason: string, context: ToolContext): Promise<ToolResult> {
+  await context.audit?.({ tool: name, decision: reason === "approval expired" ? "expired" : "denied", reason });
+  return fail(name, reason);
+}
+
 /** Ask once unless this exact call already has an unexpired grant. */
 async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
   const now = Date.now();
@@ -113,6 +120,16 @@ async function approveExact(name: string, args: unknown, prompt: string, context
   if (Date.now() - now > APPROVAL_TTL_MS) return "approval expired";
   if (!approved) return "operator declined";
   return undefined;
+}
+
+/** Re-check immediately before a write. A replaced path must not receive it. */
+function sameFile(before: string, workspace: string, protectedRoots: readonly string[] | undefined): string | undefined {
+  try {
+    const again = assertReadablePath(before, workspace, protectedRoots);
+    return again === before ? undefined : "path changed before write";
+  } catch (error) {
+    return (error as Error).message;
+  }
 }
 
 function schemaError(pathName: string, message: string): Error {
@@ -354,7 +371,12 @@ export function createEditFileTool(): Tool {
       const current = await readFile(resolved, "utf8");
       const diff = lineDiff(current, content);
       const denial = await approveExact("edit_file", args, `Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}\n本次批准 2 分钟内有效。`, context);
-      if (denial) return fail("edit_file", denial);
+      if (denial) {
+        await context.audit?.({ tool: "edit_file", decision: denial === "approval expired" ? "expired" : "denied", reason: denial });
+        return fail("edit_file", denial);
+      }
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      if (changed) return fail("edit_file", changed);
       const temporary = `${resolved}.${process.pid}.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -398,7 +420,9 @@ export function createPatchFileTool(): Tool {
       const content = current.slice(0, first) + newText + current.slice(first + oldText.length);
       if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("patch_file", "replacement exceeds the byte limit");
       const denial = await approveExact("patch_file", args, `Patch ${target}?\n${lineDiff(current, content)}\n本次批准 2 分钟内有效。`, context);
-      if (denial) return fail("patch_file", denial);
+      if (denial) return denied("patch_file", denial, context);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      if (changed) return fail("patch_file", changed);
       const temporary = `${resolved}.${process.pid}.patch.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -434,7 +458,9 @@ export function createCreateFileTool(): Tool {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("create_file", `cannot stat ${target}`); }
       const preview = content.split(/\r?\n/).slice(0, 40).join("\n");
       const denial = await approveExact("create_file", args, `Create ${target} (${Buffer.byteLength(content)} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
-      if (denial) return fail("create_file", denial);
+      if (denial) return denied("create_file", denial, context);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      if (changed) return fail("create_file", changed);
       try { await writeFile(resolved, content, { encoding: "utf8", flag: "wx" }); }
       catch (error) { return fail("create_file", `cannot create ${target}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
       return { content: `created ${target}` };
@@ -462,7 +488,9 @@ export function createDeleteFileTool(): Tool {
       if (info.nlink > 1) return fail("delete_file", "hard-linked files are denied");
       const preview = info.size <= WRITE_FILE_MAX_BYTES ? (await readFile(resolved, "utf8")).split(/\r?\n/).slice(0, 40).join("\n") : "文件超过预览上限";
       const denial = await approveExact("delete_file", args, `Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
-      if (denial) return fail("delete_file", denial);
+      if (denial) return denied("delete_file", denial, context);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      if (changed) return fail("delete_file", changed);
       await rm(resolved, { force: false, recursive: false });
       return { content: `deleted ${target}` };
     },
@@ -500,7 +528,10 @@ export function createRenameFileTool(): Tool {
       try { await stat(destination); return fail("rename_file", `destination exists: ${to}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("rename_file", `cannot stat ${to}`); }
       const denial = await approveExact("rename_file", args, `Rename ${from} to ${to}?\n本次批准 2 分钟内有效。`, context);
-      if (denial) return fail("rename_file", denial);
+      if (denial) return denied("rename_file", denial, context);
+      const sourceChanged = sameFile(source, context.workspaceRoot, context.protectedRoots);
+      const destinationChanged = sameFile(destination, context.workspaceRoot, context.protectedRoots);
+      if (sourceChanged || destinationChanged) return fail("rename_file", sourceChanged ?? destinationChanged ?? "path changed");
       await rename(source, destination);
       return { content: `renamed ${from} to ${to}` };
     },
@@ -534,7 +565,7 @@ export function createBatchFilesTool(): Tool {
       const approvedManifest = manifest.join("\n");
       const askedAt = Date.now();
       const denial = await approveExact("batch_files", args, `Approve this exact batch?\n${approvedManifest}\n本次批准 2 分钟内有效，只对这份清单有效。`, context);
-      if (denial) return fail("batch_files", denial);
+      if (denial) return denied("batch_files", denial, context);
       const expiresAt = askedAt + APPROVAL_TTL_MS;
       const lines: string[] = [];
       for (const [index, operation] of operations.entries()) {
