@@ -1,0 +1,6 @@
+# Line endings are part of this project's integrity hash, so they must not depend on
+# the machine that checks the code out. Git on Windows defaults to converting LF to
+# CRLF in the working copy, which would make the same commit hash differently after a
+# fresh clone — a confusing "mismatch" that looks like tampering. Storing and
+# checking out LF everywhere keeps the hash a property of the content.
+* text=auto eol=lf
