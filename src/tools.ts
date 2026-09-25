@@ -417,6 +417,47 @@ export function createDeleteFileTool(): Tool {
   };
 }
 
+/** Rename one existing file. The destination must not already exist. */
+export function createRenameFileTool(): Tool {
+  return {
+    name: "rename_file",
+    description: "Rename one existing file inside the workspace. Refuses when the destination exists.",
+    parameters: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Existing file, relative to the workspace root." },
+        to: { type: "string", description: "New path, relative to the workspace root." },
+      },
+      required: ["from", "to"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const from = args.from;
+      const to = args.to;
+      if (typeof from !== "string" || typeof to !== "string" || !from || !to) return fail("rename_file", "'from' and 'to' must name files");
+      let source: string;
+      let destination: string;
+      try {
+        source = assertReadablePath(path.resolve(context.workspaceRoot, from), context.workspaceRoot, context.protectedRoots);
+        destination = assertReadablePath(path.resolve(context.workspaceRoot, to), context.workspaceRoot, context.protectedRoots);
+      } catch (error) { return fail("rename_file", (error as Error).message); }
+      let info;
+      try { info = await stat(source); }
+      catch { return fail("rename_file", `no such file: ${from}`); }
+      if (!info.isFile()) return fail("rename_file", `not a regular file: ${from}`);
+      try { await stat(destination); return fail("rename_file", `destination exists: ${to}`); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("rename_file", `cannot stat ${to}`); }
+      if (!context.approve) return fail("rename_file", "no approval channel is configured");
+      const askedAt = Date.now();
+      const approved = await context.approve(`Rename ${from} to ${to}?\n本次批准 2 分钟内有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("rename_file", "approval expired");
+      if (!approved) return fail("rename_file", "operator declined");
+      await rename(source, destination);
+      return { content: `renamed ${from} to ${to}` };
+    },
+  };
+}
+
 /**
  * The set of tools advertised to the model, and the only path from a model's
  * {@link ToolCall} to an actual side effect.
@@ -456,7 +497,7 @@ export class ToolRegistry {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
     // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file", "rename_file"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);

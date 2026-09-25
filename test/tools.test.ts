@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
 import { access } from "node:fs/promises";
-import { ToolRegistry, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool } from "../src/tools.ts";
+import { ToolRegistry, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool, createRenameFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -157,6 +157,19 @@ describe("delete_file", () => {
     await assert.rejects(() => access(join(workspace(), "gone.txt")));
     const directory = await registry.execute(call("delete_file", { path: "nested" }), { workspaceRoot: workspace(), approve: async () => true });
     assert.match(directory.content, /not a regular file/);
+  });
+});
+
+describe("rename_file", () => {
+  it("renames one approved file and refuses an existing destination", async () => {
+    await writeFile(join(workspace(), "old-name.txt"), "same", "utf8");
+    const registry = new ToolRegistry([createRenameFileTool()]);
+    const result = await registry.execute(call("rename_file", { from: "old-name.txt", to: "new-name.txt" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.equal(result.isError, undefined);
+    assert.equal(await readFile(join(workspace(), "new-name.txt"), "utf8"), "same");
+    await writeFile(join(workspace(), "taken.txt"), "taken", "utf8");
+    const blocked = await registry.execute(call("rename_file", { from: "new-name.txt", to: "taken.txt" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.match(blocked.content, /destination exists/);
   });
 });
 
