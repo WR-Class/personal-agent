@@ -349,6 +349,44 @@ export function createEditFileTool(): Tool {
   };
 }
 
+/** Create one new UTF-8 text file. An existing path is refused, never overwritten. */
+export function createCreateFileTool(): Tool {
+  return {
+    name: "create_file",
+    description: "Create one new UTF-8 text file inside the workspace. Refuses when the path already exists.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "New file, relative to the workspace root." },
+        content: { type: "string", description: "Initial file content." },
+      },
+      required: ["path", "content"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const target = args.path;
+      const content = args.content;
+      if (typeof target !== "string" || target.length === 0 || target.endsWith("/") || target.endsWith("\\")) return fail("create_file", "'path' must name a file");
+      if (typeof content !== "string") return fail("create_file", "'content' must be a string");
+      if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("create_file", `content exceeds ${WRITE_FILE_MAX_BYTES} bytes`);
+      let resolved: string;
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      catch (error) { return fail("create_file", (error as Error).message); }
+      try { await stat(resolved); return fail("create_file", `already exists: ${target}`); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("create_file", `cannot stat ${target}`); }
+      if (!context.approve) return fail("create_file", "no approval channel is configured");
+      const askedAt = Date.now();
+      const preview = content.split(/\r?\n/).slice(0, 40).join("\n");
+      const approved = await context.approve(`Create ${target} (${Buffer.byteLength(content)} bytes)?\n${preview}\n本次批准 2 分钟内有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("create_file", "approval expired");
+      if (!approved) return fail("create_file", "operator declined");
+      try { await writeFile(resolved, content, { encoding: "utf8", flag: "wx" }); }
+      catch (error) { return fail("create_file", `cannot create ${target}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
+      return { content: `created ${target}` };
+    },
+  };
+}
+
 /**
  * The set of tools advertised to the model, and the only path from a model's
  * {@link ToolCall} to an actual side effect.
@@ -388,7 +426,7 @@ export class ToolRegistry {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
     // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && tool.name !== "edit_file") return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    if (tool.readOnly !== true && tool.name !== "edit_file" && tool.name !== "create_file") return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);

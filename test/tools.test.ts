@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
-import { ToolRegistry, createEditFileTool, createReadFileTool } from "../src/tools.ts";
+import { ToolRegistry, createCreateFileTool, createEditFileTool, createReadFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -129,6 +129,21 @@ describe("edit_file", () => {
     }]);
     const result = await registry.execute(call("delete_file", {}), { workspaceRoot: workspace() });
     assert.match(result.content, /side-effect tools are disabled/);
+  });
+});
+
+describe("create_file", () => {
+  it("creates one new file after approval and refuses an existing one", async () => {
+    const registry = new ToolRegistry([createCreateFileTool()]);
+    const created = await registry.execute(call("create_file", { path: "fresh.txt", content: "hello\n" }), {
+      workspaceRoot: workspace(), approve: async () => true,
+    });
+    assert.equal(created.isError, undefined);
+    assert.equal(await readFile(join(workspace(), "fresh.txt"), "utf8"), "hello\n");
+    const again = await registry.execute(call("create_file", { path: "fresh.txt", content: "other" }), {
+      workspaceRoot: workspace(), approve: async () => true,
+    });
+    assert.match(again.content, /already exists/);
   });
 });
 

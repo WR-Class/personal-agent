@@ -6,7 +6,7 @@ import { SessionStore } from "./session-store.ts";
 import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_MAX_STEPS, DEFAULT_MAX_TOOL_CALLS_PER_RUN, DEFAULT_MAX_TOOL_CALLS_PER_STEP, formatBudget } from "./runtime.ts";
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
-import { ToolRegistry, createEditFileTool, createReadFileTool } from "./tools.ts";
+import { ToolRegistry, createCreateFileTool, createEditFileTool, createReadFileTool } from "./tools.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -178,13 +178,13 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     }
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,
-      tools:new ToolRegistry([createReadFileTool(), createEditFileTool()]),maxSteps:options.maxSteps,
+      tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createCreateFileTool()]),maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
-      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. edit_file replaces one existing file only after the operator approves. Respect denied paths; never pretend a tool succeeded.",
+      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. edit_file replaces one existing file and create_file creates one new file, each only after its own approval. Respect denied paths; never pretend a tool succeeded.",
       ...(interactive && io ? { approve: async (prompt: string) => {
-        io.write(`${prompt}\n回答“是”才替换。\n`);
+        io.write(`${prompt}\n回答“是”才执行这一次。\n`);
         const answer = await io.ask("批准？> ");
         return answer?.trim() === "是";
       } } : {}),
