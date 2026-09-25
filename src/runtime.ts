@@ -14,6 +14,8 @@ import { validateResponse } from "./response-validation.ts";
 export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; isError?: boolean; }
 export interface AgentRuntimeOptions {
   onActivity?: (event: RuntimeActivity) => void;
+  /** One-shot operator question. Used only by edit_file. */
+  approve?(prompt: string): Promise<boolean>;
   adapter: ModelAdapter;
   store: SessionStore;
   sessionId: string;
@@ -424,11 +426,13 @@ export class AgentRuntime {
   private prepared: Promise<void> | undefined;
   private busy = false;
   private readonly onActivity: ((event: RuntimeActivity) => void) | undefined;
+  private readonly approve: ((prompt: string) => Promise<boolean>) | undefined;
   private activity(event: RuntimeActivity): void { try { this.onActivity?.(event); } catch { /* display must not corrupt execution */ } }
 
   constructor(options: AgentRuntimeOptions) {
     this.adapter = options.adapter;
     this.onActivity = options.onActivity;
+    this.approve = options.approve;
     this.store = options.store;
     this.sessionId = options.sessionId;
     this.configuredProtectedRoots = Object.freeze([...(options.protectedRoots ?? [])]);
@@ -658,6 +662,7 @@ export class AgentRuntime {
       toolEnvironment: this.toolEnvironment,
       protectedRoots: this.protectedRoots,
       ...(signal ? { signal } : {}),
+      ...(this.approve ? { approve: this.approve } : {}),
     };
     for (const call of calls) {
       // Complete pending tool correlations even after cancellation, but never start another executor.

@@ -6,7 +6,7 @@ import { SessionStore } from "./session-store.ts";
 import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_MAX_STEPS, DEFAULT_MAX_TOOL_CALLS_PER_RUN, DEFAULT_MAX_TOOL_CALLS_PER_STEP, formatBudget } from "./runtime.ts";
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
-import { ToolRegistry, createReadFileTool } from "./tools.ts";
+import { ToolRegistry, createEditFileTool, createReadFileTool } from "./tools.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -178,11 +178,16 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     }
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,
-      tools:new ToolRegistry([createReadFileTool()]),maxSteps:options.maxSteps,
+      tools:new ToolRegistry([createReadFileTool(), createEditFileTool()]),maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
-      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. Respect denied paths; never pretend a tool succeeded.",
+      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. edit_file replaces one existing file only after the operator approves. Respect denied paths; never pretend a tool succeeded.",
+      ...(interactive && io ? { approve: async (prompt: string) => {
+        io.write(`${prompt}\n旧内容不会显示全文。回答“是”才替换。\n`);
+        const answer = await io.ask("批准？> ");
+        return answer?.trim() === "是";
+      } } : {}),
       onActivity:event=>{
         if(!interactive)return;
         if(event.type==="model")io!.write("[正在请求模型……]\n");

@@ -9,7 +9,7 @@
  * tool failure is information for the model, not a crash for the loop.
  */
 
-import { open, stat } from "node:fs/promises";
+import { open, rename, stat, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -39,6 +39,8 @@ export interface ToolContext {
   /** Trusted runtime supplies its state/log roots; never model-controlled. */
   protectedRoots?: readonly string[];
   signal?: AbortSignal;
+  /** Asked before the one write tool replaces an existing file. */
+  approve?(prompt: string): Promise<boolean>;
 }
 
 /** Raised when a tool needs an environment that the caller did not rebuild. */
@@ -78,6 +80,7 @@ export interface Tool {
 }
 
 const READ_FILE_MAX_BYTES = 256 * 1024;
+const WRITE_FILE_MAX_BYTES = 256 * 1024;
 const SUPPORTED_SCHEMA_KEYS = new Set([
   "type",
   "properties",
@@ -275,6 +278,59 @@ export function createReadFileTool(): Tool {
 }
 
 /**
+ * Replace one existing UTF-8 text file inside the workspace.
+ *
+ * M2 first slice: no create, delete, rename, or batch edit. The operator must
+ * approve this exact path and content. The replacement is one temp file plus
+ * rename; a failed write leaves the original in place.
+ */
+export function createEditFileTool(): Tool {
+  return {
+    name: "edit_file",
+    description: "Replace the full UTF-8 content of one existing workspace file. Creates nothing and deletes nothing.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Existing file, relative to the workspace root." },
+        content: { type: "string", description: "Complete replacement content." },
+      },
+      required: ["path", "content"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const target = args.path;
+      const content = args.content;
+      if (typeof target !== "string" || target.length === 0) return fail("edit_file", "'path' must be a non-empty string");
+      if (typeof content !== "string") return fail("edit_file", "'content' must be a string");
+      if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("edit_file", `content exceeds ${WRITE_FILE_MAX_BYTES} bytes`);
+      let resolved: string;
+      try {
+        resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots);
+      } catch (error) {
+        return fail("edit_file", (error as Error).message);
+      }
+      let info;
+      try { info = await stat(resolved); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return fail("edit_file", `no such file: ${target}`);
+        return fail("edit_file", `cannot stat ${target}: ${code ?? String(error)}`);
+      }
+      if (!info.isFile()) return fail("edit_file", `not a regular file: ${target}`);
+      if (info.nlink > 1) return fail("edit_file", "hard-linked files are denied");
+      if (info.size > WRITE_FILE_MAX_BYTES) return fail("edit_file", `${target} is ${info.size} bytes, over the ${WRITE_FILE_MAX_BYTES}-byte limit`);
+      if (!context.approve) return fail("edit_file", "no approval channel is configured");
+      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?`);
+      if (!approved) return fail("edit_file", "operator declined");
+      const temporary = `${resolved}.${process.pid}.tmp`;
+      await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+      await rename(temporary, resolved);
+      return { content: `replaced ${target}` };
+    },
+  };
+}
+
+/**
  * The set of tools advertised to the model, and the only path from a model's
  * {@link ToolCall} to an actual side effect.
  *
@@ -312,8 +368,8 @@ export class ToolRegistry {
   async execute(call: ToolCall, context: ToolContext): Promise<ToolResult> {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
-    // No approval system exists yet: never enable side effects just by registering a tool.
-    if (tool.readOnly !== true) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    // edit_file is the one approved side effect. Every other write stays closed.
+    if (tool.readOnly !== true && tool.name !== "edit_file") return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);

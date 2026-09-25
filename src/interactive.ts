@@ -38,7 +38,7 @@ export async function runInteractive(options: InteractiveOptions): Promise<numbe
     if (active) { active.abort(); io.write("\n正在取消本轮；等待执行结束，不再启动后续工具……\n"); }
     else io.close();
   });
-  io.write("Personal Agent · 只读工具模式\n");status();io.write(`${COMMAND_HELP}\nCtrl+C：生成中取消本轮，空闲时退出。\n`);
+  io.write("Personal Agent · 只读，外加一次一文件的批准写入\n");status();io.write(`${COMMAND_HELP}\nCtrl+C：生成中取消本轮，空闲时退出。\n`);
   try {
     while (true) {
       const input = await io.ask("\n你 > ");

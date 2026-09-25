@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
-import { ToolRegistry, createReadFileTool } from "../src/tools.ts";
+import { ToolRegistry, createEditFileTool, createReadFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -72,6 +72,45 @@ function makeRuntime(
   });
   return { runtime, adapter };
 }
+
+describe("edit_file", () => {
+  it("replaces one existing file only after approval", async () => {
+    await writeFile(join(workspace(), "editable.txt"), "old text", "utf8");
+    let asked = 0;
+    const registry = new ToolRegistry([createEditFileTool()]);
+    const result = await registry.execute(call("edit_file", { path: "editable.txt", content: "new text" }), {
+      workspaceRoot: workspace(),
+      approve: async () => { asked += 1; return true; },
+    });
+    assert.equal(result.isError, undefined);
+    assert.equal(asked, 1);
+    assert.equal(await readFile(join(workspace(), "editable.txt"), "utf8"), "new text");
+  });
+
+  it("declines without writing and never creates a file", async () => {
+    const registry = new ToolRegistry([createEditFileTool()]);
+    const declined = await registry.execute(call("edit_file", { path: "editable.txt", content: "nope" }), {
+      workspaceRoot: workspace(),
+      approve: async () => false,
+    });
+    assert.equal(declined.isError, true);
+    assert.match(declined.content, /declined/);
+    const missing = await registry.execute(call("edit_file", { path: "new.txt", content: "created" }), {
+      workspaceRoot: workspace(),
+      approve: async () => true,
+    });
+    assert.match(missing.content, /no such file/);
+  });
+
+  it("keeps every other side-effect tool closed", async () => {
+    const registry = new ToolRegistry([{
+      name: "delete_file", description: "no", parameters: { type: "object" }, readOnly: false,
+      async execute() { return { content: "ran" }; },
+    }]);
+    const result = await registry.execute(call("delete_file", {}), { workspaceRoot: workspace() });
+    assert.match(result.content, /side-effect tools are disabled/);
+  });
+});
 
 describe("read_file tool and path confinement", () => {
   it("reads a file inside the workspace", async () => {
