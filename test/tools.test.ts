@@ -174,19 +174,29 @@ describe("rename_file", () => {
 });
 
 describe("batch_files", () => {
-  it("asks once per operation and continues after a decline", async () => {
+  it("approves the whole manifest once and runs every operation", async () => {
     await writeFile(join(workspace(), "batch.txt"), "old", "utf8");
-    const answers = [false, true];
     let asked = 0;
+    let prompt = "";
     const result = await new ToolRegistry([createBatchFilesTool()]).execute(call("batch_files", { operations: [
       { tool: "edit_file", path: "batch.txt", content: "changed" },
       { tool: "create_file", path: "batch-new.txt", content: "new" },
-    ] }), { workspaceRoot: workspace(), approve: async () => { asked += 1; return answers.shift() === true; } });
-    assert.equal(asked, 2);
-    assert.match(result.content, /declined/);
-    assert.match(result.content, /created/);
-    assert.equal(await readFile(join(workspace(), "batch.txt"), "utf8"), "old");
+    ] }), { workspaceRoot: workspace(), approve: async (text) => { asked += 1; prompt = text; return true; } });
+    assert.equal(asked, 1);
+    assert.match(prompt, /edit_file/);
+    assert.match(prompt, /create_file/);
+    assert.equal(result.isError, undefined);
+    assert.equal(await readFile(join(workspace(), "batch.txt"), "utf8"), "changed");
     assert.equal(await readFile(join(workspace(), "batch-new.txt"), "utf8"), "new");
+  });
+
+  it("declines the whole batch without writing", async () => {
+    await writeFile(join(workspace(), "batch.txt"), "old", "utf8");
+    const result = await new ToolRegistry([createBatchFilesTool()]).execute(call("batch_files", { operations: [
+      { tool: "edit_file", path: "batch.txt", content: "changed" },
+    ] }), { workspaceRoot: workspace(), approve: async () => false });
+    assert.match(result.content, /declined/);
+    assert.equal(await readFile(join(workspace(), "batch.txt"), "utf8"), "old");
   });
 });
 

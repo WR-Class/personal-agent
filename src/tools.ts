@@ -465,22 +465,32 @@ const FILE_ACTIONS = {
   rename_file: createRenameFileTool,
 } as const;
 
-/** Run several single-file actions. Each action asks for its own approval. */
+/** Run several single-file actions after one approval of the exact manifest. */
 export function createBatchFilesTool(): Tool {
   return {
     name: "batch_files",
-    description: "Run up to 20 single-file edit, create, delete, or rename actions. Each action needs its own approval.",
+    description: "Run up to 20 file actions after one approval of the complete manifest.",
     parameters: { type: "object", properties: { operations: { type: "array", items: { type: "object" } } }, required: ["operations"] },
     readOnly: false,
     async execute(args, context) {
       const operations = args.operations;
       if (!Array.isArray(operations) || operations.length === 0 || operations.length > 20) return fail("batch_files", "operations must contain 1 to 20 items");
+      const manifest = operations.map((operation, index) => {
+        const name = (operation as { tool?: unknown }).tool;
+        if (typeof name !== "string" || !(name in FILE_ACTIONS)) throw new Error(`operation ${index + 1} has an unknown tool`);
+        return `${index + 1}. ${name} ${JSON.stringify(operation)}`;
+      });
+      if (!context.approve) return fail("batch_files", "no approval channel is configured");
+      const approvedManifest = manifest.join("\n");
+      const askedAt = Date.now();
+      const approved = await context.approve(`Approve this exact batch?\n${approvedManifest}\n本次批准 2 分钟内有效，只对这份清单有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("batch_files", "approval expired");
+      if (!approved) return fail("batch_files", "operator declined");
       const lines: string[] = [];
       for (const [index, operation] of operations.entries()) {
-        const name = (operation as { tool?: unknown }).tool;
-        const factory = FILE_ACTIONS[name as keyof typeof FILE_ACTIONS];
-        if (!factory) return fail("batch_files", `operation ${index + 1} has an unknown tool`);
-        const result = await factory().execute(operation as Record<string, unknown>, context);
+        const name = (operation as { tool: keyof typeof FILE_ACTIONS }).tool;
+        const result = await FILE_ACTIONS[name]().execute(operation as Record<string, unknown>, { ...context, approve: async () => true });
+        if (result.isError) return fail("batch_files", `operation ${index + 1} failed: ${result.content}`);
         lines.push(`${index + 1}. ${result.content}`);
       }
       return { content: lines.join("\n") };
