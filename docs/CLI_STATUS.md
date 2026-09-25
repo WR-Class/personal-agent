@@ -88,7 +88,7 @@ Windows / Node24.19.0，npm11.17.0：
 - 无真实网络调用；所有测试 synthetic key/mock adapter。测试目录不删除。
 - 独立只读审查发现并修复：旧 home config 可读、秘密输入部分 type-ahead、JSON 解析错误泄漏片段、显式退出残留队列。回归覆盖前两类配置泄漏，终端输入保护经源码复核。
 
-**未验证**：实际 TTY 密钥回显/Ctrl+C、真实 Provider、跨平台、Windows 8.3 专项。当前工具接口没有 PTY，因此没有把 fake IO 的 secret 标志测试冒充真实终端验证。使用者应在 PowerShell 完成首次手动体验。
+**未验证**：跨平台、Windows 8.3 专项、外部托管 Provider。真实终端下的隐藏输入与 Ctrl+C 已由操作者手工验证过一次；自动化 pty 仍未做。当前工具接口没有 PTY，因此没有把 fake IO 的 secret 标志测试冒充真实终端验证。
 
 ## 后续顺序
 

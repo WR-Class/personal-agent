@@ -49,7 +49,7 @@ Echo 是明确的离线回显，不是真实大模型，不会主动调用工具
 
 仓库**只覆盖 `personal-agent/`**——工作区根目录下的 `_research/`、`restore/` 等外部参考树不在其中，也不应被纳入。`.gitignore` 排除 `node_modules/`、`.personal-agent/`（Agent home，保存明文密钥时密钥就在这里）、`.test-artifacts/`；`.gitattributes` 固定 LF，使文档里的完整性哈希在新克隆上**逐字节一致**（已验证：克隆后重算得到相同摘要）。
 
-CI 在 `.github/workflows/ci.yml`：Windows 运行器 + Node `22.x`/`24.x` 矩阵，步骤与本地相同（`npm ci` → `npm run build` → `npm test`）。这些步骤已在**干净克隆**上手工实跑通过（本机 Node 24，以及官方 Node **22.23.3 便携包**——解压在 `.test-artifacts/toolchain/`，只在那次命令的 PATH 里生效，没有改全局 Node）。两点必须说明：**CI 从未在真实运行器上执行过**（本地仓库没有远端），且 **22.x 只测了 22.23.3 这一版**（不是整个区间，也不是 `engines` 下限 22.6 本身）。
+CI 在 `.github/workflows/ci.yml`：Windows 运行器 + Node `22.x`/`24.x`。步骤已在干净克隆上手工实跑，并且 GitHub Actions [首跑成功](https://github.com/WR-Class/personal-agent/actions/runs/36145175526)（22.x 与 24.x 都是 `npm ci`、类型检查、测试成功）。本机另用官方 Node **22.23.3 便携包**测过一次，解压在 `.test-artifacts/toolchain/`，没有改全局 Node。测的是这些具体版本，不是 `engines` 下限 22.6 本身，也不是非 Windows。
 
 首次提交使用的是**仓库局部**身份（`personal-agent <personal-agent@localhost>`，未改动你的全局 git 配置）。要换成你自己：
 

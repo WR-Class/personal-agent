@@ -24,7 +24,7 @@
 | A14 P2 | 终端控制字符注入 | 已处理（默认渲染）；terminal.safeText，CLI输出转义 | interactive：ESC转义 | 实体TTY/平台组合持续验证；无承诺原始输出模式 |
 | A15 P2 | TS测试发现/版本与构建承诺不符 | 部分处理；package test显式strip-types/glob，文档声明noEmit | 既有build/test实际记录 | engines>=22.6、TS^5.6.3与rewrite选项仍需收窄；零发现门槛/发行方案 |
 | A16 P2 | recursive清理、fixture越界写入 | 已处理（测试fixture范围）；fixtures唯一标记/校验/分目录/保留 | 所有六测试入口使用helper；无recursive删除hook | session-lease仅释放确切锁叶，不属于fixture清理；不自动删除遗留数据 |
-| A17 P2 | 工程化/文档与承诺脱节 | 部分处理；当前8份主文档统一、批次证据保留 | 文档链接/源码完整性复核 | Git、CI、正式ADR约束、平台支持与实际沙箱未完成 |
+| A17 P2 | 工程化/文档与承诺脱节 | 部分处理；主文档已统一，Git 与 GitHub Actions 已实测（Windows + Node 22.x/24.x） | 文档链接/源码完整性复核 | 正式发行构建、非 Windows 平台与真实 TTY 自动化未完成 |
 
 测试路径均在 [test目录地图](CODE_MAP.md) 中可点击。`--preflight` 联调准备检查批最新实跑为184项/183通过/1跳过，类型检查通过；新增「探测不发密钥且不读响应正文、401算可达」「密钥内容/长度/片段均不打印」「残缺配置不判ready」「坏tokenizer阻止"可尝试"并 exit 3」「非UTF-8命令输出不打印乱码」「TTY状态如实报告」。持久性/PT04/PT06/窗口与剩余量/tokenizer/摘要保真/本机socket联调批实跑为174项/173通过/1跳过；token上限与参考证据复核实跑为142项/141通过/1跳过；恢复合同收口与上下文预算实跑为139项/138通过/1跳过；恢复合同实施实跑为130项/129通过/1跳过；恢复合同第一步实跑为128项/127通过/1跳过；运行预算轮实跑为122项/121通过/1跳过；M1 协议与硬字节边界首批实跑为117项/116通过/1跳过；PT03/PT05实跑为110项/109通过/1跳过。详见 [VALIDATION](VALIDATION.md)。
 
@@ -41,8 +41,8 @@
 1. A03/A09/A10：完整协议合同与角色判别联合（参数Schema已首批落地）。
 2. A11/A12：上下文与token预算（文件/响应硬读取上限、工具数与运行时长预算已落地）。
 3. A06/A07/A08：实施 ADR-0001（消除双写、加 Run/Step 身份）、恢复/取消故障边界、逐写点注入。
-4. A15/A17：版本矩阵、Git/CI、发行和文档持续检查（ADR 约束已起步）。
-5. M1总验收后才开放写文件/进程能力；见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+4. A15/A17：发行构建、非 Windows 与文档持续检查。Git 与 GitHub Actions 已实测。
+5. 写文件/进程能力仍未开放，进入 M2/M3 前要另行确认；见 [IMPLEMENTATION](IMPLEMENTATION.md)。
 
 ## 历史证据说明
 
