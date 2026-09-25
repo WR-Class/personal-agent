@@ -458,6 +458,36 @@ export function createRenameFileTool(): Tool {
   };
 }
 
+const FILE_ACTIONS = {
+  edit_file: createEditFileTool,
+  create_file: createCreateFileTool,
+  delete_file: createDeleteFileTool,
+  rename_file: createRenameFileTool,
+} as const;
+
+/** Run several single-file actions. Each action asks for its own approval. */
+export function createBatchFilesTool(): Tool {
+  return {
+    name: "batch_files",
+    description: "Run up to 20 single-file edit, create, delete, or rename actions. Each action needs its own approval.",
+    parameters: { type: "object", properties: { operations: { type: "array", items: { type: "object" } } }, required: ["operations"] },
+    readOnly: false,
+    async execute(args, context) {
+      const operations = args.operations;
+      if (!Array.isArray(operations) || operations.length === 0 || operations.length > 20) return fail("batch_files", "operations must contain 1 to 20 items");
+      const lines: string[] = [];
+      for (const [index, operation] of operations.entries()) {
+        const name = (operation as { tool?: unknown }).tool;
+        const factory = FILE_ACTIONS[name as keyof typeof FILE_ACTIONS];
+        if (!factory) return fail("batch_files", `operation ${index + 1} has an unknown tool`);
+        const result = await factory().execute(operation as Record<string, unknown>, context);
+        lines.push(`${index + 1}. ${result.content}`);
+      }
+      return { content: lines.join("\n") };
+    },
+  };
+}
+
 /**
  * The set of tools advertised to the model, and the only path from a model's
  * {@link ToolCall} to an actual side effect.
@@ -497,7 +527,7 @@ export class ToolRegistry {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
     // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file", "rename_file"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file", "rename_file", "batch_files"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);

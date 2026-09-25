@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
 import { access } from "node:fs/promises";
-import { ToolRegistry, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool, createRenameFileTool } from "../src/tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool, createRenameFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -170,6 +170,23 @@ describe("rename_file", () => {
     await writeFile(join(workspace(), "taken.txt"), "taken", "utf8");
     const blocked = await registry.execute(call("rename_file", { from: "new-name.txt", to: "taken.txt" }), { workspaceRoot: workspace(), approve: async () => true });
     assert.match(blocked.content, /destination exists/);
+  });
+});
+
+describe("batch_files", () => {
+  it("asks once per operation and continues after a decline", async () => {
+    await writeFile(join(workspace(), "batch.txt"), "old", "utf8");
+    const answers = [false, true];
+    let asked = 0;
+    const result = await new ToolRegistry([createBatchFilesTool()]).execute(call("batch_files", { operations: [
+      { tool: "edit_file", path: "batch.txt", content: "changed" },
+      { tool: "create_file", path: "batch-new.txt", content: "new" },
+    ] }), { workspaceRoot: workspace(), approve: async () => { asked += 1; return answers.shift() === true; } });
+    assert.equal(asked, 2);
+    assert.match(result.content, /declined/);
+    assert.match(result.content, /created/);
+    assert.equal(await readFile(join(workspace(), "batch.txt"), "utf8"), "old");
+    assert.equal(await readFile(join(workspace(), "batch-new.txt"), "utf8"), "new");
   });
 });
 
