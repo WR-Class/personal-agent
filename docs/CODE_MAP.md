@@ -28,7 +28,7 @@
 | [echo-adapter.ts](../src/echo-adapter.ts)：createEchoAdapter/createScriptedAdapter | 离线回显/确定性脚本测试 | Echo不是大模型、不自主调用工具 |
 | [security-config.ts](../src/security-config.ts)：canonicalPath/resolveRuntimePaths/assertReadablePath/isWithin/configuredContextWindows | native真实路径、缺失叶子祖先、保护根、敏感路径规则、唯一的包含判定 `isWithin`、按模型窗口环境解析 | 命名策略非DLP；不消除本地并发替换竞态 |
 | [tool-environment.ts](../src/tool-environment.ts)：buildToolEnvironment/isIssuedToolEnvironment | 白名单env、派生home/temp/config路径校验、冻结发行对象 | 合作Context非OS sandbox；不可信进程内代码可忽略 |
-| [tools.ts](../src/tools.ts)：ToolRegistry/createReadFileTool/validateToolArguments | 非只读拒绝、JSON对象分发、按受支持Schema子集校验参数（不支持关键字明确拒绝）、内置只读路径/敏感检查、硬链接拒绝、256KiB硬读取上限 | 只实现受支持Schema子集，不是完整JSON Schema；仍无审批/授权绑定；schema错误与工具抛错分开报告；路径判定只经 `assertReadablePath` 一处（PT04 已删除 `resolveInside`） |
+| [file-policy.ts](../src/file-policy.ts)：filePolicy | 只读允许、六个文件工具需批准、其他副作用拒绝 | 不检查路径；路径仍由各工具调用 `assertReadablePath` |
 | [session-lease.ts](../src/session-lease.ts)：withSessionLease | wx锁文件、owner token、内部scope复用、核验归属后释放单个锁 | 本地合作进程锁；遗留锁不抢占；不是网络FS/恶意进程安全锁 |
 | [session-store.ts](../src/session-store.ts)：SessionStore/migrateEvent | 独占header、事件校验/追加（经create严格读一次）、每事件flush（`openAppend`/`sync` 接缝，`flush`/`relaxed` 两档）、inspect/read/history、pendingTools/assertReady/recover、appendSummary/compaction；message为唯一事实来源（ADR-0001），tool消息带runId/step/isError；`summary` 是可忽略新kind，记录 `covers` 边界 | 多次追加不是事务；没有完整Run状态机或自动尾行修复；旧审计对只读不写；flush不保证目录项持久化，真实断电未实测 |
 | [preflight.ts](../src/preflight.ts)：preflight/formatPreflight | 联调准备检查：配置完整性（三项齐全规则）、**未鉴权**端点可达性探测（不读正文）、tokenizer 命令实跑一次、真实 TTY 状态；只报观察到的事实 | 不读凭据文件、不验证托管服务是否接受请求形状；它是"能否尝试"的门槛，不是"联调已完成"的证明 |

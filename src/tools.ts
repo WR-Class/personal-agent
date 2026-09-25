@@ -17,6 +17,8 @@ import type { JsonSchema, ToolCall, ToolDefinition } from "./types.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { isIssuedToolEnvironment } from "./tool-environment.ts";
 import { assertReadablePath } from "./security-config.ts";
+import { filePolicy } from "./file-policy.ts";
+import type { FileGrant } from "./file-policy.ts";
 import { readBoundedUtf8 } from "./bounded-read.ts";
 
 export interface ToolResult {
@@ -41,6 +43,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Asked before the one write tool replaces an existing file. */
   approve?(prompt: string): Promise<boolean>;
+  /** Exact grants already approved by a parent operation. */
+  grants?: readonly FileGrant[];
 }
 
 /** Raised when a tool needs an environment that the caller did not rebuild. */
@@ -96,6 +100,19 @@ const SCHEMA_TYPES = new Set(["array", "boolean", "integer", "null", "number", "
 
 function fail(tool: string, message: string): ToolResult {
   return { content: `${tool}: ${message}`, isError: true };
+}
+
+/** Ask once unless this exact call already has an unexpired grant. */
+async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
+  const now = Date.now();
+  const expected = JSON.stringify(args);
+  const granted = context.grants?.some((grant) => grant.tool === name && grant.argumentsJson === expected && now <= grant.expiresAt) === true;
+  if (granted) return undefined;
+  if (!context.approve) return "no approval channel is configured";
+  const approved = await context.approve(prompt);
+  if (Date.now() - now > APPROVAL_TTL_MS) return "approval expired";
+  if (!approved) return "operator declined";
+  return undefined;
 }
 
 function schemaError(pathName: string, message: string): Error {
@@ -334,13 +351,10 @@ export function createEditFileTool(): Tool {
       if (!info.isFile()) return fail("edit_file", `not a regular file: ${target}`);
       if (info.nlink > 1) return fail("edit_file", "hard-linked files are denied");
       if (info.size > WRITE_FILE_MAX_BYTES) return fail("edit_file", `${target} is ${info.size} bytes, over the ${WRITE_FILE_MAX_BYTES}-byte limit`);
-      if (!context.approve) return fail("edit_file", "no approval channel is configured");
-      const askedAt = Date.now();
       const current = await readFile(resolved, "utf8");
       const diff = lineDiff(current, content);
-      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}\n本次批准 2 分钟内有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("edit_file", "approval expired");
-      if (!approved) return fail("edit_file", "operator declined");
+      const denial = await approveExact("edit_file", args, `Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}\n本次批准 2 分钟内有效。`, context);
+      if (denial) return fail("edit_file", denial);
       const temporary = `${resolved}.${process.pid}.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -383,11 +397,8 @@ export function createPatchFileTool(): Tool {
       if (first < 0 || current.indexOf(oldText, first + oldText.length) >= 0) return fail("patch_file", "oldText must occur exactly once");
       const content = current.slice(0, first) + newText + current.slice(first + oldText.length);
       if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("patch_file", "replacement exceeds the byte limit");
-      if (!context.approve) return fail("patch_file", "no approval channel is configured");
-      const askedAt = Date.now();
-      const approved = await context.approve(`Patch ${target}?\n${lineDiff(current, content)}\n本次批准 2 分钟内有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("patch_file", "approval expired");
-      if (!approved) return fail("patch_file", "operator declined");
+      const denial = await approveExact("patch_file", args, `Patch ${target}?\n${lineDiff(current, content)}\n本次批准 2 分钟内有效。`, context);
+      if (denial) return fail("patch_file", denial);
       const temporary = `${resolved}.${process.pid}.patch.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -421,12 +432,9 @@ export function createCreateFileTool(): Tool {
       catch (error) { return fail("create_file", (error as Error).message); }
       try { await stat(resolved); return fail("create_file", `already exists: ${target}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("create_file", `cannot stat ${target}`); }
-      if (!context.approve) return fail("create_file", "no approval channel is configured");
-      const askedAt = Date.now();
       const preview = content.split(/\r?\n/).slice(0, 40).join("\n");
-      const approved = await context.approve(`Create ${target} (${Buffer.byteLength(content)} bytes)?\n${preview}\n本次批准 2 分钟内有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("create_file", "approval expired");
-      if (!approved) return fail("create_file", "operator declined");
+      const denial = await approveExact("create_file", args, `Create ${target} (${Buffer.byteLength(content)} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
+      if (denial) return fail("create_file", denial);
       try { await writeFile(resolved, content, { encoding: "utf8", flag: "wx" }); }
       catch (error) { return fail("create_file", `cannot create ${target}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
       return { content: `created ${target}` };
@@ -452,12 +460,9 @@ export function createDeleteFileTool(): Tool {
       catch { return fail("delete_file", `no such file: ${target}`); }
       if (!info.isFile()) return fail("delete_file", `not a regular file: ${target}`);
       if (info.nlink > 1) return fail("delete_file", "hard-linked files are denied");
-      if (!context.approve) return fail("delete_file", "no approval channel is configured");
-      const askedAt = Date.now();
       const preview = info.size <= WRITE_FILE_MAX_BYTES ? (await readFile(resolved, "utf8")).split(/\r?\n/).slice(0, 40).join("\n") : "文件超过预览上限";
-      const approved = await context.approve(`Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("delete_file", "approval expired");
-      if (!approved) return fail("delete_file", "operator declined");
+      const denial = await approveExact("delete_file", args, `Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
+      if (denial) return fail("delete_file", denial);
       await rm(resolved, { force: false, recursive: false });
       return { content: `deleted ${target}` };
     },
@@ -494,11 +499,8 @@ export function createRenameFileTool(): Tool {
       if (!info.isFile()) return fail("rename_file", `not a regular file: ${from}`);
       try { await stat(destination); return fail("rename_file", `destination exists: ${to}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("rename_file", `cannot stat ${to}`); }
-      if (!context.approve) return fail("rename_file", "no approval channel is configured");
-      const askedAt = Date.now();
-      const approved = await context.approve(`Rename ${from} to ${to}?\n本次批准 2 分钟内有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("rename_file", "approval expired");
-      if (!approved) return fail("rename_file", "operator declined");
+      const denial = await approveExact("rename_file", args, `Rename ${from} to ${to}?\n本次批准 2 分钟内有效。`, context);
+      if (denial) return fail("rename_file", denial);
       await rename(source, destination);
       return { content: `renamed ${from} to ${to}` };
     },
@@ -531,13 +533,17 @@ export function createBatchFilesTool(): Tool {
       if (!context.approve) return fail("batch_files", "no approval channel is configured");
       const approvedManifest = manifest.join("\n");
       const askedAt = Date.now();
-      const approved = await context.approve(`Approve this exact batch?\n${approvedManifest}\n本次批准 2 分钟内有效，只对这份清单有效。`);
-      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("batch_files", "approval expired");
-      if (!approved) return fail("batch_files", "operator declined");
+      const denial = await approveExact("batch_files", args, `Approve this exact batch?\n${approvedManifest}\n本次批准 2 分钟内有效，只对这份清单有效。`, context);
+      if (denial) return fail("batch_files", denial);
+      const expiresAt = askedAt + APPROVAL_TTL_MS;
       const lines: string[] = [];
       for (const [index, operation] of operations.entries()) {
         const name = (operation as { tool: keyof typeof FILE_ACTIONS }).tool;
-        const result = await FILE_ACTIONS[name]().execute(operation as Record<string, unknown>, { ...context, approve: async () => true });
+        const { tool: _tool, ...childArgs } = operation as Record<string, unknown>;
+        const result = await FILE_ACTIONS[name]().execute(childArgs, {
+          ...context,
+          grants: [{ tool: name, argumentsJson: JSON.stringify(childArgs), expiresAt }],
+        });
         if (result.isError) return fail("batch_files", `operation ${index + 1} failed: ${result.content}`);
         lines.push(`${index + 1}. ${result.content}`);
       }
@@ -584,8 +590,6 @@ export class ToolRegistry {
   async execute(call: ToolCall, context: ToolContext): Promise<ToolResult> {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
-    // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && !["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);
@@ -595,8 +599,6 @@ export class ToolRegistry {
     if (typeof args !== "object" || args === null || Array.isArray(args)) {
       return fail(call.name, "arguments must be a JSON object");
     }
-    // A declaration this project cannot verify is a host bug, not a tool failure:
-    // report it as itself instead of dressing it up as "the tool threw".
     let argumentProblem: string | undefined;
     try {
       argumentProblem = validateToolArguments(tool.parameters, args);
@@ -604,6 +606,7 @@ export class ToolRegistry {
       return fail(call.name, (error as Error).message);
     }
     if (argumentProblem) return fail(call.name, `invalid arguments: ${argumentProblem}`);
+    if (filePolicy(call.name) === "deny" && tool.readOnly !== true) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     try {
       return await tool.execute(args as Record<string, unknown>, context);
     } catch (error) {
