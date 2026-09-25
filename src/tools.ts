@@ -81,6 +81,7 @@ export interface Tool {
 
 const READ_FILE_MAX_BYTES = 256 * 1024;
 const WRITE_FILE_MAX_BYTES = 256 * 1024;
+const APPROVAL_TTL_MS = 2 * 60 * 1000;
 const SUPPORTED_SCHEMA_KEYS = new Set([
   "type",
   "properties",
@@ -334,9 +335,11 @@ export function createEditFileTool(): Tool {
       if (info.nlink > 1) return fail("edit_file", "hard-linked files are denied");
       if (info.size > WRITE_FILE_MAX_BYTES) return fail("edit_file", `${target} is ${info.size} bytes, over the ${WRITE_FILE_MAX_BYTES}-byte limit`);
       if (!context.approve) return fail("edit_file", "no approval channel is configured");
+      const askedAt = Date.now();
       const current = await readFile(resolved, "utf8");
       const diff = lineDiff(current, content);
-      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}`);
+      const approved = await context.approve(`Replace ${target} (${info.size} bytes) with ${Buffer.byteLength(content)} bytes?\n${diff || "内容没有变化"}\n本次批准 2 分钟内有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("edit_file", "approval expired");
       if (!approved) return fail("edit_file", "operator declined");
       const temporary = `${resolved}.${process.pid}.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });

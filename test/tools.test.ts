@@ -105,6 +105,23 @@ describe("edit_file", () => {
     assert.match(missing.content, /no such file/);
   });
 
+  it("rejects a yes that arrives after two minutes", async () => {
+    await writeFile(join(workspace(), "editable.txt"), "old text", "utf8");
+    const original = Date.now;
+    let calls = 0;
+    Date.now = () => calls++ === 0 ? 1_000 : 1_000 + 2 * 60 * 1000 + 1;
+    try {
+      const result = await new ToolRegistry([createEditFileTool()]).execute(
+        call("edit_file", { path: "editable.txt", content: "late" }),
+        { workspaceRoot: workspace(), approve: async () => true },
+      );
+      assert.match(result.content, /expired/);
+      assert.equal(await readFile(join(workspace(), "editable.txt"), "utf8"), "old text");
+    } finally {
+      Date.now = original;
+    }
+  });
+
   it("keeps every other side-effect tool closed", async () => {
     const registry = new ToolRegistry([{
       name: "delete_file", description: "no", parameters: { type: "object" }, readOnly: false,
