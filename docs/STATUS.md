@@ -1,0 +1,52 @@
+# 项目当前状态（唯一阶段入口）
+
+最新批次：**SSE 流式传输**（`--stream`，组装回同形状结果，含字节上限与可中断；**非**增量显示）与推理可见性（`[思考]` 与预算行 `· 推理 N`，字段名对真实端点实测）。此前批次：`--preflight` 联调准备检查、持久性语义（按事件 flush）、PT04 路径收敛、PT06 审计重复检查、按模型窗口与剩余量显示、可注入 tokenizer 精确预判、摘要保真压缩、本机 socket 与真实端点 Provider 联调。原文档统一基线：2026-09-24。此文件负责阶段/剩余任务；其他主文档负责各自专题，批次记录保留历史证据。后续每批实现必须先更新本表。
+
+## 定位
+
+**当前为可持续对话、带安全只读文件工具与会话保护的独立单 Agent CLI，处于 M1；M1 尚未验收完成。**不是 API 代理，不依赖 DSH 运行时，也不是可执行任意插件/终端的成熟平台。
+
+正常入口仍为 `npm.cmd start`。用户已确认上一版 CLI 实际运行没有问题；这不是所有 Provider/操作系统/取消与密钥输入组合均已验证的声明。
+
+## 阶段矩阵
+
+| 阶段 | 当前状态 | 范围 |
+|---|---|---|
+| M0 源码审查/文档基线 | 已完成；本次已统一主文档 | 当前地图、A01–A17 修复映射、参考证据、阶段门槛 |
+| M1 可靠只读 Runtime | 进行中 | 安全基线、交互 CLI、响应校验、正常取消、合作单 writer 与有限恢复已实现 |
+| M2 权限与受控文件修改 | 未开始 | 完整 Policy/Approval、授权绑定、diff/原子写尚未实现 |
+| M3 受控进程工具 | 未开始 | 无 shell，无 OS sandbox |
+| M4 Skill/插件 | 未开始 | 无 Manifest/宿主/不可信插件隔离 |
+| M5 客户端与记忆 | 未开始；CLI 可用性提前交付 | CLI 不等于桌面 UI、流式协议、长期记忆 |
+| M6 多 Agent | 未开始 | 无 fork、任务调度、并发文件冲突管理 |
+
+## M1 分项状态
+
+| 工作包 | 状态 | 已落地 | 未完成 |
+|---|---|---|---|
+| PR1 安全基线 | 首批完成 | env 白名单、真实路径/保护根、敏感读取、非只读拒绝、保留 fixture | OS 隔离非本批目标；真实子进程与恶意竞态不作保证 |
+| PR2 协议边界 | 部分完成 | unknown响应校验、拒绝明确length/content_filter、配置读写字节限额一致、事件字段/用量/header校验、工具参数按受支持Schema子集校验（不支持关键字明确拒绝） | 角色判别联合、完整JSON Schema语义、未知用量与0区分、更多负向协议测试 |
+| PR3 会话一致性 | 部分完成 | wx header、跨实例/进程合作锁、尾行检查、工具组显式补齐、每事件 flush 与其失败上抛、重复 `tool/call` 审计记录拒绝、压缩边界=实测消息数 | 完整 Run/Step/Call 身份与状态机、单一回放事实/事务、完整迁移 fixtures；flush 不等于目录项持久化，也**未实测真实断电** |
+| PR4 取消与预算 | 部分完成 | 预取消、循环边界检查、未开始工具不执行、正常取消补齐关联、HTTP响应1MiB与文件读取256KiB硬字节上限、总 deadline、每轮/每步工具数、字节+实测token双上限、按模型窗口、可选本机 tokenizer 预判、剩余量显示 | 未内置分词器（可注入，需宿主自备）；无按模型字节窗口；provider 上报值只能晚一轮生效 |
+| PR5 工程化 | 部分完成 | 交互入口、帮助、控制字符转义、明确 TS 测试入口、文档同步、`/compact` 上下文压缩、`/status` 显示全部上限、`--preflight` 联调准备检查（exit 3 作为门槛） | Node/TS 支持矩阵、测试零发现门槛、Git/CI、发行构建与平台验证；无真实 TTY 自动化验证（未使用 pty） |
+
+## 下一步具体顺序与门槛
+
+1. **兼容与工程化**：明确支持版本、初始化版本管理需独立执行、CI/发行策略、旧会话 fixtures、平台实测；`summary` 事件已有 golden 覆盖，`M2` 前的旧 fixtures 仍需补齐。
+2. **真实 Provider 与真实 TTY 联调**：**准备已完成**（`--preflight`，退出码 3 表示不可尝试）。**真实端点往返已实测通过**：对操作者提供的本机回环端点 `http://127.0.0.1:8787/v1`（模型 `glm-5.3-free`）完成了一次真实发送、一次**真实工具调用闭环**（模型调用 `read_file` 并返回文件内标记）与一次**流式工具往返**，日志含 `usage` 且不含密钥（真实密钥值不记录在本仓库）。一个必须记录的发现：**该服务在 `/v1/models` 与 `/v1/chat/completions` 上不校验鉴权**——无鉴权头、伪值 `Bearer X`、真实密钥均返回 200（均为实测），这是被调用服务自身的配置问题。细节见 [联调 Runbook 第 6 节](LIVE_INTEGRATION.md)。**仍未执行**：外部托管 Provider（本会话无任何外部凭据）、实体 TTY 自动化（Node 无内置 pty，不为此引依赖；操作者已在真实终端手工验证过交互与取消语义）。
+3. **M1 总验收**：A01–A12 对应风险在受信只读范围内有可验证处置；未覆盖平台/风险列明；用户确认后才开放 M2/M3 新权限。**用户已确认 M1 验收（2026-09-25）。**
+4. **进行中（用户已选）**：①推理可见性——**已完成**；②SSE 流式——**已完成**（传输层；**非**增量显示，见 [CLI_STATUS](CLI_STATUS.md)）；③Git 版本控制与 CI——**未开始**（当前产品目录**没有任何版本控制**；`.gitignore` 已存在且覆盖 `.personal-agent/`、`.test-artifacts/`）。
+5. **实体 TTY 实测暴露的待办**：生成中被 Ctrl+C 取消的轮次**不打印任何用量/耗时行**（运行期抛 abort，没有 `SendResult.budget` 可打印），操作者看不到该轮代价；至少应打印已用时并说明"provider 未回报用量"。另：默认 Agent home 位于**项目目录内**（`.personal-agent/`），明文密钥选项会把密钥写在那里——`.gitignore` 已覆盖，但那是"不会被提交"，不是"不在项目树中"，发行/打包须显式排除。
+
+不因测试数量增长宣布整个 M1 完成，不直接跳到 shell/蜂群。每项具体实施顺序见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+
+## 证据与文档导航
+
+- [CODE_MAP](CODE_MAP.md)：当前 16 个源码模块与完整调用链，不再使用最初快照行号。- [AUDIT](AUDIT.md)：A01–A17 原始风险摘要、当前修复/残余及源码/测试映射。
+- [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md)：研究证据与实际采用程度分开。
+- [SAFETY](SAFETY.md)：当前有效保护与限制。
+- [VALIDATION](VALIDATION.md)：历史各批证据及本次复核限制。
+- [联调 Runbook](LIVE_INTEGRATION.md)：真实 Provider/实体 TTY 的分步操作与证据要求。
+- 历史批次：[PR1](PR1_STATUS.md)、[CLI](CLI_STATUS.md)、[会话可靠性](SESSION_RELIABILITY.md)。其中的测试数/“尚未实现”描述属于该批时点，当前阶段以本表为准。
+
+最新实际验证：201 tests，200 pass、0 fail、1 skip（skip 是 Windows 无权限创建符号链接，按跳过计，不计为通过）；类型检查通过；真实端点冒烟通过（非流式与 `--stream` 两条路径渲染结果逐字相同；流式下完成一次**真实工具往返**；推理在答案之前打印、预算行含 `推理 N`、日志含 `reasoningTokens` 而不含推理文本）。本批同时修正了两处由冒烟发现的缺陷：一次性模式下回答曾被打印两次（重构时残留的重复 `write`）；`--preflight` 在 tokenizer 命令无法运行仍报告"可以尝试"且 exit 0，以及把 Windows 非 UTF-8 的 stderr 当 UTF-8 打印成乱码。本批新增：**每事件 flush**（`openAppend`/`sync` 接缝，测试计数 sync 次数并让失败上抛，`relaxed` 模式可对照）、**PT04 路径收敛**（删除 `resolveInside` 与重复的 `isInside`，`read_file` 只经 `assertReadablePath` 一处判定，原覆盖迁移到该实现）、**PT06 审计重复检查**（第二个同 id `tool/call` 被拒并报出其行号）、**按模型 token 窗口**（精确模型名 → `*` → 全局；畸形配置在构造与环境解析处即拒绝）、**剩余量显示**（未实测打印为“未测量”，超限打印为“超N”而非负剩余）、**可注入 tokenizer**（`countPromptTokens`；CLI 为 `PERSONAL_AGENT_TOKENIZER` 命令，失败/超时/非数字一律报错，不静默退回估算，不内置分词器）、**摘要保真压缩**（`summary` 事件记录 `covers`，原始消息全部保留，边界等于实测消息数，未完成工具批次与空摘要一律拒绝）、**本机 socket Provider 联调**（真实 HTTP + 真实 `fetch` + 真实 abort + 真实 CLI 记录，密钥不入 stdout 亦不入日志）。会话格式已按 [ADR-0001](ADR-0001-session-fact-source.md) D1–D4 落地；参考来源与不采用项见 [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md)。历史记录见[VALIDATION](VALIDATION.md)。[Ponytail审查与整改状态](PONYTAIL_REVIEW.md)的 PT01–PT07 已全部处理。

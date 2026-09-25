@@ -1,0 +1,341 @@
+/**
+ * Tools the model may ask for.
+ *
+ * A tool receives a parsed JSON object, not schema-validated arguments.
+ * Built-in read_file enforces path and sensitive-data policy; arbitrary in-process
+ * tools must be trusted and can bypass cooperative context. This is not a sandbox.
+ *
+ * Every failure path returns `isError: true` rather than throwing, because a
+ * tool failure is information for the model, not a crash for the loop.
+ */
+
+import { open, stat } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import path from "node:path";
+
+import type { JsonSchema, ToolCall, ToolDefinition } from "./types.ts";
+import type { ToolEnvironment } from "./tool-environment.ts";
+import { isIssuedToolEnvironment } from "./tool-environment.ts";
+import { assertReadablePath } from "./security-config.ts";
+import { readBoundedUtf8 } from "./bounded-read.ts";
+
+export interface ToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+export interface ToolContext {
+  /** Absolute path; every filesystem tool resolves against it. */
+  workspaceRoot: string;
+  /**
+   * The rebuilt environment a child process must be given.
+   *
+   * `AgentRuntime` always supplies this. It is optional only so that a pure
+   * in-process tool can be unit-tested without a runtime; a tool that actually
+   * needs an environment must read it through {@link requireToolEnvironment},
+   * never through `process.env`.
+   */
+  toolEnvironment?: ToolEnvironment;
+  /** Trusted runtime supplies its state/log roots; never model-controlled. */
+  protectedRoots?: readonly string[];
+  signal?: AbortSignal;
+}
+
+/** Raised when a tool needs an environment that the caller did not rebuild. */
+export class MissingToolEnvironmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingToolEnvironmentError";
+  }
+}
+
+/**
+ * Read the rebuilt environment, or fail loudly.
+ *
+ * This is deliberately not a fallback to `process.env`. A silent fallback would
+ * hand a child process the operator's `HOME`, which is the failure mode the
+ * whole module exists to prevent — so the absence of an environment is an
+ * error, not a default.
+ */
+export function requireToolEnvironment(context: ToolContext): ToolEnvironment {
+  const environment = context.toolEnvironment;
+  if (environment === undefined || !isIssuedToolEnvironment(environment)) {
+    throw new MissingToolEnvironmentError(
+      "tool executed without a rebuilt environment: refusing to fall back to the parent " +
+        "process environment, whose HOME is the operator's",
+    );
+  }
+  return environment;
+}
+
+export interface Tool {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: JsonSchema;
+  /** Host-trusted declaration. Non-readOnly tools are currently denied by the registry. */
+  readonly readOnly: boolean;
+  execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
+}
+
+const READ_FILE_MAX_BYTES = 256 * 1024;
+const SUPPORTED_SCHEMA_KEYS = new Set([
+  "type",
+  "properties",
+  "required",
+  "items",
+  "additionalProperties",
+  "enum",
+  "const",
+  "description",
+]);
+const SCHEMA_TYPES = new Set(["array", "boolean", "integer", "null", "number", "object", "string"]);
+
+function fail(tool: string, message: string): ToolResult {
+  return { content: `${tool}: ${message}`, isError: true };
+}
+
+function schemaError(pathName: string, message: string): Error {
+  return new Error(`unsupported tool schema at ${pathName}: ${message}`);
+}
+
+function inspectSchema(schema: unknown, pathName = "$", root = false): Record<string, unknown> {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    throw schemaError(pathName, "schema must be an object");
+  }
+  const value = schema as Record<string, unknown>;
+  for (const key of Object.keys(value)) {
+    if (!SUPPORTED_SCHEMA_KEYS.has(key)) throw schemaError(`${pathName}.${key}`, "keyword is not supported");
+  }
+  if (typeof value.type !== "string" || !SCHEMA_TYPES.has(value.type)) {
+    throw schemaError(`${pathName}.type`, "must be one supported type");
+  }
+  if (root && value.type !== "object") throw schemaError(`${pathName}.type`, "root type must be object");
+  if (value.description !== undefined && typeof value.description !== "string") {
+    throw schemaError(`${pathName}.description`, "must be a string");
+  }
+  if (value.required !== undefined &&
+      (!Array.isArray(value.required) || value.required.some((item) => typeof item !== "string"))) {
+    throw schemaError(`${pathName}.required`, "must be an array of strings");
+  }
+  if (value.properties !== undefined) {
+    if (typeof value.properties !== "object" || value.properties === null || Array.isArray(value.properties)) {
+      throw schemaError(`${pathName}.properties`, "must be an object");
+    }
+    for (const [key, child] of Object.entries(value.properties as Record<string, unknown>)) {
+      inspectSchema(child, `${pathName}.properties.${key}`);
+    }
+  }
+  if (value.items !== undefined) inspectSchema(value.items, `${pathName}.items`);
+  if (value.additionalProperties !== undefined && typeof value.additionalProperties !== "boolean") {
+    throw schemaError(`${pathName}.additionalProperties`, "must be a boolean");
+  }
+  if (value.enum !== undefined && (!Array.isArray(value.enum) || value.enum.length === 0)) {
+    throw schemaError(`${pathName}.enum`, "must be a non-empty array");
+  }
+  if (value.const !== undefined && (typeof value.const === "object" || typeof value.const === "function")) {
+    throw schemaError(`${pathName}.const`, "must be a JSON scalar");
+  }
+  return value;
+}
+
+function matchesSchema(schema: Record<string, unknown>, value: unknown, pathName = "$"): string | undefined {
+  const type = schema.type;
+  const typeMatches = type === "null" ? value === null
+    : type === "array" ? Array.isArray(value)
+    : type === "object" ? typeof value === "object" && value !== null && !Array.isArray(value)
+    : type === "integer" ? typeof value === "number" && Number.isSafeInteger(value)
+    : type === "number" ? typeof value === "number" && Number.isFinite(value)
+    : type === "boolean" ? typeof value === "boolean"
+    : typeof value === "string";
+  if (!typeMatches) return `${pathName} must be ${String(type)}`;
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => Object.is(item, value))) {
+    return `${pathName} must match one of the declared enum values`;
+  }
+  if (schema.const !== undefined && !Object.is(schema.const, value)) return `${pathName} must match the declared const`;
+  if (type === "object") {
+    const objectValue = value as Record<string, unknown>;
+    const properties = (schema.properties ?? {}) as Record<string, unknown>;
+    for (const required of (schema.required as string[] | undefined) ?? []) {
+      if (!(required in objectValue)) {
+        const requiredSchema = properties[required] as Record<string, unknown> | undefined;
+        return requiredSchema?.type === "string"
+          ? `${pathName}.${required} must be a non-empty string`
+          : `${pathName}.${required} is required`;
+      }
+    }
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(objectValue)) {
+        if (!(key in properties)) return `${pathName}.${key} is not allowed`;
+      }
+    }
+    for (const [key, child] of Object.entries(properties)) {
+      if (key in objectValue) {
+        const problem = matchesSchema(child as Record<string, unknown>, objectValue[key], `${pathName}.${key}`);
+        if (problem) return problem;
+      }
+    }
+  } else if (type === "array" && schema.items !== undefined) {
+    for (let index = 0; index < (value as unknown[]).length; index += 1) {
+      const problem = matchesSchema(schema.items as Record<string, unknown>, (value as unknown[])[index], `${pathName}[${index}]`);
+      if (problem) return problem;
+    }
+  }
+  return undefined;
+}
+
+function validateToolArguments(schema: unknown, args: unknown): string | undefined {
+  const inspected = inspectSchema(schema, "$", true);
+  return matchesSchema(inspected, args);
+}
+
+/** Chunk a file handle so the shared byte ceiling applies to it too. */
+async function* fileChunks(handle: FileHandle): AsyncIterable<Uint8Array> {
+  for (;;) {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    if (bytesRead === 0) return;
+    yield buffer.subarray(0, bytesRead);
+  }
+}
+
+async function readBoundedFile(filePath: string, maxBytes: number): Promise<string> {
+  const handle = await open(filePath, "r");
+  try {
+    return await readBoundedUtf8(fileChunks(handle), maxBytes, "file");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Read one file inside the workspace.
+ *
+ * Path policy is delegated wholesale to {@link assertReadablePath}, the single
+ * containment/deny implementation this project has. An earlier version ran its
+ * own `resolveInside` here — a second algorithm for the same question, with its
+ * own failure strategy — and then re-checked the result, so containment was
+ * decided three times per read by two implementations that could drift apart.
+ * Consolidating is not a claim that a re-check was useless: `assertReadablePath`
+ * checks the requested spelling *and* the canonical path, including the
+ * nearest-existing-ancestor case, which is what the deleted helper approximated
+ * with an ENOENT fallback.
+ *
+ * This is a cooperative check against path confusion, not a race-free
+ * guarantee: a target may still be swapped between this call and `open`.
+ */
+
+export function createReadFileTool(): Tool {
+  return {
+    name: "read_file",
+    description:
+      "Read a UTF-8 text file inside the workspace. `path` is relative to the workspace root (absolute paths inside it also work).",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File to read, relative to the workspace root." }
+      },
+      required: ["path"]
+    },
+    readOnly: true,
+    async execute(args, context) {
+      const target = args.path;
+      if (typeof target !== "string" || target.length === 0) {
+        return fail("read_file", "'path' must be a non-empty string");
+      }
+      let resolved: string;
+      try {
+        resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots);
+      } catch (error) {
+        return fail("read_file", (error as Error).message);
+      }
+      let info;
+      try {
+        info = await stat(resolved);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return fail("read_file", `no such file: ${target}`);
+        if (code === "EISDIR") info = undefined;
+        return fail("read_file", `cannot stat ${target}: ${code ?? String(error)}`);
+      }
+      if (!info.isFile()) return fail("read_file", `not a regular file: ${target}`);
+      if (info.nlink > 1) return fail("read_file", "hard-linked files are denied");
+      if (info.size > READ_FILE_MAX_BYTES) {
+        return fail(
+          "read_file",
+          `${target} is ${info.size} bytes, over the ${READ_FILE_MAX_BYTES}-byte limit`
+        );
+      }
+      try {
+        return { content: await readBoundedFile(resolved, READ_FILE_MAX_BYTES) };
+      } catch (error) {
+        return fail("read_file", `cannot read ${target}: ${(error as Error).message}`);
+      }
+    }
+  };
+}
+
+/**
+ * The set of tools advertised to the model, and the only path from a model's
+ * {@link ToolCall} to an actual side effect.
+ *
+ * The registry deliberately does not consult permissions. It answers "can this
+ * be executed", not "may it be" — approval is a separate layer that wraps the
+ * caller, so that adding a tool can never silently widen what is authorised.
+ */
+export class ToolRegistry {
+  readonly #tools = new Map<string, Tool>();
+
+  constructor(tools: readonly Tool[] = []) {
+    for (const tool of tools) this.register(tool);
+  }
+
+  register(tool: Tool): void {
+    if (this.#tools.has(tool.name)) {
+      throw new Error(`duplicate tool name: ${tool.name}`);
+    }
+    this.#tools.set(tool.name, tool);
+  }
+
+  get(name: string): Tool | undefined {
+    return this.#tools.get(name);
+  }
+
+  list(): Tool[] {
+    return [...this.#tools.values()];
+  }
+
+  definitions(): ToolDefinition[] {
+    return this.list().map(({ name, description, parameters }) => ({ name, description, parameters }));
+  }
+
+  /** Execute one call, converting every failure into an error result. */
+  async execute(call: ToolCall, context: ToolContext): Promise<ToolResult> {
+    const tool = this.#tools.get(call.name);
+    if (!tool) return fail("tool", `unknown tool: ${call.name}`);
+    // No approval system exists yet: never enable side effects just by registering a tool.
+    if (tool.readOnly !== true) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    let args: unknown;
+    try {
+      args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);
+    } catch (error) {
+      return fail(call.name, `arguments are not valid JSON: ${(error as Error).message}`);
+    }
+    if (typeof args !== "object" || args === null || Array.isArray(args)) {
+      return fail(call.name, "arguments must be a JSON object");
+    }
+    // A declaration this project cannot verify is a host bug, not a tool failure:
+    // report it as itself instead of dressing it up as "the tool threw".
+    let argumentProblem: string | undefined;
+    try {
+      argumentProblem = validateToolArguments(tool.parameters, args);
+    } catch (error) {
+      return fail(call.name, (error as Error).message);
+    }
+    if (argumentProblem) return fail(call.name, `invalid arguments: ${argumentProblem}`);
+    try {
+      return await tool.execute(args as Record<string, unknown>, context);
+    } catch (error) {
+      return fail(call.name, `threw: ${(error as Error).message}`);
+    }
+  }
+}

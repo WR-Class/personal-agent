@@ -1,0 +1,37 @@
+# Continuous integration for the product only.
+#
+# Deliberately Windows-only: this project has been developed and verified on
+# Windows with Node 24, and it makes no POSIX claims. Running this on ubuntu would
+# test portability nobody has asserted, and a red job there would be noise rather
+# than a finding. Add a Linux job only alongside real POSIX verification.
+#
+# The Node matrix exercises the `engines` floor (`>=22.6`) that the project asserts
+# but has never actually measured: only Node 24 was available when this workflow was
+# written, so 22.x is exactly the claim this job exists to check.
+#
+# This workflow has NEVER RUN — the checkout has no remote yet.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      # `npm ci` (not `install`) so the lockfile is the only source of truth; this
+      # project has no production dependencies, so a drift here is a real signal.
+      - run: npm ci
+      # Types first: a type error is cheaper to read than a test failure.
+      - run: npm run build
+      - run: npm test
