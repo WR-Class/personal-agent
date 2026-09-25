@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { SessionCorruptionError, SessionStore, migrateEvent } from "../src/session-store.ts";
 import { AgentRuntime, ContextBudgetError, DEFAULT_MAX_STEPS, DeadlineExceededError, StepLimitError, TokenBudgetError, ToolBudgetError, formatBudget } from "../src/runtime.ts";
 import { access } from "node:fs/promises";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createReadFileTool, createRenameFileTool } from "../src/tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "../src/tools.ts";
 import { assertReadablePath, configuredContextWindows } from "../src/security-config.ts";
 import { readBoundedUtf8 } from "../src/bounded-read.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -197,6 +197,18 @@ describe("batch_files", () => {
     ] }), { workspaceRoot: workspace(), approve: async () => false });
     assert.match(result.content, /declined/);
     assert.equal(await readFile(join(workspace(), "batch.txt"), "utf8"), "old");
+  });
+});
+
+describe("patch_file", () => {
+  it("replaces one exact snippet and refuses an ambiguous one", async () => {
+    await writeFile(join(workspace(), "patch.txt"), "alpha beta alpha", "utf8");
+    const registry = new ToolRegistry([createPatchFileTool()]);
+    const result = await registry.execute(call("patch_file", { path: "patch.txt", oldText: "beta", newText: "BETA" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.equal(result.isError, undefined);
+    assert.equal(await readFile(join(workspace(), "patch.txt"), "utf8"), "alpha BETA alpha");
+    const ambiguous = await registry.execute(call("patch_file", { path: "patch.txt", oldText: "alpha", newText: "x" }), { workspaceRoot: workspace(), approve: async () => true });
+    assert.match(ambiguous.content, /exactly once/);
   });
 });
 

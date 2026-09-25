@@ -349,6 +349,53 @@ export function createEditFileTool(): Tool {
   };
 }
 
+/** Replace one exact text occurrence. Zero or multiple matches are refused. */
+export function createPatchFileTool(): Tool {
+  return {
+    name: "patch_file",
+    description: "Replace one exact text snippet in an existing file. The snippet must occur once.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        oldText: { type: "string", description: "Exact text to find. It must occur once." },
+        newText: { type: "string", description: "Replacement text." },
+      },
+      required: ["path", "oldText", "newText"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const target = args.path;
+      const oldText = args.oldText;
+      const newText = args.newText;
+      if (typeof target !== "string" || !target) return fail("patch_file", "'path' must name a file");
+      if (typeof oldText !== "string" || oldText.length === 0) return fail("patch_file", "'oldText' must not be empty");
+      if (typeof newText !== "string") return fail("patch_file", "'newText' must be a string");
+      let resolved: string;
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      catch (error) { return fail("patch_file", (error as Error).message); }
+      let info;
+      try { info = await stat(resolved); }
+      catch { return fail("patch_file", `no such file: ${target}`); }
+      if (!info.isFile() || info.nlink > 1 || info.size > WRITE_FILE_MAX_BYTES) return fail("patch_file", "file is not one editable regular file");
+      const current = await readFile(resolved, "utf8");
+      const first = current.indexOf(oldText);
+      if (first < 0 || current.indexOf(oldText, first + oldText.length) >= 0) return fail("patch_file", "oldText must occur exactly once");
+      const content = current.slice(0, first) + newText + current.slice(first + oldText.length);
+      if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("patch_file", "replacement exceeds the byte limit");
+      if (!context.approve) return fail("patch_file", "no approval channel is configured");
+      const askedAt = Date.now();
+      const approved = await context.approve(`Patch ${target}?\n${lineDiff(current, content)}\n本次批准 2 分钟内有效。`);
+      if (Date.now() - askedAt > APPROVAL_TTL_MS) return fail("patch_file", "approval expired");
+      if (!approved) return fail("patch_file", "operator declined");
+      const temporary = `${resolved}.${process.pid}.patch.tmp`;
+      await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+      await rename(temporary, resolved);
+      return { content: `patched ${target}` };
+    },
+  };
+}
+
 /** Create one new UTF-8 text file. An existing path is refused, never overwritten. */
 export function createCreateFileTool(): Tool {
   return {
@@ -460,6 +507,7 @@ export function createRenameFileTool(): Tool {
 
 const FILE_ACTIONS = {
   edit_file: createEditFileTool,
+  patch_file: createPatchFileTool,
   create_file: createCreateFileTool,
   delete_file: createDeleteFileTool,
   rename_file: createRenameFileTool,
@@ -537,7 +585,7 @@ export class ToolRegistry {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
     // edit_file is the one approved side effect. Every other write stays closed.
-    if (tool.readOnly !== true && !["edit_file", "create_file", "delete_file", "rename_file", "batch_files"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    if (tool.readOnly !== true && !["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"].includes(tool.name)) return fail(call.name, "side-effect tools are disabled until approval is implemented");
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);
