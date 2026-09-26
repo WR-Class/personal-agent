@@ -13,6 +13,7 @@ import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
 import { GeneStore } from "./gene-store.ts";
 import { CycleStore } from "./cycle-store.ts";
+import { distillGuards, unmintedDrafts } from "./distill.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -29,10 +30,11 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --session demo --list 查看历史，不需要模型配置
       npm start -- --preflight        联调准备检查：配置/可达性/tokenizer/TTY，不发密钥不消耗 token
       npm start -- --mint-gene draft.json 从验证过的成功经验铸造一个基因并入库（不需要模型）
+      npm start -- --distill           把反复失败的请求蒸馏成 guard 草稿并打印，不自动铸造
       npm start -- --stream "问题"     用 SSE 流式传输（服务端只支持流式时使用；不改变回答内容）
 选项：--home <dir> --workspace <dir> --max-steps <n> --max-tools <n>
       --max-tools-per-step <n> --max-send-ms <n> --max-context-bytes <n> --max-context-tokens <n> --totals
-      --session/-s <id> --echo --preflight --stream --help/-h -- <以横线开头的提示>
+      --session/-s <id> --echo --preflight --stream --distill --help/-h -- <以横线开头的提示>
 环境：PERSONAL_AGENT_BASE_URL / PERSONAL_AGENT_MODEL / PERSONAL_AGENT_API_KEY
       三项须一起配置；不与已保存配置混合，不再静默回退 Echo。
       预算：PERSONAL_AGENT_MAX_STEPS / _MAX_TOOL_CALLS / _MAX_TOOLS_PER_STEP / _MAX_SEND_MS / _MAX_CONTEXT_BYTES / _MAX_CONTEXT_TOKENS
@@ -49,6 +51,8 @@ export interface CliOptions {
   stream: boolean;
   /** Path to a gene draft JSON to mint. Operator action; no model involved. */
   mintGene?: string;
+  /** Print distilled guard drafts. Read-only: minting stays a separate action. */
+  distill: boolean;
 }
 export class UsageError extends Error {}
 function valueFor(argv: readonly string[], index: number, flag: string): string {
@@ -69,7 +73,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     deadlineMs:Number(env.PERSONAL_AGENT_MAX_SEND_MS ?? DEFAULT_DEADLINE_MS),
     maxContextBytes:Number(env.PERSONAL_AGENT_MAX_CONTEXT_BYTES ?? DEFAULT_MAX_CONTEXT_BYTES),
     maxContextTokens:Number(env.PERSONAL_AGENT_MAX_CONTEXT_TOKENS ?? DEFAULT_MAX_CONTEXT_TOKENS),
-    echo:false,help:false,preflight:false,
+    echo:false,help:false,preflight:false,distill:false,
     // Opt-in: streaming changes the request body (stream_options), so a server that
     // rejects unknown fields must still be reachable on the default path.
     stream:env.PERSONAL_AGENT_STREAM==="1"||env.PERSONAL_AGENT_STREAM==="true" };
@@ -92,6 +96,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--preflight")options.preflight=true;
     else if(arg==="--stream")options.stream=true;
     else if(arg==="--mint-gene")options.mintGene=valueFor(argv,++i,arg);
+    else if(arg==="--distill")options.distill=true;
     else if(arg==="--help"||arg==="-h")options.help=true;
     else if(arg.startsWith("-"))throw new UsageError(`unknown flag: ${arg}`);
     else rest.push(arg);
@@ -106,7 +111,8 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
   positiveFlag("--max-context-tokens", options.maxContextTokens);
   if(options.list&&(rest.length||options.showTotals))throw new UsageError("--list 不能与 prompt 或 --totals 混用");
   if(options.preflight&&(rest.length||options.list||options.echo))throw new UsageError("--preflight 不能与 prompt、--list 或 --echo 混用");
-  if(options.mintGene&&(rest.length||options.list||options.showTotals||options.preflight||options.echo))throw new UsageError("--mint-gene 不能与 prompt、--list、--totals、--preflight 或 --echo 混用");
+  if(options.mintGene&&(rest.length||options.list||options.showTotals||options.preflight||options.echo||options.distill))throw new UsageError("--mint-gene 不能与 prompt、--list、--totals、--preflight、--echo 或 --distill 混用");
+  if(options.distill&&(rest.length||options.list||options.showTotals||options.preflight||options.echo))throw new UsageError("--distill 不能与 prompt、--list、--totals、--preflight 或 --echo 混用");
   let extraRoots:string[];
   try{extraRoots=configuredProtectedRoots(env);}catch(error){throw new UsageError((error as Error).message);}
   const problem=agentHomeProblem(options.home,{env,protectedRoots:extraRoots});
@@ -187,6 +193,18 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     catch(error){throw new UsageError(`基因不合格：${(error as Error).message}`);}
     await geneStore.appendGene(minted);
     write(`已铸造 ${minted.gene.name} → ${minted.address}\n`);
+    return 0;
+  }
+  if(options.distill){
+    const facts=await geneStore.failures();
+    const library=await geneStore.state();
+    const drafts=unmintedDrafts(distillGuards(facts),[...library.genes.values()]);
+    if(!drafts.length)write(`没有达到阈值的失败模式（已归档失败 ${facts.length} 轮）。\n`);
+    for(const draft of drafts){
+      write(`${draft.summary}\n`);
+      write(`${JSON.stringify(draft.gene)}\n`);
+      write(`（草稿不含 validation，铸造前须自己补上真正的验证命令）\n`);
+    }
     return 0;
   }
   if(options.list){const history=await store.history(options.session);for(const m of history)write(renderMessage(m)+"\n");if(!history.length)write("(no messages)\n");return 0;}

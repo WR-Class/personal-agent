@@ -11,7 +11,7 @@ import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
-import type { TaskSpec } from "./taskspec.ts";
+import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import type { GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
@@ -458,6 +458,8 @@ export class AgentRuntime {
   private genePrompt: string | undefined;
   /** Outcome row address for the send in flight; undefined = no round started. */
   private outcomeAddress: string | null | undefined;
+  /** The request kind for the send in flight, so failures can be grouped (D16). */
+  private outcomeSpec: { intent: TaskIntent; signals: readonly string[] } | undefined;
   private readonly geneStore: GeneStore | undefined;
   private readonly cycleStore: CycleStore | undefined;
   private readonly temperature: number | undefined;
@@ -578,13 +580,18 @@ export class AgentRuntime {
    */
   private async journalOutcome(evaluation: CycleEvaluation): Promise<void> {
     const address = this.outcomeAddress;
+    const spec = this.outcomeSpec;
     this.outcomeAddress = undefined;
+    this.outcomeSpec = undefined;
     if (address === undefined || !this.geneStore) return;
     await this.geneStore.appendOutcome({
       address,
       succeeded: evaluation.status === "success",
       status: evaluation.status,
       failureClass: evaluation.failureClass,
+      // The request kind is what makes a repeated failure recognizable later.
+      ...(spec ? { intent: spec.intent, signals: spec.signals } : {}),
+      evidence: evaluation.evidence,
     });
   }
 
@@ -635,6 +642,7 @@ export class AgentRuntime {
     // ends, an attempted round journals an outcome. A refused spec (above)
     // never reaches here, so a hard refusal still leaves no trace.
     this.outcomeAddress = applied?.address ?? null;
+    this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
 
     await this.ensureSession();
     signal?.throwIfAborted();

@@ -19,11 +19,13 @@ import {
   selectGene,
   type Gene,
   type GeneExpression,
+  type GeneIntent,
   type GeneRequest,
   type MintedGene,
   type ScoredCandidate,
 } from "./gene.ts";
 import type { EvaluationStatus, FailureClass } from "./cycle.ts";
+import type { FailureFact } from "./distill.ts";
 
 const SCHEMA = 1;
 
@@ -38,6 +40,11 @@ export type GeneStoreRecord =
     /** The cycle verdict this row came from. Absent on rows written before D15. */
     readonly status?: EvaluationStatus;
     readonly failureClass?: FailureClass | null;
+    /** The request kind, so repeated failures can be grouped (D16). */
+    readonly intent?: GeneIntent;
+    readonly signals?: readonly string[];
+    /** Mechanical counts the verdict was read off. Never raw error text. */
+    readonly evidence?: readonly string[];
   };
 
 export interface GeneLibraryState {
@@ -104,10 +111,41 @@ export class GeneStore {
   }
 
   async appendOutcome(
-    outcome: { address: string | null; succeeded: boolean; status?: EvaluationStatus; failureClass?: FailureClass | null },
+    outcome: {
+      address: string | null;
+      succeeded: boolean;
+      status?: EvaluationStatus;
+      failureClass?: FailureClass | null;
+      intent?: GeneIntent;
+      signals?: readonly string[];
+      evidence?: readonly string[];
+    },
     at: number = Date.now(),
   ): Promise<void> {
     await this.append({ schema: SCHEMA, type: "outcome", at, ...outcome });
+  }
+
+  /**
+   * The failure archive: every journaled failure that names the request kind it
+   * came from. Rows without `intent`/`signals` predate the archive (or are
+   * successes) and cannot form a pattern, so they are not returned.
+   */
+  async failures(): Promise<FailureFact[]> {
+    const records = await this.ensureLoaded();
+    const facts: FailureFact[] = [];
+    for (const record of records) {
+      if (record.type !== "outcome" || record.succeeded) continue;
+      if (!record.intent || !record.signals || !record.failureClass) continue;
+      facts.push({
+        at: record.at,
+        intent: record.intent,
+        signals: record.signals,
+        failureClass: record.failureClass,
+        evidence: record.evidence ?? [],
+        address: record.address,
+      });
+    }
+    return facts;
   }
 
   private async append(record: GeneStoreRecord): Promise<void> {

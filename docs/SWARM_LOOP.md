@@ -46,7 +46,7 @@
 | 基因选择 | ✅ 基础版（含反馈） | intent 门控 + 信号重叠（词元与中文子串）+ 拉普拉斯平滑成功率 + 新近度（只认最后一次**成功**）+ 连续失败隔离（`quarantineStreak`=2）；零重叠即排除 | 选择理由与候选分数未落盘（只有被选中者进 SendResult）；无探索/利用权衡；失败归因不细分到"基因错还是任务错" |
 | PDRI 执行 | ✅ 骨架 | `src/cycle.ts` 纯状态机：`planned→executing→reviewing→integrating→completed`，异常 `failed/cancelled`；顺序错乱抛错、终点不可逆、**评审未通过不得整合**；`src/cycle-store.ts` 追加式 `cycles.jsonl`，状态=对事件日志折叠可重放；runtime 每个 send 一个周期（`cycleId`=`runId`） | 无返工轮次（v1 单趟）；无阶段级文件/行数硬预算（写入门那一片）；无悬空周期定时收口（单进程串行，暂不可能）；Plan 阶段目前= TaskSpec+基因+既有预算事实，没有独立的计划产物 |
 | 结果评估 | ✅ 机械版 | `evaluateRun`：从 steps/toolCalls/toolErrors + 失败类别读出 `success/partial/failed/blocked`，证据逐条落盘，`reviewer: "mechanical"`；**不采信模型自报成功**；失败归因区分 budget/model/validation/cancelled/unknown | 没有独立评审者（另一个模型/另一轮）；`objectiveSatisfied` 这类"目标是否达成"的判断仍无机械依据，因此**没有**这个字段；低置信度结果无人工复核入口 |
-| 能力沉淀 | ✅ 基础闭环 | outcome 行带四态与失败类别；无基因轮记基线（`address: null`）；表达式折出 attempts/successes/lastSuccessAt/streak；选择器消费这些统计（已测：一次失败即改变下一轮选择） | 无蒸馏（重复失败→guard 草稿）与归纳（无基因轮成功→候选基因）；无增益定价（基线数据已在积累）；无失败档案的独立查询面 |
+| 能力沉淀 | ✅ 基础闭环 + 蒸馏草稿 | outcome 行带四态与失败类别；无基因轮记基线（`address: null`）；表达式折出 attempts/successes/lastSuccessAt/streak；选择器消费这些统计（已测：一次失败即改变下一轮选择）；**失败档案** = outcome 行带 `intent`/`signals`/`evidence`，`geneStore.failures()` 读出；**蒸馏** = `src/distill.ts` 纯函数：按 (intent, 失败类别) 分组、保留达到阈值（3）的复发信号、产出**只含 guard 步**的 Gene 草稿 + 机械证据 + 人读摘要；`--distill` 打印草稿并按已有基因去重 | 草稿**不含 validation**，`mintGene` 会拒绝——操作者必须自己补验证命令（这是准入门禁，不是遗漏）；无成功归纳（`induct`）；无增益定价（基线数据仍在积累）；无失败档案的独立查询面（现在经 `--distill` 看） |
 
 ---
 
@@ -221,11 +221,11 @@ TaskSpec → 选择基因 → PDRI 四阶段 → Review → Outcome → 更新�
 
 ## 8. 当前下一步
 
-阶段 A 已完成（1–6 全部落地并测试，含"下一次选择发生变化"的端到端证明）。接着做：
+阶段 A（最小闭环）与阶段 C 前半（失败档案 + 蒸馏）已落地并测试。接着做：
 
-1. **失败档案与蒸馏（`distill`）**：重复失败（含被拒绝的写入）按模式归并，达阈值生成确定性 guard 草稿，仍由操作者决定是否铸造——EvoMap 的负结果要求草稿必须带成功轨迹的证据，不能凭空生成。
-2. **成功归纳（`induct`）**：无基因轮的成功轨迹捕获为候选基因草稿（同样过准入门禁）。
-3. **写入门与硬预算**：每周期累计文件/行数账本，超预算即拒（D13 已记；此时基因 constraints 才从"记录"变成"机械强制"）。
-4. **独立评审角色**：把 `reviewer` 从 `mechanical` 扩展出去（另一个模型或另一轮），并要求评审者不能是执行者。
+1. **成功归纳（`induct`）**：无基因轮的成功轨迹捕获为候选基因草稿，同样过准入门禁（草稿不给 validation，操作者补证明）。
+2. **写入门与硬预算**：每周期累计文件/行数账本，超预算即拒（D13 已记；此时基因 constraints 才从"记录"变成"机械强制"）。
+3. **独立评审角色**：把 `reviewer` 从 `mechanical` 扩展出去（另一个模型或另一轮），并要求评审者不能是执行者。
+4. **增益定价**：基线行（`address: null`）已从第一天积累，数据够厚后做"用了基因 vs 没用"的反事实对照。
 
 本文件状态随上述步骤逐条更新。

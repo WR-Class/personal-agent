@@ -53,13 +53,32 @@ function firstText(input: SpecInput): string {
 
 /**
  * Extract the request vocabulary gene selection matches against. Word tokens
- * for languages that have them; Chinese phrases have no spaces to split on, so
- * selection additionally matches gene signals as substrings of the raw text.
+ * for languages that have them; a Chinese run has no spaces to split on, so it
+ * also contributes its 2-character n-grams — otherwise a whole sentence is one
+ * signal, which matches nothing and (worse) groups nothing when repeated
+ * failures are distilled.
  */
 export function extractSignals(text: string): string[] {
   const normalized = text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   if (normalized === "") return [];
-  return [...new Set(normalized.split(/\s+/u).filter((token) => token.length > 1))];
+  const signals = new Set<string>();
+  for (const token of normalized.split(/\s+/u)) {
+    if (token.length <= 1) continue;
+    // CJK has no word boundaries: emit the bigrams so the vocabulary is shared
+    // between differently phrased requests. The whole run is only kept when it
+    // is short enough to be a word rather than a whole sentence.
+    if (isCjk(token)) {
+      for (let index = 0; index + 1 < token.length; index++) signals.add(token.slice(index, index + 2));
+      if (token.length <= 4) signals.add(token);
+      continue;
+    }
+    signals.add(token);
+  }
+  return [...signals];
+}
+
+function isCjk(token: string): boolean {
+  return /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(token);
 }
 
 export function buildTaskSpec(input: SpecInput, options: { mode?: string } = {}): TaskSpec {

@@ -16,7 +16,7 @@
 
 | 文件/符号 | 当前职责 | 边界/未实现 |
 |---|---|---|
-| [cli.ts](../src/cli.ts)：parseArgs/main | --help/--echo/参数校验、单次或交互入口、组装依赖、活动显示、预算标志与环境变量、`--mint-gene <file>` 从 JSON 草稿铸造基因入库（不需要模型） | 不是 UI 框架；无 prompt 时进入交互；基因库在 `<home>/genes.jsonl` |
+| [cli.ts](../src/cli.ts)：parseArgs/main | --help/--echo/参数校验、单次或交互入口、组装依赖、活动显示、预算标志与环境变量、`--mint-gene <file>` 从 JSON 草稿铸造基因入库（不需要模型）、`--distill` 打印蒸馏出的 guard 草稿（只读，不自动铸造） | 不是 UI 框架；无 prompt 时进入交互；基因库在 `<home>/genes.jsonl`，周期账本在 `<home>/cycles.jsonl`；`--distill` 与 `--mint-gene` 互斥 |
 | [cli-config.ts](../src/cli-config.ts)：providerConfig/loadProvider/saveProvider/configureProvider | HTTP(S)配置校验、向导、显式密钥保存、wx配置创建 | 不是凭据库；已有文件不自动覆盖；环境配置必须三项完整 |
 | [terminal.ts](../src/terminal.ts)：TerminalIO/createTerminal/safeText | 可注入终端输入、隐藏输入、防预输入、控制字符转义、队列/EOF | 实体TTY行为未全覆盖；不做逐token渲染 |
 | [interactive.ts](../src/interactive.ts)：runInteractive/listSessions | 连续对话、new/resume/history/status、inspect/recover、Ctrl+C | 会话切换仍需用户确认当前 workspace/Provider |
@@ -29,10 +29,11 @@
 | [security-config.ts](../src/security-config.ts)：canonicalPath/resolveRuntimePaths/assertReadablePath/isWithin/configuredContextWindows | native真实路径、缺失叶子祖先、保护根、敏感路径规则、唯一的包含判定 `isWithin`、按模型窗口环境解析 | 命名策略非DLP；不消除本地并发替换竞态 |
 | [tool-environment.ts](../src/tool-environment.ts)：buildToolEnvironment/isIssuedToolEnvironment | 白名单env、派生home/temp/config路径校验、冻结发行对象 | 合作Context非OS sandbox；不可信进程内代码可忽略 |
 | [file-policy.ts](../src/file-policy.ts)：filePolicy | 只读允许、六个文件工具需批准、其他副作用拒绝 | 不检查路径；路径仍由各工具调用 `assertReadablePath` |
-| [taskspec.ts](../src/taskspec.ts)：buildTaskSpec/assessTaskSpec/extractSignals | 每次发送前生成带版本的确定性 TaskSpec（schema 2）：原输入、目标、关键词意图、请求信号、运行时模式；缺目标记 unknown、不编造模式；强制拒绝是独立开关、默认关闭 | 关键词意图是分类不是权威；spec 只随 `SendResult` 返回，不写会话日志（D12）；信号是词元+子串匹配用的请求词汇，不是语义理解（D14） |
+| [taskspec.ts](../src/taskspec.ts)：buildTaskSpec/assessTaskSpec/extractSignals | 每次发送前生成带版本的确定性 TaskSpec（schema 2）：原输入、目标、关键词意图、请求信号、运行时模式；缺目标记 unknown、不编造模式；强制拒绝是独立开关、默认关闭；信号=词元 + **中文二元组**（中文无词边界，整句不再当信号） | 关键词意图是分类不是权威；spec 只随 `SendResult` 返回，不写会话日志（D12）；信号是词表匹配，不是语义理解（D14/D16） |
 | [gene.ts](../src/gene.ts)：mintGene/canonicalize/geneAddress/selectGene | 基因 = sha256 内容寻址的不可变紧凑经验 {name, intent, signals_match, preconditions, strategy(guard/act/verify/rollback), constraints, validation, avoid}；铸造过结构不变量（行动必有验证步、预算为正、validation 必填）；选择：intent 门控 → 信号重叠（词元 + 中文子串）→ 拉普拉斯平滑成功率 → 新近度（只认最后一次成功）→ 连续失败隔离；零重叠排除 | 基因只被取代不被编辑；constraints 记录在案但不注入提示（写入门落地前不当摆设）；选择确定性依赖调用方传入的 now（D14/D15） |
-| [gene-store.ts](../src/gene-store.ts)：GeneStore | agent home 内追加式 `genes.jsonl`：状态=对日志的折叠；基因按地址幂等重入；outcome 行（address=null 即无基因基线，含 `status`/`failureClass`）折出每基因 expression：attempts/successes/lastSuccessAt/streak 与基线计数；截断尾容忍、中段损坏拒绝并报行号 | 追加不是事务；无多写者并发场景（每 agent 独占自己的 home）；损坏尾丢弃是数据损失，但不静默修复；`lastSuccessAt` 只记成功时刻，失败只增 streak（D14/D15） |
+| [gene-store.ts](../src/gene-store.ts)：GeneStore | agent home 内追加式 `genes.jsonl`：状态=对日志的折叠；基因按地址幂等重入；outcome 行（address=null 即无基因基线，含 `status`/`failureClass`/`intent`/`signals`/`evidence`）折出每基因 expression：attempts/successes/lastSuccessAt/streak 与基线计数；`failures()` 读出可分组进蒸馏的失败档案；截断尾容忍、中段损坏拒绝并报行号 | 追加不是事务；无多写者并发场景（每 agent 独占自己的 home）；损坏尾丢弃是数据损失，但不静默修复；`lastSuccessAt` 只记成功时刻，失败只增 streak（D14/D15） |
 | [cycle.ts](../src/cycle.ts)：startCycle/applyEvent/replay/evaluateRun | PDRI 纯状态机：`planned→executing→reviewing→integrating→completed`，异常 `failed/cancelled`；顺序错乱抛错、终点周期拒绝一切事件、**评审 failed/blocked 不得进入整合**；`evaluateRun` 从 steps/toolCalls/toolErrors + 失败类别读出 success/partial/failed/blocked，证据逐条列出，`reviewer: "mechanical"` | 机械评审只回答"这轮跑成了什么样"，不回答"目标是否达成"（因此没有 objectiveSatisfied 字段）；识别不了的失败归 `unknown`，不猜；没有模型自报成功的通道（D15） |
+| [distill.ts](../src/distill.ts)：distillGuards/unmintedDrafts/draftAddress | 失败档案→能力草稿的纯函数：按 (intent, 失败类别) 分组、统计信号复发次数、保留 ≥ 阈值（默认 3）者为 `signalsMatch`、产出只含 guard 步的 Gene 草稿 + 机械证据 + 人读摘要；无信号达阈值就不产出；`unmintedDrafts` 去掉已有基因覆盖的同一 (intent, 信号集)；同一份日志永远产出同一草稿（不调模型） | 草稿的 `validation` 故意为空 → `mintGene` 拒绝 → 只有操作者能补上证明并铸造；失败分组键在请求侧而非基因侧；不落原始错误文本，只有机械计数（D16） |
 | [cycle-store.ts](../src/cycle-store.ts)：CycleStore | agent home 内追加式 `cycles.jsonl`：每次事件一行，状态=按 cycleId 对事件日志折叠（`replay`），可重放；损坏尾容忍、中段损坏拒绝并报行号；ENOENT 视为空；未收口周期停在最后阶段而非冒充完成 | 追加不是事务；单进程内 send 串行，暂不产生悬空周期，因此没有定时强制收口；它是运行账本，不是会话事实源（ADR-0001） |
 | [session-lease.ts](../src/session-lease.ts)：withSessionLease | wx锁文件、owner token、内部scope复用、核验归属后释放单个锁 | 本地合作进程锁；遗留锁不抢占；不是网络FS/恶意进程安全锁 |
 | [session-store.ts](../src/session-store.ts)：SessionStore/migrateEvent | 独占header、事件校验/追加、每事件flush、inspect/history、pendingTools/recover、summary、audit。`audit` 记录拒绝或过期，标记 ignorable，不进入对话 | 多次追加不是事务；真实断电未实测；audit 不记录文件内容 |
