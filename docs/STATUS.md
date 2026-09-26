@@ -36,7 +36,7 @@
 
 1. **M2 已收口**：写入前复查路径；保护目录在批准前拒绝；拒绝和过期写入 `audit` 事件。
 2. **TaskSpec 已完成**：`sendTurn` 在写任何日志之前生成带版本的确定性 spec（原输入、目标、意图、运行时模式），随 `SendResult` 返回；缺目标记 unknown、不编造模式；强制拒绝默认关闭（`enforceTaskSpec` 可打开）。证据与取舍见 D12。
-3. **蜂群核心第一片已完成（方向经用户二次纠偏后确认：蜂群 = 基因库 + RSI 闭环，PDRI 是骨架）**：`gene.ts`（sha256 内容寻址的不可变基因 + 铸造不变量 + 选择：intent 门控、信号重叠含中文子串、拉普拉斯平滑、新近度衰减）、`gene-store.ts`（agent home 内追加式 `genes.jsonl`，状态=折叠，幂等入库，outcome 行含无基因基线）、TaskSpec schema 2（请求信号提取）、runtime 接入（选中基因的策略注入系统提示=测试时进化，轮末记 outcome，`SendResult.appliedGene`）、CLI `--mint-gene`。证据与取舍见 D14。已知边界：准入门禁的"验证"目前 = 轮完成 + 操作者显式铸造，机械验证命令等 M3；蒸馏/归纳/三层记忆等 outcome 数据积累后做；基因 constraints 记录但不强制，写入门那一片做机械强制。下一片：失败档案与蒸馏 guard 草稿。
+3. **蜂群核心第一片已完成（方向经用户二次纠偏后确认：蜂群 = 基因库 + RSI 闭环，PDRI 是骨架）**：`gene.ts`（sha256 内容寻址的不可变基因 + 铸造不变量 + 选择：intent 门控、信号重叠含中文子串、拉普拉斯平滑、新近度衰减）、`gene-store.ts`（agent home 内追加式 `genes.jsonl`，状态=折叠，幂等入库，outcome 行含无基因基线）、TaskSpec schema 2（请求信号提取）、runtime 接入（选中基因的策略注入系统提示=测试时进化，轮末记 outcome，`SendResult.appliedGene`）、CLI `--mint-gene`。证据与取舍见 D14。已知边界：准入门禁的"验证"目前 = 轮完成 + 操作者显式铸造，机械验证命令等 M3；蒸馏/归纳/三层记忆等 outcome 数据积累后做；基因 constraints 记录但不强制，写入门那一片做机械强制。**闭环缺口、逐环节验收条件与实施顺序见 [SWARM_LOOP](SWARM_LOOP.md)（阶段 A：PDRI 四阶段 + 统一 Evaluation + Outcome→GeneStats 反馈）。**
 4. **SoL-Pi**：接一个只读能力，走现有 Schema、Policy 和批准。
 
 讨论只在某一项的机制改变时发生。机制未变就继续下一项，不把选择权丢回对话。
@@ -47,6 +47,7 @@
 |---|---|
 | 成熟产品调研和采用/拒绝决策 | `REFERENCE_DECISIONS.md` |
 | 当前阶段的实施方案 | `IMPLEMENTATION.md` |
+| 蜂群本地闭环的缺口、验收条件与实施顺序 | `SWARM_LOOP.md` |
 | 当前进度 | `STATUS.md` |
 
 开始新阶段前，先在 `REFERENCE_DECISIONS.md` 增加一条：读过的源码路径、采用的机制、明确不采用的机制。没有这条记录，不改该阶段代码。
@@ -77,6 +78,7 @@
 ## 证据与文档导航
 
 - [CODE_MAP](CODE_MAP.md)：当前 16 个源码模块与完整调用链，不再使用最初快照行号。- [AUDIT](AUDIT.md)：A01–A17 原始风险摘要、当前修复/残余及源码/测试映射。
+- [SWARM_LOOP](SWARM_LOOP.md)：蜂群本地闭环基线——逐环节现状/缺口/最终形态/验收条件、与 M2/M6 的边界、外部对照采用与不采用、实施顺序与端到端验收。
 - [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md)：研究证据与实际采用程度分开。
 - [SAFETY](SAFETY.md)：当前有效保护与限制。
 - [VALIDATION](VALIDATION.md)：历史各批证据及本次复核限制。
