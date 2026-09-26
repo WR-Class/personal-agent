@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { SessionStore } from "./session-store.ts";
@@ -7,6 +9,9 @@ import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_M
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
+import { mintGene } from "./gene.ts";
+import type { Gene } from "./gene.ts";
+import { GeneStore } from "./gene-store.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -22,6 +27,7 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --session demo "你好" 单次发送
       npm start -- --session demo --list 查看历史，不需要模型配置
       npm start -- --preflight        联调准备检查：配置/可达性/tokenizer/TTY，不发密钥不消耗 token
+      npm start -- --mint-gene draft.json 从验证过的成功经验铸造一个基因并入库（不需要模型）
       npm start -- --stream "问题"     用 SSE 流式传输（服务端只支持流式时使用；不改变回答内容）
 选项：--home <dir> --workspace <dir> --max-steps <n> --max-tools <n>
       --max-tools-per-step <n> --max-send-ms <n> --max-context-bytes <n> --max-context-tokens <n> --totals
@@ -40,6 +46,8 @@ export interface CliOptions {
   prompt?: string; list: boolean; showTotals: boolean; maxSteps: number; echo: boolean; help: boolean; preflight: boolean;
   maxToolCallsPerRun: number; maxToolCallsPerStep: number; deadlineMs: number; maxContextBytes: number; maxContextTokens: number;
   stream: boolean;
+  /** Path to a gene draft JSON to mint. Operator action; no model involved. */
+  mintGene?: string;
 }
 export class UsageError extends Error {}
 function valueFor(argv: readonly string[], index: number, flag: string): string {
@@ -82,6 +90,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--echo")options.echo=true;
     else if(arg==="--preflight")options.preflight=true;
     else if(arg==="--stream")options.stream=true;
+    else if(arg==="--mint-gene")options.mintGene=valueFor(argv,++i,arg);
     else if(arg==="--help"||arg==="-h")options.help=true;
     else if(arg.startsWith("-"))throw new UsageError(`unknown flag: ${arg}`);
     else rest.push(arg);
@@ -96,6 +105,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
   positiveFlag("--max-context-tokens", options.maxContextTokens);
   if(options.list&&(rest.length||options.showTotals))throw new UsageError("--list 不能与 prompt 或 --totals 混用");
   if(options.preflight&&(rest.length||options.list||options.echo))throw new UsageError("--preflight 不能与 prompt、--list 或 --echo 混用");
+  if(options.mintGene&&(rest.length||options.list||options.showTotals||options.preflight||options.echo))throw new UsageError("--mint-gene 不能与 prompt、--list、--totals、--preflight 或 --echo 混用");
   let extraRoots:string[];
   try{extraRoots=configuredProtectedRoots(env);}catch(error){throw new UsageError((error as Error).message);}
   const problem=agentHomeProblem(options.home,{env,protectedRoots:extraRoots});
@@ -162,6 +172,21 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
   try{paths=resolveRuntimePaths({workspaceRoot:options.workspace,agentHome:options.home,protectedRoots:extraRoots});}
   catch(error){throw new UsageError((error as Error).message);}
   const store=new SessionStore({root:paths.agentHome});
+  const geneStore=new GeneStore(join(paths.agentHome,"genes.jsonl"));
+  if(options.mintGene){
+    let raw:string;
+    try{raw=await readFile(options.mintGene,"utf8");}
+    catch(error){throw new UsageError(`无法读取基因文件：${(error as Error).message}`);}
+    let draft:unknown;
+    try{draft=JSON.parse(raw);}
+    catch{throw new UsageError("基因文件不是合法 JSON");}
+    let minted;
+    try{minted=mintGene(draft as Gene);}
+    catch(error){throw new UsageError(`基因不合格：${(error as Error).message}`);}
+    await geneStore.appendGene(minted);
+    write(`已铸造 ${minted.gene.name} → ${minted.address}\n`);
+    return 0;
+  }
   if(options.list){const history=await store.history(options.session);for(const m of history)write(renderMessage(m)+"\n");if(!history.length)write("(no messages)\n");return 0;}
   const interactive=options.prompt===undefined;
   let io=providedIO;
@@ -177,7 +202,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       else adapter=createOpenAIChatAdapter({...config,...(options.stream?{stream:true}:{})});
     }
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
-      workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,
+      workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,
       tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createPatchFileTool(), createCreateFileTool(), createDeleteFileTool(), createRenameFileTool(), createBatchFilesTool()]),maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),

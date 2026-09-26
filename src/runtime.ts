@@ -12,6 +12,7 @@ import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import type { TaskSpec } from "./taskspec.ts";
+import type { GeneStore } from "./gene-store.ts";
 
 export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; isError?: boolean; }
 export interface AgentRuntimeOptions {
@@ -23,6 +24,13 @@ export interface AgentRuntimeOptions {
    * default: an incomplete spec is reported in SendResult, not fatal.
    */
   enforceTaskSpec?: boolean;
+  /**
+   * The gene library (D14). When present, every send selects a gene by the
+   * TaskSpec's intent and signals, injects its strategy as system context
+   * (test-time evolution), and journals an outcome row — `address: null`
+   * when no gene matched, which is the baseline future gain pricing needs.
+   */
+  geneStore?: GeneStore;
   adapter: ModelAdapter;
   store: SessionStore;
   sessionId: string;
@@ -361,6 +369,8 @@ export interface SendResult {
   compactedMessages?: number;
   /** What this send was decided to be, before the model was called. */
   taskSpec: TaskSpec;
+  /** The gene this send applied, when one was selected. */
+  appliedGene?: { address: string; name: string };
 }
 
 /**
@@ -431,6 +441,11 @@ export class AgentRuntime {
   private lastInputTokens: number | undefined;
   private readonly model: string | undefined;
   private readonly systemPrompt: string | undefined;
+  /** The selected gene's injection block for the send in flight. */
+  private genePrompt: string | undefined;
+  /** Outcome row address for the send in flight; undefined = no round started. */
+  private outcomeAddress: string | null | undefined;
+  private readonly geneStore: GeneStore | undefined;
   private readonly temperature: number | undefined;
   private prepared: Promise<void> | undefined;
   private busy = false;
@@ -470,6 +485,7 @@ export class AgentRuntime {
     this.countPromptTokens = options.countPromptTokens;
     this.model = options.model;
     this.systemPrompt = options.systemPrompt;
+    this.geneStore = options.geneStore;
     this.temperature = options.temperature;
   }
 
@@ -525,6 +541,7 @@ export class AgentRuntime {
       return this.sendTurn(input, composed);
     }); }
     catch (error) {
+      await this.journalOutcome(false);
       // Only our own deadline may be relabelled: a caller's Ctrl+C stays a
       // cancellation, and a genuine failure is never dressed up as a timeout.
       if (deadline.aborted && !(signal?.aborted ?? false) && isAbortError(error)) {
@@ -532,7 +549,15 @@ export class AgentRuntime {
       }
       throw error;
     }
-    finally { this.busy = false; }
+    finally { this.busy = false; this.genePrompt = undefined; }
+  }
+
+  /** Journal one outcome row for the round in flight, whichever way it ended. */
+  private async journalOutcome(succeeded: boolean): Promise<void> {
+    const address = this.outcomeAddress;
+    this.outcomeAddress = undefined;
+    if (address === undefined || !this.geneStore) return;
+    await this.geneStore.appendOutcome({ address, succeeded });
   }
 
   private async sendTurn(input: string, signal?: AbortSignal): Promise<SendResult> {
@@ -545,6 +570,17 @@ export class AgentRuntime {
     const taskSpec = buildTaskSpec(text, { mode: TASK_MODE });
     const verdict = assessTaskSpec(taskSpec, { enforce: this.enforceTaskSpec });
     if (verdict.blocked) throw new Error(verdict.reason ?? "task spec incomplete");
+
+    // Gene selection (D14): the spec is the front door — its intent gates the
+    // library and its signals score it. No match is an honest gene-less round.
+    const applied = this.geneStore
+      ? await this.geneStore.selectFor({ intent: taskSpec.intent, signals: taskSpec.signals, text: taskSpec.originalInput })
+      : undefined;
+    this.genePrompt = applied?.block;
+    // Set before anything can throw past this point: whichever way the round
+    // ends, an attempted round journals an outcome. A refused spec (above)
+    // never reaches here, so a hard refusal still leaves no trace.
+    this.outcomeAddress = applied?.address ?? null;
 
     await this.ensureSession();
     signal?.throwIfAborted();
@@ -632,11 +668,13 @@ export class AgentRuntime {
         signal?.throwIfAborted();
         const compaction = await this.store.compaction(this.sessionId);
         const covered = compaction ? Math.min(compaction.covers, (await this.store.history(this.sessionId)).length) : 0;
+        await this.journalOutcome(true);
         return {
           reply: assistant,
           usage,
           model,
           taskSpec,
+          ...(applied ? { appliedGene: { address: applied.address, name: applied.name } } : {}),
           ...(reasoning === undefined ? {} : { reasoning }),
           // `buildPrompt`, not `store.history`: this field means "what the model
           // saw", which includes the system prompt; the persisted log does not.
@@ -764,7 +802,10 @@ export class AgentRuntime {
    */
   private async buildPrompt(extra?: ChatMessage): Promise<ChatMessage[]> {
     const past = await this.store.history(this.sessionId);
-    const system: ChatMessage[] = this.systemPrompt ? [{ role: "system", content: this.systemPrompt }] : [];
+    // The applied gene rides in the system prompt: test-time evolution means
+    // the selected strategy is context, never a rule the model is trusted to obey.
+    const systemText = [this.systemPrompt, this.genePrompt].filter((part) => part !== undefined && part !== "").join("\n\n");
+    const system: ChatMessage[] = systemText === "" ? [] : [{ role: "system", content: systemText }];
     const compaction = await this.store.compaction(this.sessionId);
     if (compaction && compaction.covers > 0) {
       const covered = Math.min(compaction.covers, past.length);
