@@ -36,7 +36,7 @@
 
 1. **M2 已收口**：写入前复查路径；保护目录在批准前拒绝；拒绝和过期写入 `audit` 事件。
 2. **TaskSpec 已完成**：`sendTurn` 在写任何日志之前生成带版本的确定性 spec（原输入、目标、意图、运行时模式），随 `SendResult` 返回；缺目标记 unknown、不编造模式；强制拒绝默认关闭（`enforceTaskSpec` 可打开）。证据与取舍见 D12。
-3. **蜂群核心第一片已完成（方向经用户二次纠偏后确认：蜂群 = 基因库 + RSI 闭环，PDRI 是骨架）**：`gene.ts`（sha256 内容寻址的不可变基因 + 铸造不变量 + 选择：intent 门控、信号重叠含中文子串、拉普拉斯平滑、新近度衰减）、`gene-store.ts`（agent home 内追加式 `genes.jsonl`，状态=折叠，幂等入库，outcome 行含无基因基线）、TaskSpec schema 2（请求信号提取）、runtime 接入（选中基因的策略注入系统提示=测试时进化，轮末记 outcome，`SendResult.appliedGene`）、CLI `--mint-gene`。证据与取舍见 D14。已知边界：准入门禁的"验证"目前 = 轮完成 + 操作者显式铸造，机械验证命令等 M3；蒸馏/归纳/三层记忆等 outcome 数据积累后做；基因 constraints 记录但不强制，写入门那一片做机械强制。**闭环缺口、逐环节验收条件与实施顺序见 [SWARM_LOOP](SWARM_LOOP.md)（阶段 A：PDRI 四阶段 + 统一 Evaluation + Outcome→GeneStats 反馈）。**
+3. **蜂群核心：基因库 + PDRI 闭环均已落地（方向经用户二次纠偏确认）**：`gene.ts`（sha256 内容寻址的不可变基因 + 铸造不变量 + 选择：intent 门控、信号重叠含中文子串、拉普拉斯平滑、新近度只认最后一次成功、连续失败隔离）、`gene-store.ts`（agent home 内追加式 `genes.jsonl`，状态=折叠，幂等入库，outcome 行含四态与无基因基线）、`cycle.ts` + `cycle-store.ts`（**PDRI 显式状态机**：planned→executing→reviewing→integrating→completed，异常 failed/cancelled，顺序错乱抛错、终点不可逆、**评审未通过不得整合**；周期事件追加式记账、状态=折叠可重放、未收口周期不冒充完成）、`taskspec.ts` schema 2（请求信号）、runtime 接入（基因策略注入=测试时进化；每轮机械评估 steps/toolCalls/toolErrors→success/partial/failed/blocked，证据落盘，**不采信模型自报成功**；轮末记账并回灌选择，已测"一次失败即改变下一轮选择"）、CLI `--mint-gene`。证据与取舍见 D14、D15。已知边界：准入门禁的"验证"= 周期完成 + 操作者显式铸造，机械验证命令等 M3；**独立评审者尚不存在**（评审是机械的，`reviewer: "mechanical"`）；蒸馏/归纳与增益定价待 outcome 数据积累；基因 constraints 记录但不强制，写入门那一片做机械强制。**完整缺口清单与验收条件见 [SWARM_LOOP](SWARM_LOOP.md)。下一片：失败档案与蒸馏。**
 4. **SoL-Pi**：接一个只读能力，走现有 Schema、Policy 和批准。
 
 讨论只在某一项的机制改变时发生。机制未变就继续下一项，不把选择权丢回对话。

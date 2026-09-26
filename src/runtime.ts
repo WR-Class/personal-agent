@@ -13,6 +13,9 @@ import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import type { TaskSpec } from "./taskspec.ts";
 import type { GeneStore } from "./gene-store.ts";
+import type { CycleStore } from "./cycle-store.ts";
+import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
+import type { CycleEvaluation, CycleEvent, CycleState, FailureClass } from "./cycle.ts";
 
 export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; isError?: boolean; }
 export interface AgentRuntimeOptions {
@@ -31,6 +34,12 @@ export interface AgentRuntimeOptions {
    * when no gene matched, which is the baseline future gain pricing needs.
    */
   geneStore?: GeneStore;
+  /**
+   * The cycle journal (D15). When present, every send journals the PDRI events
+   * it went through, so a round can be replayed instead of trusted. The machine
+   * runs either way; this is what makes it auditable after the process exits.
+   */
+  cycleStore?: CycleStore;
   adapter: ModelAdapter;
   store: SessionStore;
   sessionId: string;
@@ -371,6 +380,10 @@ export interface SendResult {
   taskSpec: TaskSpec;
   /** The gene this send applied, when one was selected. */
   appliedGene?: { address: string; name: string };
+  /** The PDRI cycle this send ran as. One send is exactly one cycle. */
+  cycleId: string;
+  /** The mechanical verdict on this cycle, with the facts it was read off. */
+  evaluation: CycleEvaluation;
 }
 
 /**
@@ -446,6 +459,7 @@ export class AgentRuntime {
   /** Outcome row address for the send in flight; undefined = no round started. */
   private outcomeAddress: string | null | undefined;
   private readonly geneStore: GeneStore | undefined;
+  private readonly cycleStore: CycleStore | undefined;
   private readonly temperature: number | undefined;
   private prepared: Promise<void> | undefined;
   private busy = false;
@@ -486,6 +500,7 @@ export class AgentRuntime {
     this.model = options.model;
     this.systemPrompt = options.systemPrompt;
     this.geneStore = options.geneStore;
+    this.cycleStore = options.cycleStore;
     this.temperature = options.temperature;
   }
 
@@ -541,7 +556,11 @@ export class AgentRuntime {
       return this.sendTurn(input, composed);
     }); }
     catch (error) {
-      await this.journalOutcome(false);
+      // Net for failures that happen before the cycle starts (a refused spec, a
+      // session that will not open, an over-size prompt): the gene was already
+      // selected, so the round is still charged. After a cycle starts, sendTurn
+      // journals its own verdict and this is a no-op — the address is consumed.
+      await this.journalOutcome(this.readFailure(error, 0));
       // Only our own deadline may be relabelled: a caller's Ctrl+C stays a
       // cancellation, and a genuine failure is never dressed up as a timeout.
       if (deadline.aborted && !(signal?.aborted ?? false) && isAbortError(error)) {
@@ -552,12 +571,47 @@ export class AgentRuntime {
     finally { this.busy = false; this.genePrompt = undefined; }
   }
 
-  /** Journal one outcome row for the round in flight, whichever way it ended. */
-  private async journalOutcome(succeeded: boolean): Promise<void> {
+  /**
+   * Journal one outcome row for the round in flight, whichever way it ended.
+   * Consuming the address makes a double journal impossible: the verdict and the
+   * gene it belongs to are recorded exactly once per round.
+   */
+  private async journalOutcome(evaluation: CycleEvaluation): Promise<void> {
     const address = this.outcomeAddress;
     this.outcomeAddress = undefined;
     if (address === undefined || !this.geneStore) return;
-    await this.geneStore.appendOutcome({ address, succeeded });
+    await this.geneStore.appendOutcome({
+      address,
+      succeeded: evaluation.status === "success",
+      status: evaluation.status,
+      failureClass: evaluation.failureClass,
+    });
+  }
+
+  /** Journal one PDRI event and advance the machine. Illegal moves throw first. */
+  private async advance(cycle: CycleState, event: CycleEvent): Promise<CycleState> {
+    const next = applyEvent(cycle, event);
+    if (this.cycleStore) await this.cycleStore.append(this.sessionId, cycle.cycleId, event);
+    return next;
+  }
+
+  private readFailure(error: unknown, steps: number): CycleEvaluation {
+    return evaluateRun({ steps, toolCalls: 0, toolErrors: 0, failureClass: this.classifyFailure(error) });
+  }
+
+  /**
+   * Name the cause from what actually threw, not from a message we hope is
+   * stable: our own budget classes, an abort, and the adapter/validation
+   * boundary are each distinguishable here.
+   */
+  private classifyFailure(error: unknown): FailureClass {
+    if (isAbortError(error)) return "cancelled";
+    if (error instanceof StepLimitError || error instanceof ToolBudgetError
+      || error instanceof DeadlineExceededError || error instanceof ContextBudgetError
+      || error instanceof TokenBudgetError) return "budget";
+    const message = error instanceof Error ? error.message : "";
+    if (message.startsWith("invalid model response") || message.startsWith("model ")) return "model";
+    return "unknown";
   }
 
   private async sendTurn(input: string, signal?: AbortSignal): Promise<SendResult> {
@@ -597,6 +651,11 @@ export class AgentRuntime {
     const runId = randomUUID();
     await this.store.appendMessage(this.sessionId, { role: "user", content: text }, { runId, step: 0 });
 
+    // The PDRI cycle opens here, not earlier: a refusal above must leave no
+    // trace, and this is the first point at which the round is genuinely
+    // committed — the user turn is durable, so the work it asks for exists.
+    let cycle = startCycle(runId, Date.now());
+
     const usage: ChatUsage = { inputTokens: 0, outputTokens: 0 };
     let reasoningTokens: number | undefined;
     let reasoning: string | undefined;
@@ -604,6 +663,10 @@ export class AgentRuntime {
     let model = this.adapter.defaultModel;
     let steps = 0;
     let toolCalls = 0;
+    let toolErrors = 0;
+
+    try {
+    cycle = await this.advance(cycle, { type: "execute-start", at: Date.now() });
 
     while (true) {
       if (steps >= this.maxSteps) throw new StepLimitError(steps);
@@ -668,12 +731,21 @@ export class AgentRuntime {
         signal?.throwIfAborted();
         const compaction = await this.store.compaction(this.sessionId);
         const covered = compaction ? Math.min(compaction.covers, (await this.store.history(this.sessionId)).length) : 0;
-        await this.journalOutcome(true);
+        // Review: the verdict is read off what the round mechanically did. Then
+        // integration records it. A failed review never reaches here — the loop
+        // returned a reply, so the worst this can be is partial.
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null });
+        cycle = await this.advance(cycle, { type: "review-ready", at: Date.now(), evaluation });
+        cycle = await this.advance(cycle, { type: "integrate-ready", at: Date.now() });
+        await this.journalOutcome(evaluation);
+        cycle = await this.advance(cycle, { type: "complete", at: Date.now() });
         return {
           reply: assistant,
           usage,
           model,
           taskSpec,
+          cycleId: runId,
+          evaluation,
           ...(applied ? { appliedGene: { address: applied.address, name: applied.name } } : {}),
           ...(reasoning === undefined ? {} : { reasoning }),
           // `buildPrompt`, not `store.history`: this field means "what the model
@@ -699,7 +771,20 @@ export class AgentRuntime {
         };
       }
 
-      toolCalls += await this.runToolCalls(response.toolCalls, signal, runId, steps);
+      const executed = await this.runToolCalls(response.toolCalls, signal, runId, steps);
+      toolCalls += executed.calls;
+      toolErrors += executed.errors;
+    }
+    }
+    catch (error) {
+      // Every ending closes the cycle: an interrupted round that stayed
+      // "executing" would be indistinguishable from one still running.
+      const evaluation = evaluateRun({
+        steps, toolCalls, toolErrors, failureClass: this.classifyFailure(error),
+      });
+      await this.advance(cycle, { type: "fail", at: Date.now(), evaluation });
+      await this.journalOutcome(evaluation);
+      throw error;
     }
   }
 
@@ -713,7 +798,7 @@ export class AgentRuntime {
     signal: AbortSignal | undefined,
     runId: string,
     step: number,
-  ): Promise<number> {
+  ): Promise<{ calls: number; errors: number }> {
     const context: ToolContext = {
       workspaceRoot: this.workspaceRoot,
       toolEnvironment: this.toolEnvironment,
@@ -722,6 +807,7 @@ export class AgentRuntime {
       ...(this.approve ? { approve: this.approve } : {}),
       audit: (event) => this.store.appendAudit(this.sessionId, event).then(() => undefined),
     };
+    let errors = 0;
     for (const call of calls) {
       // Complete pending tool correlations even after cancellation, but never start another executor.
       let result;
@@ -735,6 +821,7 @@ export class AgentRuntime {
       }
       // One line, not three (ADR-0001): the assistant turn above already recorded
       // what was requested, so this message is the whole record of what came back.
+      if (result.isError === true) errors += 1;
       await this.store.appendMessage(
         this.sessionId,
         { role: "tool", content: result.content, toolCallId: call.id },
@@ -742,7 +829,7 @@ export class AgentRuntime {
       );
     }
     signal?.throwIfAborted();
-    return calls.length;
+    return { calls: calls.length, errors };
   }
 
   private assertContextFits(messages: readonly ChatMessage[]): void {

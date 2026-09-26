@@ -134,7 +134,13 @@ function parseConstraints(constraints: unknown): GeneConstraints {
 export interface GeneExpression {
   attempts: number;
   successes: number;
-  lastAt: number | null;
+  /**
+   * When this gene last *worked*. Confidence is about the last proof, not the
+   * last attempt: a gene that just failed has not become more current.
+   */
+  lastSuccessAt: number | null;
+  /** Consecutive failures since the last success. */
+  streak: number;
 }
 
 export interface SelectionPolicy {
@@ -144,6 +150,8 @@ export interface SelectionPolicy {
   readonly priorSuccesses: number;
   readonly priorAttempts: number;
   readonly halfLifeMs: number;
+  /** Consecutive failures that take a gene out of selection until it is re-proven. */
+  readonly quarantineStreak: number;
 }
 
 /**
@@ -157,6 +165,7 @@ export const DEFAULT_SELECTION_POLICY: SelectionPolicy = {
   priorSuccesses: 1,
   priorAttempts: 1,
   halfLifeMs: 30 * 24 * 60 * 60 * 1000,
+  quarantineStreak: 2,
 };
 
 export interface GeneRequest {
@@ -204,8 +213,14 @@ export function scoreCandidates(
     if (overlap === 0) {
       return { address, gene, score: 0, overlap, reliability: 0, recency: 0, excluded: "no signal overlap" };
     }
+    // A failure streak is the one signal a score cannot express: enough
+    // consecutive failures mean the gene is not merely less likely to work, it
+    // is currently unproven, and only a new success takes it back out.
+    if (expression.streak >= policy.quarantineStreak) {
+      return { address, gene, score: 0, overlap, reliability: 0, recency: 0, excluded: `${expression.streak} consecutive failures` };
+    }
     const reliability = (expression.successes + policy.priorSuccesses) / (expression.attempts + policy.priorSuccesses + policy.priorAttempts);
-    const recency = expression.lastAt === null ? 0 : Math.pow(0.5, Math.max(0, now - expression.lastAt) / policy.halfLifeMs);
+    const recency = expression.lastSuccessAt === null ? 0 : Math.pow(0.5, Math.max(0, now - expression.lastSuccessAt) / policy.halfLifeMs);
     const score = policy.signalWeight * overlap + policy.reliabilityWeight * reliability + policy.recencyWeight * recency;
     return { address, gene, score, overlap, reliability, recency, excluded: null };
   });

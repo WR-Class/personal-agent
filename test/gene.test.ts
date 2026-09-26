@@ -39,8 +39,8 @@ function draft(overrides: Partial<Gene> = {}): Gene {
   };
 }
 
-function expression(attempts: number, successes: number, lastAt: number | null = NOW): GeneExpression {
-  return { attempts, successes, lastAt };
+function expression(attempts: number, successes: number, lastSuccessAt: number | null = NOW, streak = 0): GeneExpression {
+  return { attempts, successes, lastSuccessAt, streak };
 }
 
 describe("mint", () => {
@@ -95,7 +95,8 @@ describe("gene store", () => {
     const entry = state.genes.get(minted.address);
     assert.equal(entry?.expression.attempts, 2);
     assert.equal(entry?.expression.successes, 1);
-    assert.equal(entry?.expression.lastAt, NOW + 20);
+    assert.equal(entry?.expression.lastSuccessAt, NOW + 10);
+    assert.equal(entry?.expression.streak, 1);
     assert.deepEqual({ ...state.baseline }, { attempts: 1, successes: 1 });
   });
 
@@ -149,8 +150,8 @@ describe("selection", () => {
     const fresh = mintGene(draft({ signalsMatch: ["snippet"], name: "fresh" }));
     const stale = mintGene(draft({ signalsMatch: ["snippet"], name: "stale" }));
     const { selection } = selectGene([
-      { address: stale.address, gene: stale.gene, expression: { attempts: 2, successes: 2, lastAt: NOW - DEFAULT_SELECTION_POLICY.halfLifeMs * 4 } },
-      { address: fresh.address, gene: fresh.gene, expression: { attempts: 2, successes: 2, lastAt: NOW } },
+      { address: stale.address, gene: stale.gene, expression: expression(2, 2, NOW - DEFAULT_SELECTION_POLICY.halfLifeMs * 4) },
+      { address: fresh.address, gene: fresh.gene, expression: expression(2, 2, NOW) },
     ], { intent: "build", signals: ["snippet"], text: "snippet" }, DEFAULT_SELECTION_POLICY, NOW);
     assert.equal(selection?.address, fresh.address);
   });

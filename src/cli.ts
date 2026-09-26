@@ -12,6 +12,7 @@ import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteF
 import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
 import { GeneStore } from "./gene-store.ts";
+import { CycleStore } from "./cycle-store.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -173,6 +174,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
   catch(error){throw new UsageError((error as Error).message);}
   const store=new SessionStore({root:paths.agentHome});
   const geneStore=new GeneStore(join(paths.agentHome,"genes.jsonl"));
+  const cycleStore=new CycleStore(join(paths.agentHome,"cycles.jsonl"));
   if(options.mintGene){
     let raw:string;
     try{raw=await readFile(options.mintGene,"utf8");}
@@ -202,7 +204,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       else adapter=createOpenAIChatAdapter({...config,...(options.stream?{stream:true}:{})});
     }
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
-      workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,
+      workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
       tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createPatchFileTool(), createCreateFileTool(), createDeleteFileTool(), createRenameFileTool(), createBatchFilesTool()]),maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),

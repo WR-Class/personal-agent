@@ -23,12 +23,22 @@ import {
   type MintedGene,
   type ScoredCandidate,
 } from "./gene.ts";
+import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 
 const SCHEMA = 1;
 
 export type GeneStoreRecord =
   | { readonly schema: 1; readonly type: "gene"; readonly at: number; readonly address: string; readonly gene: Gene }
-  | { readonly schema: 1; readonly type: "outcome"; readonly at: number; readonly address: string | null; readonly succeeded: boolean };
+  | {
+    readonly schema: 1;
+    readonly type: "outcome";
+    readonly at: number;
+    readonly address: string | null;
+    readonly succeeded: boolean;
+    /** The cycle verdict this row came from. Absent on rows written before D15. */
+    readonly status?: EvaluationStatus;
+    readonly failureClass?: FailureClass | null;
+  };
 
 export interface GeneLibraryState {
   /** Live genes with their folded expression counters. */
@@ -93,7 +103,10 @@ export class GeneStore {
     await this.append({ schema: SCHEMA, type: "gene", at, address: minted.address, gene: minted.gene });
   }
 
-  async appendOutcome(outcome: { address: string | null; succeeded: boolean }, at: number = Date.now()): Promise<void> {
+  async appendOutcome(
+    outcome: { address: string | null; succeeded: boolean; status?: EvaluationStatus; failureClass?: FailureClass | null },
+    at: number = Date.now(),
+  ): Promise<void> {
     await this.append({ schema: SCHEMA, type: "outcome", at, ...outcome });
   }
 
@@ -110,7 +123,7 @@ export class GeneStore {
     const baseline = { attempts: 0, successes: 0 };
     for (const record of records) {
       if (record.type === "gene") {
-        if (!genes.has(record.address)) genes.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastAt: null } });
+        if (!genes.has(record.address)) genes.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0 } });
         continue;
       }
       if (record.address === null) {
@@ -121,8 +134,12 @@ export class GeneStore {
       const entry = genes.get(record.address);
       if (!entry) continue;
       entry.expression.attempts += 1;
-      if (record.succeeded) entry.expression.successes += 1;
-      entry.expression.lastAt = record.at;
+      if (record.succeeded) {
+        entry.expression.successes += 1;
+        entry.expression.lastSuccessAt = record.at;
+        entry.expression.streak = 0;
+      }
+      else entry.expression.streak += 1;
     }
     return { genes, baseline };
   }
