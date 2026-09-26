@@ -36,7 +36,7 @@
 
 1. **M2 已收口**：写入前复查路径；保护目录在批准前拒绝；拒绝和过期写入 `audit` 事件。
 2. **TaskSpec 已完成**：`sendTurn` 在写任何日志之前生成带版本的确定性 spec（原输入、目标、意图、运行时模式），随 `SendResult` 返回；缺目标记 unknown、不编造模式；强制拒绝默认关闭（`enforceTaskSpec` 可打开）。证据与取舍见 D12。
-3. **蜂群 worker**：最多两个只读 worker，独立上下文，不共享写入。
+3. **蜂群 worker 已完成（第一批）**：`dispatch_workers` 一次精确批准后分派 1–2 个只读 worker。每个 worker 是全新 `AgentRuntime`：独立会话与上下文、注册表只有 `read_file`（写工具结构性不存在，不能递归分派）、各自记 TaskSpec（D12）、失败单独报告、继承父 signal。证据与取舍见 D13。已知限制：worker 的 token 花费记在 worker 自己的会话里，不进父预算。
 4. **SoL-Pi**：接一个只读能力，走现有 Schema、Policy 和批准。
 
 讨论只在某一项的机制改变时发生。机制未变就继续下一项，不把选择权丢回对话。

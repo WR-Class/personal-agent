@@ -102,5 +102,6 @@
 | D09 | 已实施：压缩**只缩短 prompt**——`summary` 事件记录 `covers`，message 一条不删，边界必须等于实测消息数，未完成工具批次与空摘要拒绝，必须显式触发 | 需要自动压缩或按 token 保留窗口时（须先有更强的保真测试） |
 | D11 | 已补记：文件编辑的默认机制是唯一原文片段替换（`patch_file`）。整文件替换只用于明确要求全文的场景。M2 第一批曾先做整文件替换，这是排期遗漏，不是研究结论 | 片段多次匹配需要人工消歧时 |
 | D12 | 已实施：TaskSpec 任务编排。读过的源码：`D:\DSHXM\dsh-lab\plugins\dsh-orchestrator` 的 `test-taskspec.mjs`、`test-enforcement.mjs`、`cordis.patch.yml`、`package.json` 及其引用的 `lib/taskspec.js`、`lib/taskspec-enforcement.js`。采用：每次发送前生成带版本的确定性 spec（同一输入同一结果）；模式由运行时决定不由模型决定；缺目标只记录 unknown、不编造模式；强制拒绝默认关闭、可显式打开。不采用：Cordis 插件宿主与 DSH 运行时依赖；spec 事件持久化（先只进 SendResult）；pre-step 钩子基础设施 | 引入蜂群 worker 需要按 spec 分派时 |
+| D13 | 已实施：蜂群 worker 第一批。读过的源码：`D:\DSHXM\dsh-lab\plugins\dsh-swarm` 的 `core/orchestrator.ts`、`core/boundary.ts`、`core/gate.ts`、`lib/isolation.js`、`test/boundary.test.ts`，及 `dsh-orchestrator` 的 `test-journal.mjs`、`test-cancel-retry.mjs`。采用：隔离在**工具层**强制（worker 注册表只有 `read_file`，写工具结构性不存在，不靠提示词）；决定与执行分离（模型提出子任务、操作者批准精确清单、执行独立进行）；数量上限在批准前硬拒（1–2 个）；worker 各自独立会话与上下文；失败按 worker 分开如实报告；顺序执行并继承父 signal。不采用：基因库/selection/PDRI 周期机制；ExecutionBoundary 文件与行数账本（本批无写操作，worker 可写时再加）；write-gate 范围机制；并行池（D02 仍顺序）；JS 工作流脚本引擎 | worker 获得写能力或需要并发时 |
 
 代码复制前另核对目标文件许可证、归属/NOTICE 与修改记录；本轮只借鉴机制，没有复制第三方实现。

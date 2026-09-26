@@ -7,6 +7,7 @@ import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_M
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
+import { createDispatchWorkersTool } from "./workers.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
@@ -178,11 +179,11 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     }
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,
-      tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createPatchFileTool(), createCreateFileTool(), createDeleteFileTool(), createRenameFileTool(), createBatchFilesTool()]),maxSteps:options.maxSteps,
+      tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createPatchFileTool(), createCreateFileTool(), createDeleteFileTool(), createRenameFileTool(), createBatchFilesTool(), createDispatchWorkersTool({adapter,store,workspaceRoot:paths.workspaceRoot,home:paths.agentHome})]),maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
-      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. Every action needs its own approval. Respect denied paths; never pretend a tool succeeded.",
+      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. Use dispatch_workers for up to two independent read-only subtasks. Every action needs its own approval. Respect denied paths; never pretend a tool succeeded.",
       ...(interactive && io ? { approve: async (prompt: string) => {
         io.write(`${prompt}\n回答“是”才执行这一次。\n`);
         const answer = await io.ask("批准？> ");

@@ -104,13 +104,13 @@ function fail(tool: string, message: string): ToolResult {
   return { content: `${tool}: ${message}`, isError: true };
 }
 
-async function denied(name: string, reason: string, context: ToolContext): Promise<ToolResult> {
+export async function denied(name: string, reason: string, context: ToolContext): Promise<ToolResult> {
   await context.audit?.({ tool: name, decision: reason === "approval expired" ? "expired" : "denied", reason });
   return fail(name, reason);
 }
 
 /** Ask once unless this exact call already has an unexpired grant. */
-async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
+export async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
   const now = Date.now();
   const expected = JSON.stringify(args);
   const granted = context.grants?.some((grant) => grant.tool === name && grant.argumentsJson === expected && now <= grant.expiresAt) === true;
