@@ -10,12 +10,19 @@ import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
 
 import { validateResponse } from "./response-validation.ts";
+import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
+import type { TaskSpec } from "./taskspec.ts";
 
 export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; isError?: boolean; }
 export interface AgentRuntimeOptions {
   onActivity?: (event: RuntimeActivity) => void;
   /** One-shot operator question. Used only by edit_file. */
   approve?(prompt: string): Promise<boolean>;
+  /**
+   * Hard-refuse an incomplete TaskSpec instead of recording it. Off by
+   * default: an incomplete spec is reported in SendResult, not fatal.
+   */
+  enforceTaskSpec?: boolean;
   adapter: ModelAdapter;
   store: SessionStore;
   sessionId: string;
@@ -352,6 +359,8 @@ export interface SendResult {
    * conversation. Undefined when nothing was compacted.
    */
   compactedMessages?: number;
+  /** What this send was decided to be, before the model was called. */
+  taskSpec: TaskSpec;
 }
 
 /**
@@ -427,12 +436,14 @@ export class AgentRuntime {
   private busy = false;
   private readonly onActivity: ((event: RuntimeActivity) => void) | undefined;
   private readonly approve: ((prompt: string) => Promise<boolean>) | undefined;
+  private readonly enforceTaskSpec: boolean;
   private activity(event: RuntimeActivity): void { try { this.onActivity?.(event); } catch { /* display must not corrupt execution */ } }
 
   constructor(options: AgentRuntimeOptions) {
     this.adapter = options.adapter;
     this.onActivity = options.onActivity;
     this.approve = options.approve;
+    this.enforceTaskSpec = options.enforceTaskSpec ?? false;
     this.store = options.store;
     this.sessionId = options.sessionId;
     this.configuredProtectedRoots = Object.freeze([...(options.protectedRoots ?? [])]);
@@ -528,6 +539,13 @@ export class AgentRuntime {
     const text = input.trim();
     if (text.length === 0) throw new Error("empty input");
 
+    // TaskSpec is decided before anything is written or sent: the mode comes
+    // from the runtime, and a hard refusal (opt-in) must leave no trace, so it
+    // runs before the session is even ensured.
+    const taskSpec = buildTaskSpec(text, { mode: TASK_MODE });
+    const verdict = assessTaskSpec(taskSpec, { enforce: this.enforceTaskSpec });
+    if (verdict.blocked) throw new Error(verdict.reason ?? "task spec incomplete");
+
     await this.ensureSession();
     signal?.throwIfAborted();
     // Until a reply says otherwise, the requested model is the one whose window
@@ -618,6 +636,7 @@ export class AgentRuntime {
           reply: assistant,
           usage,
           model,
+          taskSpec,
           ...(reasoning === undefined ? {} : { reasoning }),
           // `buildPrompt`, not `store.history`: this field means "what the model
           // saw", which includes the system prompt; the persisted log does not.
