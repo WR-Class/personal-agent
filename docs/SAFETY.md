@@ -10,7 +10,6 @@
 | 工具env白名单 | 不继承DSH_HOME/API key/NODE_OPTIONS等；重建home/temp/XDG/AppData，冻结对象 | OS用户身份改变、PATH中程序可信、插件不能读取process.env |
 | requireToolEnvironment | 缺失或非本模块发行对象拒绝 | 所有受信代码不能绕过helper |
 | 文件写入 | 六个文件操作共用 `approveExact`。grant 匹配工具名、参数 JSON 和到期时间。批准后、写入前再次检查规范路径。拒绝和过期写入 `audit` 事件。保护目录在批准前拒绝 | 复查不能消除另一个进程在两次检查之间替换文件的可能 |
-| 蜂群 worker | `dispatch_workers` 是副作用工具：超过 2 个子任务在批准前硬拒；一次批准只对精确清单有效、2 分钟过期；无批准通道即拒绝。worker 的注册表只有 `read_file`，写工具与分派工具结构性不存在；顺序执行并继承父 signal | worker 的 token 花费记在 worker 自己的会话，不进父轮预算；worker 回复以纯文本进入父会话，无长度上限以外的过滤 |
 | readOnly gate | false/缺失声明不执行 | 恶意代码谎称true；暂无不可信插件宿主 |
 | 文件大小 | stat瞬间256KiB预检 + 句柄级有界读取的256KiB硬上限 | 检查后被替换的竞态、read-then-open窗口 |
 | 模型/事件验证 | 基础形状、角色字段、数值、header；新send前配对检查；工具参数按受支持Schema子集校验，不支持关键字明确拒绝 | 完整JSON Schema语义、所有历史迁移/协议组合 |
