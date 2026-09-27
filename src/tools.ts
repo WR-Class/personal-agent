@@ -590,12 +590,31 @@ export function createBatchFilesTool(): Tool {
  * The registry deliberately does not consult permissions. It answers "can this
  * be executed", not "may it be" — approval is a separate layer that wraps the
  * caller, so that adding a tool can never silently widen what is authorised.
+ *
+ * A session may be constructed with an explicit `available` set. That is a
+ * capability boundary, not a permission: a tool left out is absent, and absence
+ * is enforced in both directions. `definitions()` never advertises it, and
+ * `execute()` refuses it by name — hiding a tool from the prompt while still
+ * running it on request would be denial wearing absence as a disguise, and the
+ * cheap boundary only holds if the two agree.
  */
 export class ToolRegistry {
   readonly #tools = new Map<string, Tool>();
+  readonly #available: ReadonlySet<string> | undefined;
 
-  constructor(tools: readonly Tool[] = []) {
+  constructor(tools: readonly Tool[] = [], available?: readonly string[]) {
+    this.#available = available ? new Set(available) : undefined;
     for (const tool of tools) this.register(tool);
+    if (available) {
+      for (const name of available) {
+        if (!this.#tools.has(name)) throw new Error(`available tool is not registered: ${name}`);
+      }
+    }
+  }
+
+  /** Whether this session offers the tool at all. Absent is not the same as denied. */
+  has(name: string): boolean {
+    return this.#tools.has(name) && (!this.#available || this.#available.has(name));
   }
 
   register(tool: Tool): void {
@@ -614,13 +633,22 @@ export class ToolRegistry {
   }
 
   definitions(): ToolDefinition[] {
-    return this.list().map(({ name, description, parameters }) => ({ name, description, parameters }));
+    return this.list()
+      .filter((tool) => this.has(tool.name))
+      .map(({ name, description, parameters }) => ({ name, description, parameters }));
   }
 
   /** Execute one call, converting every failure into an error result. */
   async execute(call: ToolCall, context: ToolContext): Promise<ToolResult> {
     const tool = this.#tools.get(call.name);
     if (!tool) return fail("tool", `unknown tool: ${call.name}`);
+    // Absent tools must not be reachable by name either. The wording is
+    // deliberate: "not available" is a standing property of this session, not a
+    // failure of this attempt, so the model does not retry it or hunt for a
+    // workaround. (A boundary is only a boundary if its refusal is legible.)
+    if (!this.has(call.name)) {
+      return fail(call.name, "this tool is not available in this session; it is a policy boundary, not a transient failure");
+    }
     let args: unknown;
     try {
       args = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);
