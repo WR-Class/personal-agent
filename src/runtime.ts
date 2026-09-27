@@ -460,6 +460,8 @@ export class AgentRuntime {
   private outcomeAddress: string | null | undefined;
   /** The request kind for the send in flight, so failures can be grouped (D16). */
   private outcomeSpec: { intent: TaskIntent; signals: readonly string[] } | undefined;
+  /** Tools this round actually called, in order (D17). */
+  private outcomeTools: string[] | undefined;
   private readonly geneStore: GeneStore | undefined;
   private readonly cycleStore: CycleStore | undefined;
   private readonly temperature: number | undefined;
@@ -581,8 +583,10 @@ export class AgentRuntime {
   private async journalOutcome(evaluation: CycleEvaluation): Promise<void> {
     const address = this.outcomeAddress;
     const spec = this.outcomeSpec;
+    const tools = this.outcomeTools;
     this.outcomeAddress = undefined;
     this.outcomeSpec = undefined;
+    this.outcomeTools = undefined;
     if (address === undefined || !this.geneStore) return;
     await this.geneStore.appendOutcome({
       address,
@@ -591,6 +595,8 @@ export class AgentRuntime {
       failureClass: evaluation.failureClass,
       // The request kind is what makes a repeated failure recognizable later.
       ...(spec ? { intent: spec.intent, signals: spec.signals } : {}),
+      // The proven tool order is what induction may build on — and nothing more.
+      ...(tools ? { tools } : {}),
       evidence: evaluation.evidence,
     });
   }
@@ -643,6 +649,7 @@ export class AgentRuntime {
     // never reaches here, so a hard refusal still leaves no trace.
     this.outcomeAddress = applied?.address ?? null;
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
+    this.outcomeTools = [];
 
     await this.ensureSession();
     signal?.throwIfAborted();
@@ -817,6 +824,7 @@ export class AgentRuntime {
     };
     let errors = 0;
     for (const call of calls) {
+      this.outcomeTools?.push(call.name);
       // Complete pending tool correlations even after cancellation, but never start another executor.
       let result;
       if (signal?.aborted) result = { content: "cancelled: tool was not executed", isError: true };

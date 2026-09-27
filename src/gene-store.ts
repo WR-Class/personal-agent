@@ -26,6 +26,7 @@ import {
 } from "./gene.ts";
 import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 import type { FailureFact } from "./distill.ts";
+import type { SuccessFact } from "./induct.ts";
 
 const SCHEMA = 1;
 
@@ -45,6 +46,11 @@ export type GeneStoreRecord =
     readonly signals?: readonly string[];
     /** Mechanical counts the verdict was read off. Never raw error text. */
     readonly evidence?: readonly string[];
+    /**
+     * Tools this round actually called, in order. What the transcript proves —
+     * not what a strategy should be (D17).
+     */
+    readonly tools?: readonly string[];
   };
 
 export interface GeneLibraryState {
@@ -119,6 +125,7 @@ export class GeneStore {
       intent?: GeneIntent;
       signals?: readonly string[];
       evidence?: readonly string[];
+      tools?: readonly string[];
     },
     at: number = Date.now(),
   ): Promise<void> {
@@ -143,6 +150,29 @@ export class GeneStore {
         failureClass: record.failureClass,
         evidence: record.evidence ?? [],
         address: record.address,
+      });
+    }
+    return facts;
+  }
+
+  /**
+   * Successful rounds that applied no gene: the gap induction exists for. A
+   * round that used a gene is not a gap, and a row without the request kind
+   * cannot be grouped.
+   */
+  async geneLessSuccesses(): Promise<SuccessFact[]> {
+    const records = await this.ensureLoaded();
+    const facts: SuccessFact[] = [];
+    for (const record of records) {
+      if (record.type !== "outcome" || !record.succeeded) continue;
+      if (record.address !== null) continue;
+      if (!record.intent || !record.signals) continue;
+      facts.push({
+        at: record.at,
+        intent: record.intent,
+        signals: record.signals,
+        tools: record.tools ?? [],
+        evidence: record.evidence ?? [],
       });
     }
     return facts;
