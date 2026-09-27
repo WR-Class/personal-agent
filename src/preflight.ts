@@ -29,6 +29,15 @@ export interface PreflightEnv {
   fetchImpl?: typeof fetch;
   platform?: string;
   nodeVersion?: string;
+  /**
+   * Spend one real token to find out whether the provider accepts this client's
+   * request shape and actually calls tools.
+   *
+   * Off by default, and it needs the key, so the caller — not this module —
+   * decides to pass it. See {@link probeToolCalling} for why a status probe
+   * cannot answer either question.
+   */
+  liveToolProbe?: { baseUrl: string; model: string; apiKey: string };
 }
 
 export interface PreflightCheck {
@@ -46,6 +55,12 @@ export interface PreflightReport {
   tokenizerFailed: boolean;
   /** Independent of the provider: whether interactive mode is possible. */
   canRunInteractively: boolean;
+  /**
+   * Result of the opt-in live tool probe, or `undefined` when it was not run.
+   * `undefined` means "not measured", never "fine" — callers must not read it as
+   * a pass.
+   */
+  toolCalling?: "works" | "tools-dropped" | "request-failed";
 }
 
 const PROBE_TIMEOUT_MS = 10_000;
@@ -82,14 +97,156 @@ async function probeEndpoint(baseUrl: string, doFetch: typeof fetch): Promise<Pr
 }
 
 /**
+ * One live round trip that answers the two questions a status probe cannot.
+ *
+ * The reachability probe above proves something is listening, and deliberately
+ * sends no credentials, so it can never prove a real request is accepted. Both
+ * failures observed in practice were invisible to it, and both were HTTP 200:
+ *
+ * 1. A gateway that rejects the request shape — every request came back 502
+ *    until the adapter sent `max_tokens`, which it previously never did.
+ * 2. A gateway that **silently discards the `tools` array** and answers as plain
+ *    chat. The agent then looks like it is running while every tool call fails,
+ *    with an error string that appears nowhere in this project, which sends the
+ *    operator hunting for a bug that is not theirs.
+ *
+ * So this check sends one authenticated request with a trivial tool and reports
+ * what came back. It is the only check here that spends a token and puts the key
+ * on the wire, which is why it is opt-in and why the output says so.
+ *
+ * The prompt is fixed and asks for a function call, not a question, so the tool
+ * result is about whether tool calling works rather than about the model's mood.
+ */
+const TOOL_PROBE_NAME = "preflight_echo";
+
+/**
+ * Remove the credential from any text that will be printed.
+ *
+ * Needed because this is the one check that puts the key on the wire, and a
+ * broken proxy can echo the request — headers included — back in an error page.
+ * Truncating is not redaction: the key is short enough to survive a slice. The
+ * test for this failed on the first version, which reported the key verbatim.
+ */
+function redact(text: string, apiKey: string): string {
+  return apiKey === "" ? text : text.split(apiKey).join("[redacted]");
+}
+/**
+ * Generous on purpose. Measured against a real local gateway, a one-word
+ * completion took 65-75 seconds and a turn with tool calls 95-230, so a short
+ * probe timeout reports a working provider as broken — which is a worse failure
+ * than waiting, because it sends the operator to fix the wrong thing. The first
+ * version used 60s and timed out on a model that works.
+ */
+const TOOL_PROBE_TIMEOUT_MS = 300_000;
+
+interface ToolProbeOutcome {
+  accepted: boolean;
+  /** Held separately from `accepted`: a 200 that dropped the tool is the case
+   * this exists for, and collapsing the two into one boolean would hide it. */
+  calledTool: boolean;
+  detail: string;
+}
+
+export async function probeToolCalling(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  doFetch: typeof fetch,
+): Promise<{ request: PreflightCheck; tools: PreflightCheck }> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const body = {
+    model,
+    messages: [{ role: "user", content: `Call the ${TOOL_PROBE_NAME} function with value="ok". You must use the tool.` }],
+    max_tokens: 64,
+    tools: [{
+      type: "function",
+      function: {
+        name: TOOL_PROBE_NAME,
+        description: "Echo a value back. Used only to check tool calling.",
+        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+      },
+    }],
+  };
+  let outcome: ToolProbeOutcome;
+  try {
+    const response = await doFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TOOL_PROBE_TIMEOUT_MS),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      // Redacted, not merely truncated: a broken proxy can echo the request —
+      // and therefore the key — back in an error page, and the key is short
+      // enough to survive a slice.
+      outcome = {
+        accepted: false, calledTool: false,
+        detail: `HTTP ${response.status}；响应正文（已脱敏并截断）：${redact(text, apiKey).slice(0, 120) || "(空)"}`,
+      };
+    } else {
+      let parsed: { choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] };
+      try {
+        parsed = JSON.parse(text) as typeof parsed;
+      } catch {
+        outcome = { accepted: false, calledTool: false, detail: "HTTP 200 但响应体不是 JSON" };
+        return {
+          request: { name: "真实请求", status: "fail", detail: outcome.detail },
+          tools: { name: "工具调用", status: "fail", detail: "无法解析响应，故无法判定" },
+        };
+      }
+      const message = parsed.choices?.[0]?.message;
+      const calls = message?.tool_calls;
+      const calledTool = Array.isArray(calls) && calls.length > 0;
+      outcome = calledTool
+        ? { accepted: true, calledTool: true, detail: "HTTP 200，返回了 tool_calls" }
+        : {
+            accepted: true, calledTool: false,
+            detail: "HTTP 200，但**没有** tool_calls；模型回的是普通文本。" +
+              `它说的话（已脱敏并截断）：${redact(message?.content ?? "(空)", apiKey).slice(0, 160)}`,
+          };
+    }
+  } catch (error) {
+    const name = (error as Error).name;
+    outcome = {
+      accepted: false, calledTool: false,
+      detail: name === "TimeoutError"
+        ? `探测超时（${TOOL_PROBE_TIMEOUT_MS}ms）`
+        : `请求失败：${(error as Error).message}`,
+    };
+    return {
+      request: { name: "真实请求", status: "fail", detail: outcome.detail },
+      tools: { name: "工具调用", status: "fail", detail: "请求未成功，无法判定工具调用" },
+    };
+  }
+
+  // The two checks stay separate on purpose. A 200 with no tool call is a
+  // *passing* request and a *failing* tool capability, and reporting it as one
+  // verdict is exactly how this went unnoticed.
+  return {
+    request: { name: "真实请求", status: outcome.accepted ? "ok" : "fail", detail: outcome.detail },
+    tools: outcome.accepted
+      ? {
+          name: "工具调用",
+          status: outcome.calledTool ? "ok" : "fail",
+          detail: outcome.calledTool
+            ? "提供方接受 tools 并返回了工具调用"
+            : "**提供方丢弃了 tools**：HTTP 成功但从不调用工具。此模型在本 Agent 里无法使用工具。" +
+              "注意：单次结果可能来自暂时性的网关故障，**请重跑一次再下结论**——" +
+              "本项目实测过同一个模型一次报丢弃、重跑即正常。",
+        }
+      : { name: "工具调用", status: "fail", detail: "请求未成功，无法判定工具调用" },
+  };
+}
+
+/**
  * Describe a command's own error text, or decline to.
  *
  * On Windows a cmd.exe failure message is written in the console's OEM code page,
  * so decoding it as UTF-8 yields U+FFFD replacement characters. Printing that is
  * worse than printing nothing: it looks like corruption in *our* output. When the
  * text cannot be decoded, say so and keep the exit code.
- */
-function stderrExcerpt(raw: string | null | undefined): string {
+ */function stderrExcerpt(raw: string | null | undefined): string {
   const text = (raw ?? "").trim();
   if (text === "") return "";
   if (text.includes("\uFFFD")) return "（命令的 stderr 不是 UTF-8，无法可靠解码，已省略）";
@@ -187,6 +344,25 @@ export async function preflight(input: PreflightEnv): Promise<PreflightReport> {
   const tokenizer = probeTokenizer(env);
   checks.push(tokenizer);
 
+  let toolCalling: PreflightReport["toolCalling"];
+  if (input.liveToolProbe) {
+    const probe = input.liveToolProbe;
+    const result = await probeToolCalling(probe.baseUrl, probe.model, probe.apiKey, doFetch);
+    checks.push(result.request, result.tools);
+    // Only a request that succeeded can say anything about tools; a failed
+    // request leaves the question open rather than answered.
+    toolCalling = result.request.status !== "ok"
+      ? "request-failed"
+      : result.tools.status === "ok" ? "works" : "tools-dropped";
+  } else {
+    checks.push({
+      name: "工具调用",
+      status: "skipped",
+      detail: "未实测（需要 --probe-tools，会真实消耗 token）。**未测量不等于通过**：" +
+        "已有实测案例显示提供方会以 HTTP 200 静默丢弃 tools",
+    });
+  }
+
   const interactive = input.stdinIsTTY && input.stdoutIsTTY;
   checks.push({
     name: "终端",
@@ -211,6 +387,7 @@ export async function preflight(input: PreflightEnv): Promise<PreflightReport> {
     canAttemptLiveRun: providerUsable && tokenizer.status !== "fail",
     tokenizerFailed: tokenizer.status === "fail",
     canRunInteractively: interactive,
+    ...(toolCalling === undefined ? {} : { toolCalling }),
   };
 }
 
@@ -228,6 +405,21 @@ export function formatPreflight(report: PreflightReport): string {
   lines.push(report.canRunInteractively
     ? "交互模式：当前 stdin/stdout 是 TTY，可以实测密钥隐藏输入与 Ctrl+C。"
     : "交互模式：**当前不是 TTY**，交互与密钥隐藏输入在本环境无法验证。");
-  lines.push("本检查仍不能证明：某个托管服务是否接受本客户端的请求形状；真实终端下的人机观感；断电持久性。");
+  // Spelled out separately because it is the one verdict that a passing HTTP
+  // check hides, and because "not measured" must not read as "fine".
+  if (report.toolCalling === "works") {
+    lines.push("工具调用：**已实测可用**——提供方接受了 tools 并返回了工具调用。");
+  } else if (report.toolCalling === "tools-dropped") {
+    lines.push("工具调用：**失败**——提供方返回 HTTP 成功，但丢弃了 tools、从不调用工具。" +
+      "此模型在本 Agent 里做不了任何事。**请重跑一次再换模型**：本项目实测过同一模型一次报丢弃、重跑即正常，" +
+      "两次结果不同说明是网关在抖，而不是模型不支持。");
+  } else if (report.toolCalling === "request-failed") {
+    lines.push("工具调用：**无法判定**——真实请求本身就失败了，先修请求。");
+  } else {
+    lines.push("工具调用：**未测量**（未加 --probe-tools）。未测量不等于可用：" +
+      "已有实例是 HTTP 200 且 tools 被静默丢弃。");
+  }
+  lines.push("本检查仍不能证明：真实终端下的人机观感；断电持久性；跨平台行为。" +
+    "（" + (report.toolCalling ? "本次已实测真实请求与工具调用。" : "本次未实测真实请求与工具调用。") + "）");
   return `${lines.join("\n")}\n`;
 }

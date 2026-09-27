@@ -44,7 +44,7 @@
 | [cycle-store.ts](../src/cycle-store.ts)：CycleStore | agent home 内追加式 `cycles.jsonl`：每次事件一行，状态=按 cycleId 对事件日志折叠（`replay`），可重放；损坏尾容忍、中段损坏拒绝并报行号；ENOENT 视为空；未收口周期停在最后阶段而非冒充完成 | 追加不是事务；单进程内 send 串行，暂不产生悬空周期，因此没有定时强制收口；它是运行账本，不是会话事实源（ADR-0001） |
 | [session-lease.ts](../src/session-lease.ts)：withSessionLease | wx锁文件、owner token、内部scope复用、核验归属后释放单个锁 | 本地合作进程锁；遗留锁不抢占；不是网络FS/恶意进程安全锁 |
 | [session-store.ts](../src/session-store.ts)：SessionStore/migrateEvent | 独占header、事件校验/追加、每事件flush、inspect/history、pendingTools/recover、summary、audit。`audit` 记录拒绝或过期，标记 ignorable，不进入对话 | 多次追加不是事务；真实断电未实测；audit 不记录文件内容 |
-| [preflight.ts](../src/preflight.ts)：preflight/formatPreflight | 联调准备检查：配置完整性（三项齐全规则）、**未鉴权**端点可达性探测（不读正文）、tokenizer 命令实跑一次、真实 TTY 状态；只报观察到的事实 | 不读凭据文件、不验证托管服务是否接受请求形状；它是"能否尝试"的门槛，不是"联调已完成"的证明 |
+| [preflight.ts](../src/preflight.ts)：preflight/formatPreflight/probeEndpoint/probeToolCalling/redact | 联调准备检查，**只报观察到的事实**；**默认不发凭据**（可达性探测不带认证头，故 401/403 也算"可达"）；**`--probe-tools` 才做真实请求**（D40）：用固定 prompt + 一个琐碎工具实测，**"请求是否被接受"与"工具是否真被调用"是两条独立判据**（HTTP 200 却丢弃 `tools` 是请求通过 + 工具失败，合并成因正是它此前没被发现的原因）；`toolCalling` 用 `undefined` 表示**未测量**（注释明写不得读作通过）；**错误正文与模型回显都经 `redact()` 脱敏**（截断不是脱敏，密钥只有 15 字符） | 探测超时 **300s**（实测一 个词 65-75s、带工具一轮 95-230s；曾用 60s 把可用模型报成坏的）；**单次结果无法区分"模型不支持工具"与"网关在抖"**，故失败文案要求**重跑一次再换模型**（实测同模型一次报丢弃、重跑即正常）；本模块只描述，**不做任何自动升级或重试** | | 联调准备检查：配置完整性（三项齐全规则）、**未鉴权**端点可达性探测（不读正文）、tokenizer 命令实跑一次、真实 TTY 状态；只报观察到的事实 | 不读凭据文件、不验证托管服务是否接受请求形状；它是"能否尝试"的门槛，不是"联调已完成"的证明 |
 
 ## 3. 依赖方向
 

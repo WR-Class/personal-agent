@@ -32,6 +32,9 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --session demo "你好" 单次发送
       npm start -- --session demo --list 查看历史，不需要模型配置
       npm start -- --preflight        联调准备检查：配置/可达性/tokenizer/TTY，不发密钥不消耗 token
+      npm start -- --preflight --probe-tools
+                                      额外真实发一次请求（**会消耗 token**），实测两件状态码看不到的事：
+                                      提供方是否接受本客户端的请求形状、是否真的调用工具
       npm start -- --mint-gene draft.json 从验证过的成功经验铸造一个基因并入库（不需要模型）
       npm start -- --distill           把反复失败的请求蒸馏成 guard 草稿并打印，不自动铸造
       npm start -- --induct            把"没有基因可用但成功了"的轮次归纳成候选草稿并打印，不自动铸造
@@ -54,7 +57,7 @@ export const HELP = `Personal Agent — 交互式只读 Agent
 密钥默认不落盘；工具仅 read_file。\n`;
 export interface CliOptions {
   session: string; sessionExplicit: boolean; home: string; workspace: string;
-  prompt?: string; list: boolean; showTotals: boolean; maxSteps: number; echo: boolean; help: boolean; preflight: boolean;
+  prompt?: string; list: boolean; showTotals: boolean; maxSteps: number; echo: boolean; help: boolean; preflight: boolean; probeTools: boolean;
   maxToolCallsPerRun: number; maxToolCallsPerStep: number; deadlineMs: number; maxContextBytes: number; maxContextTokens: number;
   stream: boolean;
   /** Path to a gene draft JSON to mint. Operator action; no model involved. */
@@ -97,6 +100,11 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     // must not be able to grant itself full access.
     tier:env.PERSONAL_AGENT_TIER,
     listTrusted:false,
+    // Opt-in, because unlike every other preflight check this one spends a token
+    // and puts the key on the wire. It answers the question a status probe
+    // structurally cannot: does this provider accept our request shape, and does
+    // it actually call tools. See preflight.ts.
+    probeTools:false,
     // Opt-in: streaming changes the request body (stream_options), so a server that
     // rejects unknown fields must still be reachable on the default path.
     stream:env.PERSONAL_AGENT_STREAM==="1"||env.PERSONAL_AGENT_STREAM==="true" };
@@ -117,6 +125,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--totals")options.showTotals=true;
     else if(arg==="--echo")options.echo=true;
     else if(arg==="--preflight")options.preflight=true;
+    else if(arg==="--probe-tools")options.probeTools=true;
     else if(arg==="--stream")options.stream=true;
     else if(arg==="--tier")options.tier=valueFor(argv,++i,arg);
     else if(arg==="--trust-root")options.trustRoot=valueFor(argv,++i,arg);
@@ -192,15 +201,30 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
   const options=parseArgs(argv,env);
   const write=(text:string)=>providedIO ? providedIO.write(text) : process.stdout.write(safeText(text));
   if(options.help){write(HELP);return 0;}
+  if(options.probeTools&&!options.preflight)throw new UsageError("--probe-tools 只在 --preflight 下有意义；它需要先跑准备检查");
   if(options.preflight){
-    // Deliberately before any credential file is read and before any adapter is
-    // built: this mode reports what it can observe, and must not be a path that
-    // could use a key it was only supposed to describe.
+    // Without --probe-tools this stays before any credential file is read and
+    // before any adapter is built: this mode must not be a path that could use a
+    // key it was only supposed to describe. With --probe-tools the operator has
+    // explicitly asked for a real authenticated request, so the key is read here
+    // and passed in — and it is still never printed, only used.
+    let liveToolProbe;
+    if(options.probeTools){
+      let provider;
+      try{provider=await loadProvider(options.home??env.PERSONAL_AGENT_HOME??".personal-agent",env);}
+      catch(error){throw new UsageError(`--probe-tools 需要可用的模型配置：${(error as Error).message}`);}
+      if(!provider)throw new UsageError("--probe-tools 需要已保存的模型配置；请先运行 npm start 配置，或设置 PERSONAL_AGENT_* 环境变量。");
+      liveToolProbe={baseUrl:provider.baseUrl,model:provider.model,apiKey:provider.apiKey};
+    }
     const report=await preflight({env,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY,
       ...(process.stdout.columns===undefined?{}:{columns:process.stdout.columns}),
-      ...(process.stdout.rows===undefined?{}:{rows:process.stdout.rows})});
+      ...(process.stdout.rows===undefined?{}:{rows:process.stdout.rows}),
+      ...(liveToolProbe?{liveToolProbe}:{})});
     write(formatPreflight(report));
     // Non-zero when a live run cannot be attempted, so this is usable as a gate.
+    // A measured tool-capability failure is also non-zero: a model that ignores
+    // every tool cannot serve as this Agent, so it must not exit 0 as "ready".
+    if(report.toolCalling==="tools-dropped"||report.toolCalling==="request-failed")return 4;
     return report.canAttemptLiveRun?0:3;
   }
   const extraRoots=configuredProtectedRoots(env);
