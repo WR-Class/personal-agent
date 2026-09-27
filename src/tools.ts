@@ -18,7 +18,9 @@ import type { JsonSchema, ToolCall, ToolDefinition } from "./types.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { isIssuedToolEnvironment } from "./tool-environment.ts";
 import { assertReadablePath } from "./security-config.ts";
-import { actionBinding, filePolicy } from "./file-policy.ts";
+import { actionBinding, DEFAULT_RULES, filePolicy } from "./file-policy.ts";
+import { decide } from "./rule-table.ts";
+import type { Rule } from "./rule-table.ts";
 import type { FileGrant } from "./file-policy.ts";
 import { readBoundedUtf8 } from "./bounded-read.ts";
 
@@ -47,7 +49,9 @@ export interface ToolContext {
   /** Exact grants already approved by a parent operation. */
   grants?: readonly FileGrant[];
   /** Records a denial without changing the conversation. */
-  audit?(event: { tool: string; decision: "denied" | "expired"; reason: string }): Promise<void>;
+  audit?(event: { tool: string; decision: "denied" | "expired"; reason: string; rule?: string | null }): Promise<void>;
+  /** The rule table this session runs under. Defaults to the built-in rules. */
+  rules?: readonly Rule[];
 }
 
 /** Raised when a tool needs an environment that the caller did not rebuild. */
@@ -727,7 +731,18 @@ export class ToolRegistry {
       return fail(call.name, (error as Error).message);
     }
     if (argumentProblem) return fail(call.name, `invalid arguments: ${argumentProblem}`);
-    if (filePolicy(call.name) === "deny" && tool.readOnly !== true) return fail(call.name, "side-effect tools are disabled until approval is implemented");
+    const match = decide(context.rules ?? DEFAULT_RULES, call.name, args as Record<string, unknown>);
+    if (match.decision === "deny" && tool.readOnly !== true) {
+      // Attribute the refusal to the rule that made it, so a denial can be
+      // explained by inspecting the audit rather than by reading this code.
+      await context.audit?.({
+        tool: call.name,
+        decision: "denied",
+        reason: match.reason ?? "denied by rule",
+        rule: match.rule?.id ?? null,
+      });
+      return fail(call.name, match.reason ?? "denied by rule");
+    }
     try {
       return await tool.execute(args as Record<string, unknown>, context);
     } catch (error) {

@@ -129,7 +129,9 @@ describe("edit_file", () => {
       async execute() { return { content: "ran" }; },
     }]);
     const result = await registry.execute(call("move_file", {}), { workspaceRoot: workspace() });
-    assert.match(result.content, /side-effect tools are disabled/);
+    // The refusal now comes from the rule table and names the rule that decided,
+    // so a denial can be explained from the audit instead of from this test.
+    assert.match(result.content, /no rule matched/);
   });
 });
 

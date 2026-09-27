@@ -137,6 +137,8 @@ export interface AuditEvent {
   tool: string;
   decision: "denied" | "expired";
   reason: string;
+  /** The rule that refused, when a rule decided it. Null when nothing matched. */
+  rule?: string | null;
 }
 
 export type SessionEvent =
@@ -360,6 +362,13 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
     case "audit": {
       const decision = record.decision;
       if (decision !== "denied" && decision !== "expired") throw new Error("audit.decision must be denied or expired");
+      // Rebuilt field by field, so `rule` must be read here or it would vanish on
+      // the way back in. Absent stays absent: an older line has no rule to name,
+      // which is different from a line whose rule was "none matched".
+      const rule = record.rule;
+      if (rule !== undefined && rule !== null && typeof rule !== "string") {
+        throw new Error("audit.rule must be a string or null");
+      }
       return {
         v: CURRENT_EVENT_VERSION,
         kind,
@@ -368,6 +377,7 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
         tool: requireString(record, "tool", "audit"),
         decision,
         reason: requireString(record, "reason", "audit"),
+        ...(rule === undefined ? {} : { rule: rule as string | null }),
       };
     }
     default:
@@ -601,7 +611,7 @@ export class SessionStore {
   }
 
   /** Record one denied or expired approval without changing the conversation. */
-  async appendAudit(sessionId: string, audit: Pick<AuditEvent, "tool" | "decision" | "reason">): Promise<AuditEvent> {
+  async appendAudit(sessionId: string, audit: Pick<AuditEvent, "tool" | "decision" | "reason"> & { rule?: string | null }): Promise<AuditEvent> {
     const event: AuditEvent = {
       v: CURRENT_EVENT_VERSION, kind: "audit", ignorable: true, at: new Date().toISOString(), ...audit,
     };
