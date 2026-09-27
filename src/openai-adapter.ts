@@ -9,6 +9,18 @@ export interface OpenAIChatAdapterOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   /**
+   * Upper bound on tokens the provider may generate for one response.
+   *
+   * Sent on every request, and defaulted rather than omitted. Two reasons, and
+   * the second is the one that forced it: the project's rule everywhere else is
+   * that the caller declares the ceiling (write budget, byte limits, deadline),
+   * and observed against a local gateway the field is not optional in practice —
+   * the *same* request returns 200 with it and 502 without it, reproduced twice
+   * one parameter apart. A request shape a gateway rejects some of the time is a
+   * defect, not an environment quirk, so the value is always sent.
+   */
+  maxTokens?: number;
+  /**
    * Ask the provider to stream (`stream: true`) and assemble the SSE transcript
    * back into the ordinary {@link ChatResponse}.
    *
@@ -32,6 +44,16 @@ import { readBoundedUtf8 } from "./bounded-read.ts";
  * ceiling the process buffers it all before any validation runs.
  */
 export const CHAT_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Default ceiling on generated tokens per response.
+ *
+ * Deliberately generous enough not to truncate ordinary work, and deliberately
+ * finite. The point is not the number but that a request always declares one:
+ * see {@link OpenAIChatAdapterOptions.maxTokens} for the gateway that returns
+ * 502 when the field is absent.
+ */
+export const DEFAULT_MAX_TOKENS = 8192;
 
 /**
  * Serialize one message into the OpenAI wire shape.
@@ -163,6 +185,7 @@ export function parseSseCompletion(raw: string): unknown {
 export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): ModelAdapter {
   const doFetch = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 120_000;
+  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   /**
    * `doFetch`, with the transport reason surfaced.
@@ -204,6 +227,9 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
         body: JSON.stringify({
           model: request.model ?? options.model,
           messages: request.messages.map(toWireMessage),
+          // Always present, never omitted: the caller declares the ceiling, and
+          // this gateway rejects the request outright without it.
+          max_tokens: maxTokens,
           ...(request.tools && request.tools.length > 0
             ? {
                 tools: request.tools.map((tool) => ({

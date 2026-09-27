@@ -347,13 +347,82 @@ async function* fileChunks(handle: FileHandle): AsyncIterable<Uint8Array> {
   }
 }
 
-async function readBoundedFile(filePath: string, maxBytes: number): Promise<string> {
+/**
+ * Read one file as bytes, changing nothing about the file itself (D38).
+ *
+ * Returns bytes rather than text because the previous version decoded in here,
+ * and decoding is not a display decision — it is the point at which the
+ * information is destroyed. A byte that is not valid UTF-8 became U+FFFD, and
+ * the original byte could not be recovered: measured, `89 50 4e 47 ff fe fd 00`
+ * came back as `efbfbd 50 4e 47 efbfbd efbfbd efbfbd 00`, which is not the same
+ * bytes and is *longer* than the input. Handing that to a model reviewing a
+ * binary is worse than refusing: it looks like text and carries no signal that
+ * it is corrupt.
+ */
+async function readBoundedBytes(filePath: string, maxBytes: number, start = 0, length?: number): Promise<Buffer> {
   const handle = await open(filePath, "r");
   try {
-    return await readBoundedUtf8(fileChunks(handle), maxBytes, "file");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const cap = Math.min(maxBytes, length ?? maxBytes);
+    // A positional read, so seeking to the header of a large file never pulls
+    // the whole file into memory first.
+    const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, cap));
+    let position = start;
+    while (total < cap) {
+      const want = Math.min(buffer.length, cap - total);
+      const { bytesRead } = await handle.read(buffer, 0, want, position);
+      if (bytesRead === 0) break;
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      total += bytesRead;
+      position += bytesRead;
+    }
+    return Buffer.concat(chunks);
   } finally {
     await handle.close();
   }
+}
+
+/** Hex preview width, in bytes per row. */
+const HEX_ROW_BYTES = 16;
+
+/**
+ * Render bytes as an offset/hex/ASCII dump.
+ *
+ * Hex is unambiguous and lossless by construction, which is the whole
+ * requirement: the model must be able to read the real bytes of a header,
+ * string table or disassembly. The ASCII gutter is convenience only and prints
+ * a dot for anything outside printable ASCII, so it can never be mistaken for
+ * the content itself.
+ */
+function hexDump(bytes: Buffer, base = 0): string {
+  const lines: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += HEX_ROW_BYTES) {
+    const row = bytes.subarray(offset, offset + HEX_ROW_BYTES);
+    const hex = [...row].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+    const ascii = [...row].map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ".")).join("");
+    // Offsets are file-absolute, so a partial read lines up with the real file
+    // and the model can ask for a specific range next.
+    lines.push(`${(base + offset).toString(16).padStart(8, "0")}  ${hex.padEnd(HEX_ROW_BYTES * 3 - 1)}  ${ascii}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Whether these bytes are text this tool can hand over unchanged.
+ *
+ * Two conditions, and both are needed. The bytes must survive a decode/encode
+ * round trip, which rejects a lone 0xFF or a truncated multi-byte sequence. That
+ * alone is not enough, and the failure is instructive: the 64-byte DOS header of
+ * a real executable is *valid* UTF-8 — every byte is under 0x80 — so a
+ * round-trip test alone hands back `MZx` followed by 57 NUL bytes as if it were
+ * a text file. A NUL byte is what actually separates the two cases here, because
+ * no text file this tool should render as text contains one. UTF-16 text is
+ * caught by the round trip instead, since it is not valid UTF-8 at all.
+ */
+function isRoundTripUtf8(bytes: Buffer): boolean {
+  if (bytes.includes(0x00)) return false;
+  return Buffer.from(bytes.toString("utf8"), "utf8").equals(bytes);
 }
 
 /**
@@ -381,7 +450,14 @@ export function createReadFileTool(): Tool {
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "File to read, relative to the workspace root." }
+        path: { type: "string", description: "File to read, relative to the workspace root." },
+        offset: {
+          type: "integer",
+          description:
+            "Optional byte offset to start at. Use with 'length' to read part of a large file, " +
+            "such as the header of a binary.",
+        },
+        length: { type: "integer", description: "Optional number of bytes to read. Defaults to the whole file." },
       },
       required: ["path"]
     },
@@ -408,14 +484,44 @@ export function createReadFileTool(): Tool {
       }
       if (!info.isFile()) return fail("read_file", `not a regular file: ${target}`);
       if (info.nlink > 1) return fail("read_file", "hard-linked files are denied");
-      if (info.size > READ_FILE_MAX_BYTES) {
+      const offset = args.offset;
+      const length = args.length;
+      for (const [name, value] of [["offset", offset], ["length", length]] as const) {
+        if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)) {
+          return fail("read_file", `'${name}' must be a non-negative integer`);
+        }
+      }
+      const start = typeof offset === "number" ? offset : 0;
+      // A range read is the answer to large binaries rather than a bigger
+      // ceiling: a PE header sits in the first few hundred bytes of a 92 MB
+      // executable, and hex costs ~4.5 characters per byte, so a whole-file
+      // dump of even the current limit already overflows the context window.
+      const want = typeof length === "number" ? length : READ_FILE_MAX_BYTES;
+      const span = Math.min(want, READ_FILE_MAX_BYTES);
+      if (span === 0) return fail("read_file", "'length' must be greater than zero");
+      if (start >= info.size) return fail("read_file", `offset ${start} is past the end of ${target} (${info.size} bytes)`);
+      if (typeof length !== "number" && start === 0 && info.size > READ_FILE_MAX_BYTES) {
         return fail(
           "read_file",
-          `${target} is ${info.size} bytes, over the ${READ_FILE_MAX_BYTES}-byte limit`
+          `${target} is ${info.size} bytes, over the ${READ_FILE_MAX_BYTES}-byte limit; ` +
+          `pass 'offset' and 'length' to read part of it`,
         );
       }
       try {
-        return { content: await readBoundedFile(resolved, READ_FILE_MAX_BYTES) };
+        const bytes = await readBoundedBytes(resolved, READ_FILE_MAX_BYTES, start, span);
+        if (isRoundTripUtf8(bytes)) return { content: bytes.toString("utf8") };
+        // Say so explicitly. A model that is told this is a hex dump knows to
+        // read offsets and bytes; one handed silent replacement characters has
+        // no way to tell the content was damaged.
+        const partial = start !== 0 || start + bytes.length < info.size;
+        return {
+          content:
+            `[binary file: ${info.size} bytes total` +
+            (partial ? `; showing bytes ${start}-${start + bytes.length - 1}` : "") +
+            `; hex, not text]\n` +
+            `offset    hex${" ".repeat(HEX_ROW_BYTES * 3 - 4)}ascii\n` +
+            hexDump(bytes, start),
+        };
       } catch (error) {
         return fail("read_file", `cannot read ${target}: ${(error as Error).message}`);
       }

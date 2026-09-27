@@ -23,7 +23,7 @@
 | [runtime.ts](../src/runtime.ts)：AgentRuntime.send/sendTurn/runToolCalls/compact/formatBudget | 持锁整轮、预检查、`sendTurn` 在写任何日志前生成 TaskSpec（可 `enforceTaskSpec` 硬拒，默认关）、基因选择（TaskSpec 的 intent/信号喂 GeneStore.selectFor，选中块注入系统提示=测试时进化）、**每轮一个 PDRI 周期**（用户轮落盘后才开周期，故拒绝不留痕；execute-start → 模型工具循环 → review-ready(机械评估) → integrate-ready → complete；任何异常都发 fail 收口并记 outcome）、可选周期账本、模型工具循环（统计工具错误数供评估）、activity、取消关联补齐、预算（模型调用/每步工具/整轮工具/整轮deadline/prompt字节/input token/按模型窗口/可选本机tokenizer）、每次send生成runId、`compact()` 生成并记录摘要边界、`RunBudget` 报告已用与上限 | 默认10步、每步8次、整轮32次、deadline 300000ms、prompt 524288字节、input 131072 tokens；deadline送达adapter但无法强杀忽略signal的进程内代码；字节上限不是token计数；token上限优先取本机tokenizer计数（需宿主注入，不内置分词器），否则取provider实测值因此首轮无测量；按模型窗口只作用于token上限，不派生出字节上限；outcome 记账失败会让该轮报错（库是进化的账本，不静默丢行）；失败归因只按本模块错误类/abort/适配器消息前缀，其余归 unknown（D14/D15） |
 | [types.ts](../src/types.ts)：ChatMessage/ModelAdapter/ToolCall | TypeScript协议接口；`ChatUsage.reasoningTokens` 为 provider 上报的子集标记；`ChatResponse.reasoning` **刻意不放在 ChatMessage 上**，使"推理不落盘、不回传"成为类型形状的性质 | ChatMessage 仍非角色判别联合；类型不等于运行时校验；无流式接口 |
 | [response-validation.ts](../src/response-validation.ts)：record/tokenCount/validateResponse | 响应形状、非负安全整数用量、本批唯一非空调用ID；可选的 `reasoning` 字符串与 `reasoningTokens` 同样只做畸形拒绝 | 缺失用量仍可映射0；不解释工具参数（由tools在分发前校验）；**不校验** reasoningTokens 是否真是输出子集 |
-| [openai-adapter.ts](../src/openai-adapter.ts)：createOpenAIChatAdapter/parseSseCompletion/CHAT_RESPONSE_MAX_BYTES | chat/completions、function wire映射、timeout/abort、结构校验、响应体1MiB硬上限、`reasoning_content` 与 `completion_tokens_details.reasoning_tokens` 解析（缺失即缺失，非字符串拒绝）；`stream:true` 时把 SSE 分片组装回同形状 payload 并复用后续全部校验 | 非增量读取（整段受1MiB约束后才解析）；无重试；上限按字节实收计数，不信任content-length；本机socket与真实端点（含流式工具往返）已联调；其它推理字段命名未适配 |
+| [openai-adapter.ts](../src/openai-adapter.ts)：createOpenAIChatAdapter/parseSseCompletion/CHAT_RESPONSE_MAX_BYTES/DEFAULT_MAX_TOKENS | chat/completions、function wire映射、timeout/abort、结构校验、响应体1MiB硬上限、`reasoning_content` 与 `completion_tokens_details.reasoning_tokens` 解析（缺失即缺失，非字符串拒绝）；`stream:true` 时把 SSE 分片组装回同形状 payload 并复用后续全部校验；**每次请求都发 `max_tokens`**（D39，默认 8192、可覆盖：本项目在预算/字节/期限上的一致规则是"调用方声明上限"，且它原本**完全缺失**该字段） | 非增量读取（整段受1MiB约束后才解析）；无重试；上限按字节实收计数，不信任content-length；本机socket与真实端点（含流式工具往返）已联调；其它推理字段命名未适配。**实测警告（D39）**：部分提供方**静默丢弃 `tools` 并回纯文本**（HTTP 200，`tool_calls` 为空）——`deepseek-v4.1-flash`/`gpt-6-sol` 实测如此，表现为模型反复说 `function call failed, not handled`（该串在本仓库源码零命中，是网关合成话术）；**故 200 ≠ 工具可用**，预检需分开探测"推理可用性"与"工具可调用性" |
 | [bounded-read.ts](../src/bounded-read.ts)：readBoundedUtf8 | 唯一的字节上限文本读取：按实收字节计数，超限中断并关闭底层流 | 只做上限与解码；不解码流式增量、不做内容类型判断 |
 | [echo-adapter.ts](../src/echo-adapter.ts)：createEchoAdapter/createScriptedAdapter | 离线回显/确定性脚本测试 | Echo不是大模型、不自主调用工具 |
 | [security-config.ts](../src/security-config.ts)：canonicalPath/resolveRuntimePaths/assertReadablePath/isWithin/configuredContextWindows | native真实路径、缺失叶子祖先、保护根、敏感路径规则、唯一的包含判定 `isWithin`、按模型窗口环境解析 | 命名策略非DLP；不消除本地并发替换竞态 |
@@ -57,6 +57,7 @@ Runtime → Adapter → response-validation
 Runtime → Adapter → bounded-read（响应体上限）
 Runtime → ToolRegistry → read_file → security-config
 Runtime → ToolRegistry → read_file → bounded-read（文件读取上限）
+Runtime → ToolRegistry → read_file → hex dump / offset+length 范围读（D38：非UTF-8或含NUL才走，文本逐字节不变）
 Runtime → tool-environment → security-config
 ```
 

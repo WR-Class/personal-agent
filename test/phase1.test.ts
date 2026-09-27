@@ -137,9 +137,34 @@ describe("openai adapter", () => {
 
     const response = await adapter.chat({ messages: [{ role: "user", content: "ping" }] });
     assert.equal(seenUrl, "https://example.test/v1/chat/completions");
-    assert.deepEqual(seenBody, { model: "test-model", messages: [{ role: "user", content: "ping" }] });
+    // `max_tokens` is part of the body now, not an omission: the caller declares
+    // the ceiling, and a gateway was measured returning 502 without the field.
+    assert.deepEqual(seenBody, {
+      model: "test-model",
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 8192,
+    });
     assert.equal(response.content, "pong");
     assert.deepEqual(response.usage, { inputTokens: 7, outputTokens: 2 });
+  });
+
+  it("sends the operator's maxTokens when given one", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = createOpenAIChatAdapter({
+      baseUrl: "https://example.test/v1",
+      apiKey: "secret",
+      model: "m",
+      maxTokens: 77,
+      fetchImpl: async (_url, init) => {
+        seenBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({ model: "m", choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    await adapter.chat({ messages: [{ role: "user", content: "x" }] });
+    assert.equal(seenBody.max_tokens, 77);
   });
 
   it("throws with the status code on an HTTP error", async () => {
