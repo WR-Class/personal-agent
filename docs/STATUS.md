@@ -77,7 +77,7 @@
 
 ## 证据与文档导航
 
-- [CODE_MAP](CODE_MAP.md)：当前 16 个源码模块与完整调用链，不再使用最初快照行号。- [AUDIT](AUDIT.md)：A01–A17 原始风险摘要、当前修复/残余及源码/测试映射。
+- [CODE_MAP](CODE_MAP.md)：当前 24 个源码模块与完整调用链，不再使用最初快照行号。- [AUDIT](AUDIT.md)：A01–A17 原始风险摘要、当前修复/残余及源码/测试映射。
 - [SWARM_LOOP](SWARM_LOOP.md)：蜂群本地闭环基线——逐环节现状/缺口/最终形态/验收条件、与 M2/M6 的边界、外部对照采用与不采用、实施顺序与端到端验收。
 - [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md)：研究证据与实际采用程度分开。
 - [SAFETY](SAFETY.md)：当前有效保护与限制。
