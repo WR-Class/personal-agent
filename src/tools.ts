@@ -17,7 +17,7 @@ import type { JsonSchema, ToolCall, ToolDefinition } from "./types.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { isIssuedToolEnvironment } from "./tool-environment.ts";
 import { assertReadablePath } from "./security-config.ts";
-import { filePolicy } from "./file-policy.ts";
+import { actionBinding, filePolicy } from "./file-policy.ts";
 import type { FileGrant } from "./file-policy.ts";
 import { readBoundedUtf8 } from "./bounded-read.ts";
 
@@ -112,8 +112,21 @@ async function denied(name: string, reason: string, context: ToolContext): Promi
 /** Ask once unless this exact call already has an unexpired grant. */
 async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
   const now = Date.now();
-  const expected = JSON.stringify(args);
-  const granted = context.grants?.some((grant) => grant.tool === name && grant.argumentsJson === expected && now <= grant.expiresAt) === true;
+  // Bound to the action's content hash, not to the spelling of its arguments, so
+  // an identical action written with keys in another order is still a cache hit
+  // (D29) while any changed value is still a miss.
+  const expected = actionBinding(name, args);
+  const granted = context.grants?.some((grant) => {
+    if (now > grant.expiresAt) return false;
+    // A grant whose arguments cannot be read is ignored rather than fatal: it
+    // grants nothing, which is the safe reading, and it must not take the whole
+    // tool call down with it.
+    try {
+      return actionBinding(grant.tool, JSON.parse(grant.argumentsJson)) === expected;
+    } catch {
+      return false;
+    }
+  }) === true;
   if (granted) return undefined;
   if (!context.approve) return "no approval channel is configured";
   const approved = await context.approve(prompt);
