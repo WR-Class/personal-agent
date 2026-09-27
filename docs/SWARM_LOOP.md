@@ -41,10 +41,11 @@
 
 | 环节 | 状态 | 现有实现 | 主要缺口 |
 |---|---|---|---|
+| 写入门与硬预算 | ✅ | `src/write-budget.ts`：每周期账本（不同路径计文件、内容可读时计行、读不出记 `null` 不估算）；**执行前**检查，拒绝即写入未发生；拒绝以失败工具结果 + `audit(denied)` 呈现；基因 `constraints` 成为本轮预算，无基因轮用默认 3/200；`SendResult.budget` 报告 `filesWritten/linesWritten` 与其上限（只在发生写入时打印） | 不覆盖 shell 写入（无 shell）；无零预算表达；账本每周期独立、不跨周期累计 |
 | TaskSpec 任务契约 | ✅ 基础版 | `src/taskspec.ts`：schema 2；原输入、目标、关键词意图、请求信号、运行时模式、unknowns；`sendTurn` 在写任何日志前生成 | 意图分类较粗；无验收条件字段；约束未全部下发执行层；与评估之间仍无回路（评估只写 outcome，不回写 spec） |
 | 基因定义与存储 | ✅ | `src/gene.ts` 铸造不变量与内容寻址；`src/gene-store.ts` 追加式 JSONL、状态=折叠、幂等入库、截断尾容忍；outcome 行含 `status`/`failureClass` | 无基因版本/血缘；无修订与淘汰；无组合基因 |
 | 基因选择 | ✅ 基础版（含反馈） | intent 门控 + 信号重叠（词元与中文子串）+ 拉普拉斯平滑成功率 + 新近度（只认最后一次**成功**）+ 连续失败隔离（`quarantineStreak`=2）；零重叠即排除 | 选择理由与候选分数未落盘（只有被选中者进 SendResult）；无探索/利用权衡；失败归因不细分到"基因错还是任务错" |
-| PDRI 执行 | ✅ 骨架 | `src/cycle.ts` 纯状态机：`planned→executing→reviewing→integrating→completed`，异常 `failed/cancelled`；顺序错乱抛错、终点不可逆、**评审未通过不得整合**；`src/cycle-store.ts` 追加式 `cycles.jsonl`，状态=对事件日志折叠可重放；runtime 每个 send 一个周期（`cycleId`=`runId`） | 无返工轮次（v1 单趟）；无阶段级文件/行数硬预算（写入门那一片）；无悬空周期定时收口（单进程串行，暂不可能）；Plan 阶段目前= TaskSpec+基因+既有预算事实，没有独立的计划产物 |
+| PDRI 执行 | ✅ 骨架 + 写入门与硬预算 | `src/cycle.ts` 纯状态机：`planned→executing→reviewing→integrating→completed`，异常 `failed/cancelled`；顺序错乱抛错、终点不可逆、**评审未通过不得整合**；`src/cycle-store.ts` 追加式 `cycles.jsonl`，状态=对事件日志折叠可重放；runtime 每个 send 一个周期（`cycleId`=`runId`）；**`src/write-budget.ts` 每周期账本**：不同路径精确计文件、只在参数真带内容时计行、读不出就记 `null` 不估算；**拒绝发生在执行之前**（被拒写入根本没发生，不留半写文件），拒绝以失败工具结果 + `audit(denied)` 呈现而非抛异常；**选中基因的 `maxFiles`/`maxLines` 就是本轮预算**（constraints 从记录变成机械强制），无基因轮用默认 3 文件/200 行 | 无返工轮次（v1 单趟）；无悬空周期定时收口（单进程串行，暂不可能）；Plan 阶段目前= TaskSpec+基因+既有预算事实，没有独立的计划产物；账本不覆盖 shell 造成的写入（无 shell）；无"整轮不许写"的表达方式（零预算被参数守卫拒绝） |
 | 结果评估 | ✅ 机械版 | `evaluateRun`：从 steps/toolCalls/toolErrors + 失败类别读出 `success/partial/failed/blocked`，证据逐条落盘，`reviewer: "mechanical"`；**不采信模型自报成功**；失败归因区分 budget/model/validation/cancelled/unknown | 没有独立评审者（另一个模型/另一轮）；`objectiveSatisfied` 这类"目标是否达成"的判断仍无机械依据，因此**没有**这个字段；低置信度结果无人工复核入口 |
 | 能力沉淀 | ✅ 基础闭环 + 蒸馏 + 归纳草稿 | outcome 行带四态与失败类别；无基因轮记基线（`address: null`）；表达式折出 attempts/successes/lastSuccessAt/streak；选择器消费这些统计（已测：一次失败即改变下一轮选择）；**失败档案** = outcome 行带 `intent`/`signals`/`evidence`，`geneStore.failures()` 读出；**蒸馏** = `src/distill.ts` 纯函数：按 (intent, 失败类别) 分组、保留达到阈值（3）的复发信号、产出**只含 guard 步**的 Gene 草稿 + 机械证据；**归纳** = `src/induct.ts` 纯函数：只取 **无基因的成功轮**（用过基因的不是缺口），按 intent 分组保留复发信号（阈值 2），产出候选草稿——其 act 步骤**就是转录事实证明用过的工具顺序**；`--distill` / `--induct` 打印草稿并按已有基因去重 | **归纳不产出策略洞见**：转录能证明"调用了哪些工具、什么顺序"，不能推出"应该先读再改"，那需要把意图读进工具序列（模型叙述），正是 D14/D16 禁止的，所以草稿附一句 caveat 明说这一点；草稿**不含 validation**，`mintGene` 拒绝（蒸馏的 guard 草稿还会因"有 act 无 verify"再被拒一次）——操作者必须补真正的验证命令；无增益定价；无失败档案的独立查询面 |
 
@@ -100,7 +101,8 @@ executing/reviewing → failed | blocked | cancelled
 - 四个阶段各有输入、输出与结束原因；
 - 取消、超时、失败都能明确收口（含被取代的悬空周期）；
 - Review 未通过时**不能**标记完成；
-- 只有 Integrate 完成后才进入能力沉淀。
+- 只有 Integrate 完成后才进入能力沉淀；
+- **写入受每周期账本约束**：超预算的写入在执行前被拒，被拒的写入不留痕（无半写文件、无悬空工具关联），拒绝记入 `audit`；选中基因的 constraints 就是本轮预算。
 
 ### 3.4 结果评估
 
@@ -221,11 +223,11 @@ TaskSpec → 选择基因 → PDRI 四阶段 → Review → Outcome → 更新�
 
 ## 8. 当前下一步
 
-阶段 A（最小闭环）、阶段 C 前半（失败档案 + 蒸馏）与后半（成功归纳）已落地并测试。接着做：
+阶段 A（最小闭环）、阶段 C（失败档案 + 蒸馏 + 成功归纳）与写入门硬预算已落地并测试。接着做：
 
-1. **写入门与硬预算**：每周期累计文件/行数账本，超预算即拒（D13 已记；此时基因 constraints 才从"记录"变成"机械强制"）。
-2. **独立评审角色**：把 `reviewer` 从 `mechanical` 扩展出去（另一个模型或另一轮），并要求评审者不能是执行者。
-3. **增益定价**：基线行（`address: null`）已从第一天积累，数据够厚后做"用了基因 vs 没用"的反事实对照。
-4. **真正的策略归纳前置条件**：现在归纳只能证明工具顺序；要归纳出 guard/verify 语义，必须先有可机械判定的策略真值（M3 能跑 validation 命令），否则不许用模型叙述补这一步（D17）。
+1. **独立评审角色**：把 `reviewer` 从 `mechanical` 扩展出去（另一个模型或另一轮），并要求评审者不能是执行者。
+2. **增益定价**：基线行（`address: null`）已从第一天积累，数据够厚后做"用了基因 vs 没用"的反事实对照——**没有它，基因库的进化无法被证伪**。
+3. **真正的策略归纳前置条件**：现在归纳只能证明工具顺序；要归纳出 guard/verify 语义，必须先有可机械判定的策略真值（M3 能跑 validation 命令），否则不许用模型叙述补这一步（D17）。
+4. **M3 进程工具接入时复用同一账本**：当前写入门只覆盖六个文件工具，shell 造成的写入尚未计入（D18 已记）。
 
 本文件状态随上述步骤逐条更新。

@@ -12,6 +12,7 @@ import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
+import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import type { GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
@@ -78,6 +79,16 @@ export interface AgentRuntimeOptions {
   /** Maximum tool invocations across one `send`. Defaults to {@link DEFAULT_MAX_TOOL_CALLS_PER_RUN}. */
   maxToolCallsPerRun?: number;
   /**
+   * Distinct files one cycle may write when no gene constrains the round.
+   * Defaults to {@link DEFAULT_WRITE_MAX_FILES}. A gene's own `maxFiles` wins.
+   */
+  maxWriteFiles?: number;
+  /**
+   * Lines one cycle may add or change when no gene constrains the round.
+   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene's own `maxLines` wins.
+   */
+  maxWriteLines?: number;
+  /**
    * Wall-clock ceiling for one `send`, in milliseconds.
    *
    * Without it the loop is bounded only by the number of calls, and a slow
@@ -141,6 +152,9 @@ export interface AgentRuntimeOptions {
 
 export const DEFAULT_MAX_TOOL_CALLS_PER_STEP = 8;
 export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 32;
+/** A round with no gene applied still gets a write budget: unbounded is not a default. */
+export const DEFAULT_WRITE_MAX_FILES = 3;
+export const DEFAULT_WRITE_MAX_LINES = 200;
 export const DEFAULT_DEADLINE_MS = 300_000;
 export const DEFAULT_MAX_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 131_072;
@@ -323,6 +337,11 @@ export interface RunBudget {
   reasoningTokens?: number;
   elapsedMs: number;
   deadlineMs: number;
+  /** Writes charged to this cycle, against the budget the round ran under (D18). */
+  filesWritten?: number;
+  filesWrittenLimit?: number;
+  linesWritten?: number;
+  linesWrittenLimit?: number;
 }
 
 /**
@@ -353,6 +372,10 @@ export function formatBudget(budget: RunBudget): string {
     // that a two-word answer can still burn a thousand output tokens; hiding it is
     // what made the spend look inexplicable.
     (budget.reasoningTokens === undefined ? "" : ` · 推理 ${budget.reasoningTokens}`) +
+    // Printed only once a write budget was established (the field is optional on
+    // the type). Showing writes only when they happened keeps a read-only round's
+    // budget line exactly as short as it was.
+    (budget.filesWritten === undefined ? "" : ` · 写入 ${budget.filesWritten}/${budget.filesWrittenLimit} 文件 ${budget.linesWritten}/${budget.linesWrittenLimit} 行`) +
     ` · 用时 ${time(budget.elapsedMs)}/${time(budget.deadlineMs)}]`;
 }
 
@@ -462,6 +485,10 @@ export class AgentRuntime {
   private outcomeSpec: { intent: TaskIntent; signals: readonly string[] } | undefined;
   /** Tools this round actually called, in order (D17). */
   private outcomeTools: string[] | undefined;
+  /** Cumulative writes for the cycle in flight (D18). */
+  private writeLedger: LedgerState = { files: [], lines: 0 };
+  private writeBudget: WriteBudget;
+  private readonly defaultWriteBudget: WriteBudget;
   private readonly geneStore: GeneStore | undefined;
   private readonly cycleStore: CycleStore | undefined;
   private readonly temperature: number | undefined;
@@ -496,6 +523,11 @@ export class AgentRuntime {
     this.maxSteps = positiveInt("maxSteps", options.maxSteps, DEFAULT_MAX_STEPS);
     this.maxToolCallsPerStep = positiveInt("maxToolCallsPerStep", options.maxToolCallsPerStep, DEFAULT_MAX_TOOL_CALLS_PER_STEP);
     this.maxToolCallsPerRun = positiveInt("maxToolCallsPerRun", options.maxToolCallsPerRun, DEFAULT_MAX_TOOL_CALLS_PER_RUN);
+    this.writeBudget = {
+      maxFiles: positiveInt("maxWriteFiles", options.maxWriteFiles, DEFAULT_WRITE_MAX_FILES),
+      maxLines: positiveInt("maxWriteLines", options.maxWriteLines, DEFAULT_WRITE_MAX_LINES),
+    };
+    this.defaultWriteBudget = this.writeBudget;
     this.deadlineMs = positiveInt("deadlineMs", options.deadlineMs, DEFAULT_DEADLINE_MS);
     this.maxContextBytes = positiveInt("maxContextBytes", options.maxContextBytes, DEFAULT_MAX_CONTEXT_BYTES);
     this.maxContextTokens = positiveInt("maxContextTokens", options.maxContextTokens, DEFAULT_MAX_CONTEXT_TOKENS);
@@ -621,7 +653,7 @@ export class AgentRuntime {
     if (isAbortError(error)) return "cancelled";
     if (error instanceof StepLimitError || error instanceof ToolBudgetError
       || error instanceof DeadlineExceededError || error instanceof ContextBudgetError
-      || error instanceof TokenBudgetError) return "budget";
+      || error instanceof TokenBudgetError || error instanceof WriteBudgetError) return "budget";
     const message = error instanceof Error ? error.message : "";
     if (message.startsWith("invalid model response") || message.startsWith("model ")) return "model";
     return "unknown";
@@ -650,6 +682,11 @@ export class AgentRuntime {
     this.outcomeAddress = applied?.address ?? null;
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
     this.outcomeTools = [];
+    // A fresh cycle starts with an empty ledger. A gene's constraints bound the
+    // round; with no gene applied the runtime default still applies, because
+    // "unbounded" is not a safe default (D18).
+    this.writeLedger = { files: [], lines: 0 };
+    this.writeBudget = budgetFor(applied?.constraints ?? null, this.defaultWriteBudget);
 
     await this.ensureSession();
     signal?.throwIfAborted();
@@ -782,6 +819,10 @@ export class AgentRuntime {
             ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
             elapsedMs: Date.now() - startedAt,
             deadlineMs: this.deadlineMs,
+            filesWritten: this.writeLedger.files.length,
+            filesWrittenLimit: this.writeBudget.maxFiles,
+            linesWritten: this.writeLedger.lines,
+            linesWrittenLimit: this.writeBudget.maxLines,
           },
         };
       }
@@ -823,8 +864,34 @@ export class AgentRuntime {
       audit: (event) => this.store.appendAudit(this.sessionId, event).then(() => undefined),
     };
     let errors = 0;
+    let index = 0;
     for (const call of calls) {
+      const position = index++;
       this.outcomeTools?.push(call.name);
+      // Write budget, checked before the tool runs. A refusal here means the
+      // write never happened, so it cannot leave a partially written file or a
+      // dangling tool correlation behind — the same rule the count budgets above
+      // follow. The refusal is recorded as a failed tool result rather than
+      // thrown, so the model sees it and one over-budget call cannot abort a
+      // round that has other work left to do.
+      const attempt = readWriteAttempt(call.name, call.arguments);
+      if (attempt !== null) {
+        const decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
+        if (!decision.allowed) {
+          errors += 1;
+          this.activity({ type: "tool-start", name: call.name });
+          this.activity({ type: "tool-end", name: call.name, isError: true });
+          await this.store.appendAudit(this.sessionId, {
+            tool: call.name, decision: "denied", reason: `write budget: ${decision.reason}`,
+          });
+          await this.store.appendMessage(
+            this.sessionId,
+            { role: "tool", content: `refused: ${decision.reason}`, toolCallId: call.id },
+            { runId, step, isError: true },
+          );
+          continue;
+        }
+      }
       // Complete pending tool correlations even after cancellation, but never start another executor.
       let result;
       if (signal?.aborted) result = { content: "cancelled: tool was not executed", isError: true };
@@ -838,6 +905,9 @@ export class AgentRuntime {
       // One line, not three (ADR-0001): the assistant turn above already recorded
       // what was requested, so this message is the whole record of what came back.
       if (result.isError === true) errors += 1;
+      // Only a write that actually happened is charged. A failed write consumed
+      // no budget, so the ledger stays a record of the workspace, not of intent.
+      else if (attempt !== null) this.writeLedger = chargeWrite(this.writeLedger, attempt, position);
       await this.store.appendMessage(
         this.sessionId,
         { role: "tool", content: result.content, toolCallId: call.id },

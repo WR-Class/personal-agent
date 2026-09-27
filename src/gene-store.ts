@@ -65,6 +65,12 @@ export interface AppliedGene {
   readonly name: string;
   /** The block injected into this send's system prompt (test-time evolution). */
   readonly block: string;
+  /**
+   * The gene's own write limits, carried for the enforcement layer rather than
+   * the prompt: a constraint that is only written into a prompt is a suggestion,
+   * so these bound the round mechanically (D18).
+   */
+  readonly constraints: Gene["constraints"];
 }
 
 export class GeneStore {
@@ -221,7 +227,7 @@ export class GeneStore {
     const candidates = [...state.genes.entries()].map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression }));
     const { selection } = selectGene(candidates, request, DEFAULT_SELECTION_POLICY, now);
     if (!selection) return undefined;
-    return { address: selection.address, name: selection.gene.name, block: renderGeneBlock(selection) };
+    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, block: renderGeneBlock(selection) };
   }
 }
 
