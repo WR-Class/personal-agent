@@ -74,6 +74,24 @@
 - 同级 `dsh-session-format\lib\index.js`：55–84，版本检查及 detached JSON 冻结。
 - 未逐个验证历史迁移 codec 正确性；不作“唯一具有这套机制”的结论。
 
+### 源码根的归属（**重要，易误解**）
+`_research/repos/` 位于 `D:\DSHXM\AgentKHD\` 下，而 **git 仓库根是 `D:\DSHXM\AgentKHD\personal-agent\`**，因此**参考源码在版本控制之外，从未被提交**。它**确实存在于本机**（9 个 agent、约 3.6 万个文件），但**不会出现在 GitHub 上**。这是刻意的：它们是**第三方代码**（各自有自己的许可证与贡献规范，例如 `_research/repos/goose/AGENTS.md` 是 goose 自己的贡献指南，**不是本项目的指示**），不应混入本仓库，体量也不可接受。
+
+**因此本文的索引是唯一可携带的证据**：源码可能不在别人的机器上，结论必须靠"哪一行、哪个符号"站住。若某条结论只有项目名而无可核对的位置，应视为**未取证**。
+
+### 权限档位与命令执行（2026-09-28 复核，只读）
+
+本次为"给模型手脚"读了下列源码，**逐条给出可核对位置**：
+
+- **crush** — [bash.go](../../_research/repos/crush/internal/agent/tools/bash.go)：25–31 `BashParams`，其中 27 行 `Command string`（`description:"The command to execute"`）、28 行 `WorkingDir`、29 行 `RunInBackground`、30 行 `AutoBackgroundAfter`（54 行注释：默认 60 秒转后台）；55 行 `MaxOutputLength = 30000`。
+- **crush 的白名单机制（此前索引缺失）** — [safe.go](../../_research/repos/crush/internal/agent/tools/safe.go)：9 行 `safeCommands`；69–75 `containsCommandChaining` 只查 `;`、`|`、`&&`、`$(`、反引号。**已实测其漏项**：`ls & rm -rf /`（单 `&`）、换行分隔的第二条命令、`git status > /etc/passwd` 均**不被判为链式**。**但这不是安全缺陷**：`bash.go` 213 行仅在**未**检测到链式**且**命中白名单时免问（237 行起），**其余一律走审批**——即白名单只是**降打扰优化**，安全性由其 fail-closed 兜底。本项目**不采用**该白名单表达法（检测字符串这一形态本身是错方向），但**采用**其 fail-closed 兜底。
+- **goose 的四档定义（此前索引缺失）** — [goose_mode.rs](../../_research/repos/goose/crates/goose-provider-types/src/goose_mode.rs)：`pub enum GooseMode { Auto, Approve, SmartApprove, Chat }`，各变体带 `strum(message=...)` 原文："Automatically approve tool calls" / "Ask before every tool call" / "Ask only for sensitive tool calls" / "Chat only, no tool calls"。
+- **goose 的判定顺序** — [permission_inspector.rs](../../_research/repos/goose/crates/goose/src/permission/permission_inspector.rs)：144–196 `inspect`，五层为 ①用户设定权限（164）②工具自带 `read_only_hint` 标注（173–174，见 52–63 `apply_tool_annotations`）③扩展管理必问（178）④交 LLM 判只读（183–189，229 起）⑤**默认问**（192–193）。
+- **codex 的二维档位** — [shared.rs](../../_research/repos/codex/codex-rs/app-server-protocol/src/protocol/v2/shared.rs)：`enum AskForApproval { UnlessTrusted, OnRequest, Granular{..} }`；[config_requirements.rs](../../_research/repos/codex/codex-rs/config/src/config_requirements.rs)：`enum SandboxModeRequirement { ReadOnly, WorkspaceWrite, DangerFullAccess }`。**沙箱与审批是两条独立的轴**，与 D22 的结论一致。
+- **claude-code 的档位（此前索引缺失）** — [claude-code.d.ts](../../_research/repos/claude-code/mods/types/claude-code.d.ts)：`type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto'`。
+
+**未验证**：以上各项目的运行时行为（只读源码）；goose 的 LLM 只读判定所用提示词与准确率；crush 白名单在真实交互中的免问比例。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
