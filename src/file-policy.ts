@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "./gene.ts";
 import { RULE_TIERS, decide } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
-import { READ_ONLY_TOOLS } from "./write-tools.ts";
+import { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
 export interface FileGrant {
   tool: string;
@@ -14,6 +14,16 @@ export interface FileGrant {
 const FILE_TOOLS = ["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"];
 
 /**
+ * Every tool that changes something, derived rather than restated.
+ *
+ * Listing these names a second time is what produced the earlier defect: a tool
+ * offered by a tier but denied by this table, so the model was told to use
+ * something it could never call. `run_command` joins by being in `WRITE_TOOLS`,
+ * which is the same list the tiers read, so the two answers cannot drift.
+ */
+const APPROVAL_TOOLS: readonly string[] = [...FILE_TOOLS, ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool))];
+
+/**
  * The built-in rules. These express exactly what the previous hardcoded switch
  * did — read allowed, the six file tools approved, everything else denied — so
  * that swapping the mechanism is not also a change in behaviour. The difference
@@ -21,7 +31,7 @@ const FILE_TOOLS = ["edit_file", "patch_file", "create_file", "delete_file", "re
  * audit trail by id, and overridden by a higher tier without editing this file.
  */
 export const DEFAULT_RULES: readonly Rule[] = [
-  ...FILE_TOOLS.map((tool): Rule => ({
+  ...APPROVAL_TOOLS.map((tool): Rule => ({
     id: `file-tools.${tool}`,
     tool,
     decision: "approve",

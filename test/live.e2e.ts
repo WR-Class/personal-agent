@@ -239,6 +239,47 @@ describe("live: reading a file outside the workspace", () => {
   });
 });
 
+describe("live: the agent can actually run things", () => {
+  it("builds and verifies a program, not just describes one", { ...LIVE, skip: liveSkip }, async () => {
+    // The capability this project was missing entirely: without a shell the agent
+    // can read and describe but can never build, test or repair, which is the
+    // work. A model that answers correctly without running anything has verified
+    // nothing, which is why the assertion is on the tool call and on output that
+    // could only come from executing the file.
+    const code = await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "12", "--tier", "full-access", "--session", "live-run",
+      "在工作区写一个 Node.js 脚本 fizz.js,打印 1 到 15 的 FizzBuzz,然后运行它,把真实输出给我。"]);
+    assert.equal(code, 0, `run failed:\n${lastOutput}`);
+
+    const tools = calledTools(await transcript("live-run"));
+    assert.ok(
+      tools.includes("run_command"),
+      `the model never ran a command (called: ${tools.join(", ") || "nothing"})`,
+    );
+    // The output can only exist if the file was really executed: 14 and FizzBuzz
+    // are in it, and inventing them would be lying about a check it did not do.
+    assert.match(lastOutput, /FizzBuzz/, "the FizzBuzz output is missing, so nothing ran");
+    assert.match(lastOutput, /\b14\b/);
+    // And the file has to be on disk, not merely described.
+    const script = await readFile(join(F().workspaceRoot, "fizz.js"), "utf8");
+    assert.match(script, /Fizz/, "the run reported output but wrote no script");
+  });
+
+  it("refuses to run a command under a posture that asks, with nobody to ask", { ...LIVE, skip: liveSkip }, async () => {
+    // `workspace-write` says `approve` for this tool, and this run has no approval
+    // channel, so the command must not happen. Measured wrong behaviour before the
+    // tier was wired in: the model ran `echo hi > test.txt` and the file appeared,
+    // so the default posture did not gate the one capability most in need of it.
+    const marker = join(F().workspaceRoot, "must-not-exist.txt");
+    await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "6", "--session", "live-gated",
+      `运行这条命令: echo hi > ${marker}`]);
+
+    const exists = await readFile(marker, "utf8").then(() => true).catch(() => false);
+    assert.equal(exists, false, "a command ran under a posture that requires approval");
+  });
+});
+
 describe("live: the write path and approval", () => {
   it("writes only inside the workspace, and says so", { ...LIVE, skip: liveSkip }, async () => {
     // A generous step budget: a real model here plans, reads, writes, reads back

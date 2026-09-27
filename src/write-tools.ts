@@ -30,8 +30,17 @@
  */
 export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file"];
 
-/** The write tools, added only by the tiers that allow writing. */
+/**
+ * Tools that change something outside the conversation.
+ *
+ * `run_command` belongs here rather than in the read-only list even though many
+ * commands only read: the tool itself makes no such promise, and a classification
+ * that assumed it would be a guess about arbitrary input. The consequence is
+ * intended — a tier that does not offer it genuinely does not have it, which is
+ * what makes the read-only posture mean something.
+ */
 export const WRITE_TOOLS: readonly string[] = [
+  "run_command",
   "edit_file",
   "patch_file",
   "create_file",

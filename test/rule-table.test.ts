@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_RULES, filePolicy } from "../src/file-policy.ts";
+import { WRITE_TOOLS } from "../src/write-tools.ts";
 import { MAX_PRIORITY, RULE_TIERS, decide, effectivePriority } from "../src/rule-table.ts";
 import type { Rule } from "../src/rule-table.ts";
 
@@ -12,11 +13,28 @@ function rule(overrides: Partial<Rule> & Pick<Rule, "id" | "decision">): Rule {
 describe("rule table: behaviour is preserved", () => {
   it("reproduces the switch it replaced", () => {
     assert.equal(filePolicy("read_file"), "allow");
+    assert.equal(filePolicy("inspect_file"), "allow");
     for (const tool of ["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"]) {
       assert.equal(filePolicy(tool), "approve", tool);
     }
     assert.equal(filePolicy("no_such_tool"), "deny");
-    assert.equal(filePolicy("run_command"), "deny");
+  });
+
+  it("treats run_command as a tool that must be approved", () => {
+    // It used to be denied, and this assertion used to say so. That was correct
+    // while the agent had no way to run anything; the capability now exists, so
+    // the default posture for it is to ask, not to refuse. Denying it by default
+    // would make the tool present-but-unusable, which is the defect this table
+    // was written to prevent.
+    assert.equal(filePolicy("run_command"), "approve");
+  });
+
+  it("derives approval from the same list the tiers do", () => {
+    // The two mechanisms must agree about which tools need approval. Listing the
+    // names a second time here is what let an offered tool be denied earlier.
+    for (const tool of WRITE_TOOLS) {
+      assert.equal(filePolicy(tool), "approve", tool);
+    }
   });
 });
 

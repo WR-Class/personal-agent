@@ -30,6 +30,7 @@ import {
   INSPECTION_MAX_LINES,
   runInspection,
 } from "./inspection-tools.ts";
+import { runShellCommand } from "./shell-tool.ts";
 
 export interface ToolResult {
   content: string;
@@ -73,6 +74,20 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Asked before the one write tool replaces an existing file. */
   approve?(prompt: string): Promise<boolean>;
+  /**
+   * Set by the registry when the rule table decided `allow` for this call.
+   *
+   * Without this the tier could say "do not ask" and the tool would ask anyway,
+   * because the write tools call `approveExact` unconditionally and nothing ever
+   * told them the table had already spoken. Measured: under `full-access`, which
+   * allows everything, `run_command` ran while every file tool failed with "no
+   * approval channel is configured" — the tier's whole purpose defeated for half
+   * the tools it names.
+   *
+   * Only `allow` sets it. An `approve` decision leaves it unset, so the tool asks
+   * as before, and a `deny` is refused by the registry before this matters.
+   */
+  preApproved?: boolean;
   /** Exact grants already approved by a parent operation. */
   grants?: readonly FileGrant[];
   /** Records a denial without changing the conversation. */
@@ -143,6 +158,10 @@ async function denied(name: string, reason: string, context: ToolContext): Promi
 
 /** Ask once unless this exact call already has an unexpired grant. */
 async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
+  // The tier already allowed this call, so asking would contradict the posture
+  // the operator chose. This is what makes `full-access` mean "do not ask"
+  // rather than "do not ask, except for the file tools".
+  if (context.preApproved === true) return undefined;
   const now = Date.now();
   // Bound to the action's content hash, not to the spelling of its arguments, so
   // an identical action written with keys in another order is still a cache hit
@@ -531,6 +550,70 @@ export function createInspectFileTool(): Tool {
   };
 }
 
+/**
+ * Run a shell command (D46).
+ *
+ * This is the capability the agent was missing: without it nothing can be
+ * built, tested, inspected or repaired, because every one of those means
+ * running a program. It is deliberately a real shell rather than a fixed list of
+ * audited commands, because what a command should be depends on what is being
+ * done at the time and cannot be enumerated in advance — the same reason the
+ * operator's earlier instruction gave for the tool axis being undecidable
+ * a priori while the directory axis is fixed.
+ *
+ * What this does *not* do is decide whether the command may run. That is the
+ * permission tier's job, and the table's default is deny, so a tier that does
+ * not name this tool cannot reach it even if it is present.
+ */
+export function createRunCommandTool(): Tool {
+  return {
+    name: "run_command",
+    description:
+      "Run a shell command and return its output. Use this to build, test, search, and inspect: " +
+      "anything you would otherwise type into a terminal. The command runs through the platform " +
+      "shell (cmd.exe on Windows, /bin/sh elsewhere) with the workspace as its working directory, " +
+      "so pipes, redirection and `&&` work as usual. A non-zero exit code is reported together " +
+      "with the output rather than treated as a failure of this tool, so read the output to find " +
+      "out what went wrong and correct the command. Output is capped, and a command that runs " +
+      "too long is killed.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description: "The command to execute, exactly as you would type it in a terminal.",
+        },
+      },
+      required: ["command"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const command = args.command;
+      if (typeof command !== "string" || command.length === 0) {
+        return fail("run_command", "'command' must be a non-empty string");
+      }
+      // The tier decides whether this runs without asking. Measured consequence
+      // of leaving this out: under `workspace-write`, whose rule for this tool is
+      // `approve`, the model ran `echo hi > test.txt` and the file appeared — the
+      // tool ignored the tier entirely, so the default posture did not gate the
+      // one capability most in need of gating.
+      const denial = await approveExact("run_command", args, `Run this command?\n${command}\n本次批准 2 分钟内有效。`, context);
+      if (denial) return denied("run_command", denial, context);
+      // The environment is required rather than optional, so a caller that has
+      // not built one fails loudly here instead of silently running with the
+      // parent process's HOME, which is the operator's.
+      let environment;
+      try {
+        environment = requireToolEnvironment(context);
+      } catch (error) {
+        return fail("run_command", (error as Error).message);
+      }
+      const result = await runShellCommand(command, environment, context.signal);
+      return result.isError ? fail("run_command", result.content) : { content: result.content };
+    },
+  };
+}
+
 export function createReadFileTool(): Tool {
   return {
     name: "read_file",
@@ -892,7 +975,11 @@ export function createBatchFilesTool(): Tool {
         if (typeof name !== "string" || !(name in FILE_ACTIONS)) throw new Error(`operation ${index + 1} has an unknown tool`);
         return `${index + 1}. ${name} ${JSON.stringify(operation)}`;
       });
-      if (!context.approve) return fail("batch_files", "no approval channel is configured");
+      // Under a tier that already allowed this call there is nothing to ask, so
+      // the missing channel is not a problem. Without this the `full-access`
+      // batch path failed for the same reason the single-file tools did.
+      const preApproved = context.preApproved === true;
+      if (!context.approve && !preApproved) return fail("batch_files", "no approval channel is configured");
       const approvedManifest = manifest.join("\n");
       const askedAt = Date.now();
       const denial = await approveExact("batch_files", args, `Approve this exact batch?\n${approvedManifest}\n本次批准 2 分钟内有效，只对这份清单有效。`, context);
@@ -1009,7 +1096,12 @@ export class ToolRegistry {
       return fail(call.name, match.reason ?? "denied by rule");
     }
     try {
-      return await tool.execute(args as Record<string, unknown>, context);
+      return await tool.execute(args as Record<string, unknown>, {
+        ...context,
+        // Passed per call rather than stored on the context the caller supplied,
+        // so one allowed call cannot leak "pre-approved" into the next one.
+        preApproved: match.decision === "allow",
+      });
     } catch (error) {
       return fail(call.name, `threw: ${(error as Error).message}`);
     }

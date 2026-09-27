@@ -10,7 +10,7 @@ import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
 import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool, createRunCommandTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
 import { GeneStore } from "./gene-store.ts";
@@ -344,7 +344,8 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       rule:`tier:${tier.name}`});
     // Built from the tier's tool list, so a posture that does not offer a tool
     // makes it genuinely absent rather than merely refused (D28/D32).
-    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,edit_file:createEditFileTool,patch_file:createPatchFileTool,
+    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,
+      edit_file:createEditFileTool,patch_file:createPatchFileTool,
       create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
       batch_files:createBatchFilesTool} as const;
     const tierTools=tier.tools.map(name=>allTools[name as keyof typeof allTools]());
@@ -354,7 +355,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
-      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace text, and inspect_file for binaries, executables and archives. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. Every action needs its own approval. Respect denied paths; never pretend a tool succeeded.",
+      systemPrompt:"You are a concise, capable assistant working in a real workspace. Use run_command to build, test, search and inspect: anything you would otherwise type into a terminal. Use read_file for workspace text and inspect_file for binaries, executables and archives. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. A command that exits non-zero is not a failure of the tool, so read its output and correct the command rather than reporting the task as impossible. When you change something, verify it by running it. Respect denied paths; never pretend a tool succeeded.",
       ...(interactive && io ? { approve: async (prompt: string) => {
         io.write(`${prompt}\n回答“是”才执行这一次。\n`);
         const answer = await io.ask("批准？> ");
