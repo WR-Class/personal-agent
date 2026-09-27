@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import { canonicalize } from "./gene.ts";
+import { RULE_TIERS, decide } from "./rule-table.ts";
+import type { Decision, Rule } from "./rule-table.ts";
 
 export interface FileGrant {
   tool: string;
@@ -8,13 +10,35 @@ export interface FileGrant {
   expiresAt: number;
 }
 
-const FILE_TOOLS = new Set(["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"]);
+const FILE_TOOLS = ["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"];
+
+/**
+ * The built-in rules. These express exactly what the previous hardcoded switch
+ * did — read allowed, the six file tools approved, everything else denied — so
+ * that swapping the mechanism is not also a change in behaviour. The difference
+ * is that behaviour is now data: a rule can be inspected, attributed in the
+ * audit trail by id, and overridden by a higher tier without editing this file.
+ */
+export const DEFAULT_RULES: readonly Rule[] = [
+  ...FILE_TOOLS.map((tool): Rule => ({
+    id: `file-tools.${tool}`,
+    tool,
+    decision: "approve",
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 10,
+  })),
+  {
+    id: "read-file",
+    tool: "read_file",
+    decision: "allow",
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 50,
+  },
+];
 
 /** Read is allowed. The six file tools need a grant. Everything else is denied. */
-export function filePolicy(tool: string): "allow" | "approve" | "deny" {
-  if (tool === "read_file") return "allow";
-  if (FILE_TOOLS.has(tool)) return "approve";
-  return "deny";
+export function filePolicy(tool: string, rules: readonly Rule[] = DEFAULT_RULES): Decision {
+  return decide(rules, tool, {}).decision;
 }
 
 /**
