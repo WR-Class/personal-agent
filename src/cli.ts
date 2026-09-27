@@ -8,6 +8,7 @@ import { SessionStore } from "./session-store.ts";
 import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_MAX_STEPS, DEFAULT_MAX_TOOL_CALLS_PER_RUN, DEFAULT_MAX_TOOL_CALLS_PER_STEP, formatBudget } from "./runtime.ts";
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
+import { findTier, resolveTier } from "./tiers.ts";
 import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
@@ -57,6 +58,8 @@ export interface CliOptions {
   distill: boolean;
   /** Print induced candidate drafts. Same rule: nothing is minted here. */
   induct: boolean;
+  /** Permission posture name (D32). Unknown names fail rather than fall back. */
+  tier?: string;
 }
 export class UsageError extends Error {}
 function valueFor(argv: readonly string[], index: number, flag: string): string {
@@ -78,6 +81,10 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     maxContextBytes:Number(env.PERSONAL_AGENT_MAX_CONTEXT_BYTES ?? DEFAULT_MAX_CONTEXT_BYTES),
     maxContextTokens:Number(env.PERSONAL_AGENT_MAX_CONTEXT_TOKENS ?? DEFAULT_MAX_CONTEXT_TOKENS),
     echo:false,help:false,preflight:false,distill:false,induct:false,
+    // The permission posture (D32). Read from the flag or the environment, and
+    // deliberately never from a file inside the workspace: a cloned repository
+    // must not be able to grant itself full access.
+    tier:env.PERSONAL_AGENT_TIER,
     // Opt-in: streaming changes the request body (stream_options), so a server that
     // rejects unknown fields must still be reachable on the default path.
     stream:env.PERSONAL_AGENT_STREAM==="1"||env.PERSONAL_AGENT_STREAM==="true" };
@@ -99,6 +106,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--echo")options.echo=true;
     else if(arg==="--preflight")options.preflight=true;
     else if(arg==="--stream")options.stream=true;
+    else if(arg==="--tier")options.tier=valueFor(argv,++i,arg);
     else if(arg==="--mint-gene")options.mintGene=valueFor(argv,++i,arg);
     else if(arg==="--distill")options.distill=true;
     else if(arg==="--induct")options.induct=true;
@@ -243,9 +251,22 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       else if(!config||config.apiKey==="__ASK_AT_START__")throw new UsageError("没有完整模型配置。运行 npm start 配置，或显式 --echo。");
       else adapter=createOpenAIChatAdapter({...config,...(options.stream?{stream:true}:{})});
     }
+    const tier=resolveTier(options.tier);
+    // Removing a boundary is a recorded operator decision, not something that
+    // happens because a label was set (D26/D32). It is written to the session
+    // audit so the choice can be reviewed after the fact.
+    if(tier.removesBoundary)await store.appendAudit(options.session,{tool:"*",decision:"denied",
+      reason:`permission tier "${tier.name}" removes the write prompt; chosen via ${options.tier?"--tier":"PERSONAL_AGENT_TIER"}`,
+      rule:`tier:${tier.name}`});
+    // Built from the tier's tool list, so a posture that does not offer a tool
+    // makes it genuinely absent rather than merely refused (D28/D32).
+    const allTools={read_file:createReadFileTool,edit_file:createEditFileTool,patch_file:createPatchFileTool,
+      create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
+      batch_files:createBatchFilesTool} as const;
+    const tierTools=tier.tools.map(name=>allTools[name as keyof typeof allTools]());
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
-      tools:new ToolRegistry([createReadFileTool(), createEditFileTool(), createPatchFileTool(), createCreateFileTool(), createDeleteFileTool(), createRenameFileTool(), createBatchFilesTool()]),maxSteps:options.maxSteps,
+      tools:new ToolRegistry(tierTools,tier.tools),rules:tier.rules,maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),

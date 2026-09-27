@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import type { ChatMessage, ChatUsage, ModelAdapter, ToolCall } from "./types.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { ToolContext, ToolRegistry } from "./tools.ts";
+import type { Rule } from "./rule-table.ts";
 import { buildToolEnvironment, UnsafeAgentHomeError } from "./tool-environment.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
@@ -29,6 +30,13 @@ export interface AgentRuntimeOptions {
    * default: an incomplete spec is reported in SendResult, not fatal.
    */
   enforceTaskSpec?: boolean;
+  /**
+   * The rule table this session runs under (D31). Absent means the built-in
+   * rules, which is why adding a tier never silently changes an existing
+   * caller. Forwarded to every tool call so the decision and its attribution
+   * come from one place.
+   */
+  rules?: readonly Rule[];
   /**
    * The gene library (D14). When present, every send selects a gene by the
    * TaskSpec's intent and signals, injects its strategy as system context
@@ -499,6 +507,7 @@ export class AgentRuntime {
   private busy = false;
   private readonly onActivity: ((event: RuntimeActivity) => void) | undefined;
   private readonly approve: ((prompt: string) => Promise<boolean>) | undefined;
+  private readonly rules: readonly Rule[] | undefined;
   private readonly enforceTaskSpec: boolean;
   private activity(event: RuntimeActivity): void { try { this.onActivity?.(event); } catch { /* display must not corrupt execution */ } }
 
@@ -506,6 +515,7 @@ export class AgentRuntime {
     this.adapter = options.adapter;
     this.onActivity = options.onActivity;
     this.approve = options.approve;
+    this.rules = options.rules;
     this.enforceTaskSpec = options.enforceTaskSpec ?? false;
     this.store = options.store;
     this.sessionId = options.sessionId;
@@ -879,6 +889,7 @@ export class AgentRuntime {
       protectedRoots: this.protectedRoots,
       ...(signal ? { signal } : {}),
       ...(this.approve ? { approve: this.approve } : {}),
+      ...(this.rules ? { rules: this.rules } : {}),
       audit: (event) => this.store.appendAudit(this.sessionId, event).then(() => undefined),
     };
     let errors = 0;
