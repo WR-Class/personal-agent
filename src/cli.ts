@@ -301,7 +301,12 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       if(config===null)return 0;
       if(config==="echo")adapter=createEchoAdapter();
       else if(!config||config.apiKey==="__ASK_AT_START__")throw new UsageError("没有完整模型配置。运行 npm start 配置，或显式 --echo。");
-      else adapter=createOpenAIChatAdapter({...config,...(options.stream?{stream:true}:{})});
+      // The per-request timeout must not be shorter than the send deadline, or
+      // the adapter becomes the binding constraint and a slow-but-working
+      // provider fails with a timeout the operator never configured. Observed
+      // for real: a local gateway took 65-75s for a one-word completion, so the
+      // 120s adapter default left almost no headroom once tool calls were added.
+      else adapter=createOpenAIChatAdapter({...config,timeoutMs:options.deadlineMs,...(options.stream?{stream:true}:{})});
     }
     const tier=resolveTier(options.tier);
     // Removing a boundary is a recorded operator decision, not something that
