@@ -9,6 +9,7 @@ import type { Rule } from "./rule-table.ts";
 import { buildToolEnvironment, UnsafeAgentHomeError } from "./tool-environment.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
+import { readTrustedRoots } from "./trusted-roots.ts";
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
@@ -456,6 +457,17 @@ export class AgentRuntime {
   private readonly workspaceRoot: string;
   private readonly home: string;
   private readonly protectedRoots: readonly string[];
+  /** Runtime state that stays denied even inside an operator-granted root (D35). */
+  private readonly protectedStateRoots: readonly string[];
+  /**
+   * Extra readable roots, read from the trust file on each step (D35).
+   *
+   * Not captured once at construction: qwen-code re-reads trust on every call,
+   * and the reason applies here too. A session that snapshotted its permissions
+   * would keep reading a tree the operator had since revoked, so the grant would
+   * mean "readable until this conversation ends" rather than "readable now".
+   */
+  private readableRootsCache: readonly string[] = [];
   private readonly configuredProtectedRoots: readonly string[];
   /** Built once, at construction, so an unsafe home fails closed. */
   readonly toolEnvironment: ToolEnvironment;
@@ -528,6 +540,11 @@ export class AgentRuntime {
     this.home = paths.agentHome;
     const storeRoot = assertSafeStateDirectory(this.store.root, { protectedRoots: this.configuredProtectedRoots });
     this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRoot]);
+    // The subset that must stay unreadable even under an operator-granted
+    // readable root: this runtime's own memory and logs. `paths.protectedRoots`
+    // is intentionally excluded — it contains whole host trees such as
+    // `%LOCALAPPDATA%`, which would refuse nearly every grantable directory.
+    this.protectedStateRoots = Object.freeze([this.home, storeRoot]);
     this.toolEnvironment = buildToolEnvironment({
       workspaceRoot: this.workspaceRoot, agentHome: this.home,
       protectedRoots: this.configuredProtectedRoots,
@@ -883,10 +900,25 @@ export class AgentRuntime {
     runId: string,
     step: number,
   ): Promise<{ calls: number; errors: number }> {
+    // Re-read on every step rather than caching for the session, so revoking a
+    // root takes effect on the next step instead of the next conversation.
+    try {
+      this.readableRootsCache = await readTrustedRoots(this.home);
+    } catch (error) {
+      // A corrupt or unreadable trust file must not widen anything. Failing
+      // closed here keeps reads confined, which is the safe direction.
+      this.readableRootsCache = [];
+      await this.store.appendAudit(this.sessionId, {
+        tool: "*", decision: "denied",
+        reason: `trust file could not be read; readable roots ignored: ${(error as Error).message}`,
+      });
+    }
     const context: ToolContext = {
       workspaceRoot: this.workspaceRoot,
       toolEnvironment: this.toolEnvironment,
       protectedRoots: this.protectedRoots,
+      protectedStateRoots: this.protectedStateRoots,
+      readableRoots: this.readableRootsCache,
       ...(signal ? { signal } : {}),
       ...(this.approve ? { approve: this.approve } : {}),
       ...(this.rules ? { rules: this.rules } : {}),

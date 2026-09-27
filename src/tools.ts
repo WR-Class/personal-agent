@@ -17,7 +17,8 @@ import path from "node:path";
 import type { JsonSchema, ToolCall, ToolDefinition } from "./types.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { isIssuedToolEnvironment } from "./tool-environment.ts";
-import { assertReadablePath } from "./security-config.ts";
+import { assertReadablePath, canonicalPath, isWithin, protectedRoots } from "./security-config.ts";
+import { checkReadable } from "./trusted-roots.ts";
 import { actionBinding, DEFAULT_RULES, filePolicy } from "./file-policy.ts";
 import { decide } from "./rule-table.ts";
 import type { Rule } from "./rule-table.ts";
@@ -43,6 +44,26 @@ export interface ToolContext {
   toolEnvironment?: ToolEnvironment;
   /** Trusted runtime supplies its state/log roots; never model-controlled. */
   protectedRoots?: readonly string[];
+  /**
+   * Extra roots that may be *read*, never written (D35).
+   *
+   * Kept separate from `workspaceRoot` on purpose. Reads and writes share one
+   * gate, so widening the workspace would widen both; a caller that wants to
+   * review code elsewhere does not thereby want to edit it. Only the read tools
+   * consult this, and it is supplied by the trust file in the agent home rather
+   * than by anything inside the repository being read.
+   */
+  readableRoots?: readonly string[];
+  /**
+   * Denied even inside an added readable root (D35).
+   *
+   * Distinct from `protectedRoots`, which holds whole host trees such as
+   * `%LOCALAPPDATA%`. Re-applying those inside a granted root would refuse
+   * nearly every directory a user could name, so the runtime passes only its own
+   * state and log roots here — the things that stay private no matter which
+   * tree the operator opened.
+   */
+  protectedStateRoots?: readonly string[];
   signal?: AbortSignal;
   /** Asked before the one write tool replaces an existing file. */
   approve?(prompt: string): Promise<boolean>;
@@ -138,6 +159,45 @@ async function approveExact(name: string, args: unknown, prompt: string, context
   if (Date.now() - now > APPROVAL_TTL_MS) return "approval expired";
   if (!approved) return "operator declined";
   return undefined;
+}
+
+/**
+ * Resolve a *read* target, honouring the extra readable roots (D35).
+ *
+ * This is the only place that consults `readableRoots`, and it is deliberately
+ * not used by the write tools: they call {@link assertReadablePath} directly and
+ * so keep the workspace as their sole root. Two separate functions rather than a
+ * flag on one, because a boolean at a call site is exactly the kind of thing
+ * that gets flipped during a later refactor without anyone noticing that a read
+ * widening became a write widening.
+ *
+ * The workspace case is delegated back to `assertReadablePath` so that the
+ * existing deny list, sensitive-name check and canonicalization behave
+ * identically inside the workspace and did not need to be reimplemented here.
+ */
+function assertReadablePathOutcome(target: string, context: ToolContext): string {
+  const workspace = context.workspaceRoot;
+  const extra = context.readableRoots ?? [];
+  if (extra.length === 0) return assertReadablePath(target, workspace, context.protectedRoots);
+  const lexical = path.resolve(target);
+  const actual = canonicalPath(lexical);
+  if (isWithin(canonicalPath(workspace), actual)) return assertReadablePath(lexical, workspace, context.protectedRoots);
+  const scope = checkReadable(actual, canonicalPath(workspace), extra);
+  if (scope !== undefined) throw new Error(scope);
+  // Reached only through an added root, and `checkReadable` has already applied
+  // the sensitive-name list there. The broad entries of `protectedRoots()` are
+  // deliberately NOT re-applied: they are whole trees such as `%LOCALAPPDATA%`,
+  // so re-applying them would refuse essentially every directory under a user
+  // profile and make the added root unusable. The operator naming a root *is*
+  // the decision that its tree may be read; what survives is the deny list the
+  // runtime controls itself (its state and log roots), which the caller passes
+  // in and which is never derived from the tree being read.
+  for (const denied of context.protectedStateRoots ?? []) {
+    if (isWithin(canonicalPath(denied), actual) || isWithin(canonicalPath(denied), lexical)) {
+      throw new Error("sensitive path is denied");
+    }
+  }
+  return actual;
 }
 
 /** Re-check immediately before a write. A replaced path must not receive it. */
@@ -333,7 +393,7 @@ export function createReadFileTool(): Tool {
       }
       let resolved: string;
       try {
-        resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots);
+        resolved = assertReadablePathOutcome(path.resolve(context.workspaceRoot, target), context);
       } catch (error) {
         return fail("read_file", (error as Error).message);
       }

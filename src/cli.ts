@@ -9,6 +9,7 @@ import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_M
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
+import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
 import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
@@ -34,13 +35,17 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --mint-gene draft.json 从验证过的成功经验铸造一个基因并入库（不需要模型）
       npm start -- --distill           把反复失败的请求蒸馏成 guard 草稿并打印，不自动铸造
       npm start -- --induct            把"没有基因可用但成功了"的轮次归纳成候选草稿并打印，不自动铸造
+      npm start -- --trust-root <dir>  授予对工作区外某目录的**只读**访问（写入仍限于工作区）
+      npm start -- --trusted           列出已授予的只读目录；--untrust-root <dir> 撤销
+      npm start -- --tier <name>       权限档位：read-only / workspace-write / full-access
       npm start -- --stream "问题"     用 SSE 流式传输（服务端只支持流式时使用；不改变回答内容）
 选项：--home <dir> --workspace <dir> --max-steps <n> --max-tools <n>
       --max-tools-per-step <n> --max-send-ms <n> --max-context-bytes <n> --max-context-tokens <n> --totals
-      --session/-s <id> --echo --preflight --stream --distill --induct --help/-h -- <以横线开头的提示>
+      --session/-s <id> --echo --preflight --stream --distill --induct --tier --trust-root --untrust-root --trusted --help/-h -- <以横线开头的提示>
 环境：PERSONAL_AGENT_BASE_URL / PERSONAL_AGENT_MODEL / PERSONAL_AGENT_API_KEY
       三项须一起配置；不与已保存配置混合，不再静默回退 Echo。
       预算：PERSONAL_AGENT_MAX_STEPS / _MAX_TOOL_CALLS / _MAX_TOOLS_PER_STEP / _MAX_SEND_MS / _MAX_CONTEXT_BYTES / _MAX_CONTEXT_TOKENS
+      档位：PERSONAL_AGENT_TIER（不从工作区内的文件读取，克隆来的仓库无法自行提权）
       按模型窗口：PERSONAL_AGENT_CONTEXT_WINDOWS='{"<model>":<tokens>,"*":<tokens>}'
       精确预判（可选，不内置分词器）：PERSONAL_AGENT_TOKENIZER='<命令>'，读 stdin 的 prompt JSON，向 stdout 打印单个非负整数
       该命令失败/超时/输出非数字一律报错，不静默退回估算
@@ -60,6 +65,12 @@ export interface CliOptions {
   induct: boolean;
   /** Permission posture name (D32). Unknown names fail rather than fall back. */
   tier?: string;
+  /** Grant read access to a directory outside the workspace (D35). Writes are unaffected. */
+  trustRoot?: string;
+  /** Revoke a previously granted readable root (D35). */
+  untrustRoot?: string;
+  /** Print the granted readable roots and exit. */
+  listTrusted: boolean;
 }
 export class UsageError extends Error {}
 function valueFor(argv: readonly string[], index: number, flag: string): string {
@@ -85,6 +96,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     // deliberately never from a file inside the workspace: a cloned repository
     // must not be able to grant itself full access.
     tier:env.PERSONAL_AGENT_TIER,
+    listTrusted:false,
     // Opt-in: streaming changes the request body (stream_options), so a server that
     // rejects unknown fields must still be reachable on the default path.
     stream:env.PERSONAL_AGENT_STREAM==="1"||env.PERSONAL_AGENT_STREAM==="true" };
@@ -107,6 +119,9 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--preflight")options.preflight=true;
     else if(arg==="--stream")options.stream=true;
     else if(arg==="--tier")options.tier=valueFor(argv,++i,arg);
+    else if(arg==="--trust-root")options.trustRoot=valueFor(argv,++i,arg);
+    else if(arg==="--untrust-root")options.untrustRoot=valueFor(argv,++i,arg);
+    else if(arg==="--trusted")options.listTrusted=true;
     else if(arg==="--mint-gene")options.mintGene=valueFor(argv,++i,arg);
     else if(arg==="--distill")options.distill=true;
     else if(arg==="--induct")options.induct=true;
@@ -127,6 +142,12 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
   if(options.mintGene&&(rest.length||options.list||options.showTotals||options.preflight||options.echo||options.distill||options.induct))throw new UsageError("--mint-gene 不能与 prompt、--list、--totals、--preflight、--echo、--distill 或 --induct 混用");
   if(options.distill&&(rest.length||options.list||options.showTotals||options.preflight||options.echo||options.induct))throw new UsageError("--distill 不能与 prompt、--list、--totals、--preflight、--echo 或 --induct 混用");
   if(options.induct&&(rest.length||options.list||options.showTotals||options.preflight||options.echo))throw new UsageError("--induct 不能与 prompt、--list、--totals、--preflight 或 --echo 混用");
+  // Trust actions are standalone operator decisions. Refusing to combine them
+  // with a prompt keeps "what may be read" from being changed as a side effect
+  // of a turn the model drove.
+  const trustAction=[options.trustRoot!==undefined,options.untrustRoot!==undefined,options.listTrusted].filter(Boolean).length;
+  if(trustAction>1)throw new UsageError("--trust-root、--untrust-root 与 --trusted 互斥");
+  if(trustAction>0&&(rest.length||options.list||options.showTotals||options.preflight||options.echo||options.mintGene||options.distill||options.induct))throw new UsageError("--trust-root、--untrust-root 与 --trusted 不能与 prompt 或其他子命令混用");
   let extraRoots:string[];
   try{extraRoots=configuredProtectedRoots(env);}catch(error){throw new UsageError((error as Error).message);}
   const problem=agentHomeProblem(options.home,{env,protectedRoots:extraRoots});
@@ -234,6 +255,37 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       write(`${draft.summary}\n`);
       write(`${JSON.stringify(draft.gene)}\n`);
       write(`（${draft.caveat}）\n`);
+    }
+    return 0;
+  }
+  if(options.listTrusted){
+    const roots=await readTrustedRoots(paths.agentHome);
+    if(!roots.length)write(`没有授予任何工作区外的可读目录。\n（信任记录位于 ${join(paths.agentHome,"trust.json")}，不在工作区内。）\n`);
+    for(const root of roots)write(`${root}\n`);
+    return 0;
+  }
+  if(options.trustRoot!==undefined||options.untrustRoot!==undefined){
+    const granting=options.trustRoot!==undefined;
+    const requested=(granting?options.trustRoot:options.untrustRoot)!;
+    const absolute=resolve(requested);
+    // Paths are canonicalized at the store boundary, so record what was stored.
+    if(granting){
+      let recorded:string;
+      try{recorded=await grantReadableRoot(paths.agentHome,absolute);}
+      catch(error){throw new UsageError((error as Error).message);}
+      write(`已授予只读访问：${recorded}\n`);
+      write(`写操作仍限于工作区 ${paths.workspaceRoot}——授予只读不等于授予写入。\n`);
+      write(`该目录下按名字保护的路径（.env、.git、*.pem 等）仍然拒绝。\n`);
+      await store.appendAudit(options.session,{tool:"*",decision:"denied",
+        reason:`readable root granted: ${recorded}`,rule:"trust:grant"});
+    } else {
+      const removed=await revokeReadableRoot(paths.agentHome,absolute);
+      if(!removed)write(`未授予过该目录，无需撤销：${absolute}\n`);
+      else {
+        write(`已撤销只读访问：${absolute}\n`);
+        await store.appendAudit(options.session,{tool:"*",decision:"denied",
+          reason:`readable root revoked: ${absolute}`,rule:"trust:revoke"});
+      }
     }
     return 0;
   }

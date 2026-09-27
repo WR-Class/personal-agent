@@ -125,6 +125,18 @@ export function configuredContextWindows(env: NodeJS.ProcessEnv): Record<string,
   return Object.keys(windows).length ? windows : undefined;
 }
 
+/**
+ * Whether one path segment is a name this project refuses to touch.
+ *
+ * A name list is a hint, not a boundary: it catches `.ssh` and `id_rsa` but not
+ * a plainly-named file that happens to matter. It is still worth applying
+ * uniformly, including inside an added readable root, so that widening the
+ * readable area cannot make protection weaker than it is in the workspace.
+ */
+export function sensitivePathName(part: string): boolean {
+  return /^(?:\.env(?:\..*)?|provider-config\.json|\.dsh|\.personal-agent|\.ssh|\.aws|\.azure|\.kube|\.gnupg|\.git|\.npmrc|\.pypirc|credentials(?:\..*)?|\.credentials(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i.test(part);
+}
+
 /** Deny before read and after canonicalization. Error never includes file contents. */
 export function assertReadablePath(target: string, workspace: string, extraRoots: readonly string[] = []): string {
   const lexical = cleanPath(target);
@@ -134,8 +146,7 @@ export function assertReadablePath(target: string, workspace: string, extraRoots
   for (const denied of [...protectedRoots(), ...extraRoots.map(canonicalPath)]) {
     if (isWithin(denied, actual) || isWithin(denied, lexical)) throw new Error("sensitive path is denied");
   }
-  const sensitive = (p: string) => p.split(/[\\/]/).some(part =>
-    /^(?:\.env(?:\..*)?|provider-config\.json|\.dsh|\.personal-agent|\.ssh|\.aws|\.azure|\.kube|\.gnupg|\.git|\.npmrc|\.pypirc|credentials(?:\..*)?|\.credentials(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i.test(part));
+  const sensitive = (p: string) => p.split(/[\\/]/).some(sensitivePathName);
   // Selecting a sensitive directory as workspace must not remove its protection.
   if (sensitive(lexical) || sensitive(actual)) throw new Error("sensitive path is denied");
   return actual;
