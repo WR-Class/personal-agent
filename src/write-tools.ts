@@ -27,8 +27,12 @@
  *
  * Belongs to *every* tier: no tier exists to remove the ability to read — they
  * exist to grant writing.
+ *
+ * `job_output` is here because reading a job's output changes nothing; it is a
+ * view of work that was already permitted to start. Every tier offers it, so a
+ * read-only session can still see what a background job produced.
  */
-export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file"];
+export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file", "job_output"];
 
 /**
  * Tools that change something outside the conversation.
@@ -41,6 +45,7 @@ export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file"];
  */
 export const WRITE_TOOLS: readonly string[] = [
   "run_command",
+  "job_kill",
   "edit_file",
   "patch_file",
   "create_file",

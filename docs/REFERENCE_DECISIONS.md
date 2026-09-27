@@ -92,6 +92,18 @@
 
 **未验证**：以上各项目的运行时行为（只读源码）；goose 的 LLM 只读判定所用提示词与准确率；crush 白名单在真实交互中的免问比例。
 
+### 后台作业（D47，2026-09-28）
+
+- **采用**：crush 的**输出落盘**形状 — [truncate.go](../../_research/repos/crush/internal/shell/truncate.go)：29 行 `spillSubdir = "shell-output"`（注：不是任意目录）、33 行 `spillPattern = "output-*.log"`（**只删自己创建的文件**，见 190 行 `filepath.Match`）、38 行 `spillRetention = 7*24h`、43 行 `spillDirLimit = 256<<20`；裁剪顺序见 175–217（**先按年龄删，再按总量删最旧**）。本项目数值相同，落在 agent home 下而非共享临时目录。
+- **采用**：crush 的"**超时转后台而非杀掉**"形状 — [bash.go](../../_research/repos/crush/internal/agent/tools/bash.go)：30 行 `AutoBackgroundAfter`，54 行注释默认 60 秒。本项目保留这个语义（`FOREGROUND_GRACE_MS`），但**保留前台显式 `run_in_background`**，未做自动转换。
+- **不采用**：crush 的**进程组**做法。它在 POSIX 上用 `SysProcAttr.Setsid` + `Kill(-pid)`（[exec_unix.go](../../_research/repos/crush/internal/shell/exec_unix.go)：30、62、68、73），但 **Windows 上 `kill(-pid)` 实测失败（`ESRCH`）**，且其 Windows 实现 ([exec_windows.go](../../_research/repos/crush/internal/shell/exec_windows.go)：21–22) 就是 `interp.DefaultExecHandler`，**并未做等价处理**。本项目改用 `taskkill /PID <pid> /T /F`。
+- **不采用**：Job Object / 原生模块。本项目至今零生产依赖，为一个可绕开的问题引入需编译的原生依赖不划算。
+- **本轮实测（均以"文件是否继续增长"为判据，而非进程句柄）**：
+  - `kill(-pid)` 在 Windows 上抛 `ESRCH`；
+  - **只杀直接子进程不足以停住作业** —— 作业进程是 `cmd.exe`，真正的命令是**它的**子进程，`child.kill()` 只杀掉解释器。实测 kill 后文件继续增长（135 → 175 字节）。**这是本轮发现的真 bug**，`job_kill` 曾报告成功而作业仍在跑；
+  - `taskkill /T /F` 修复后：3 项 kill 相关测试全绿，输出停止增长。
+- **未验证**：`taskkill` 在非 Windows 上不存在（代码按平台分支，非 Windows 走 `child.kill()`，**未在真机验证过非 Windows 路径**）；作业在 agent 非正常终止（`SIGKILL`）时是否残留**未测**——退出清理只覆盖正常退出路径。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

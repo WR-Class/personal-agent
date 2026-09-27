@@ -10,8 +10,9 @@ import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
 import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool, createRunCommandTool } from "./tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createJobKillTool, createJobOutputTool, createReadFileTool, createRenameFileTool, createRunCommandTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
+import { shutdownJobs } from "./background-jobs.ts";
 import type { Gene } from "./gene.ts";
 import { GeneStore } from "./gene-store.ts";
 import { CycleStore } from "./cycle-store.ts";
@@ -344,7 +345,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       rule:`tier:${tier.name}`});
     // Built from the tier's tool list, so a posture that does not offer a tool
     // makes it genuinely absent rather than merely refused (D28/D32).
-    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,
+    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,job_output:createJobOutputTool,job_kill:createJobKillTool,
       edit_file:createEditFileTool,patch_file:createPatchFileTool,
       create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
       batch_files:createBatchFilesTool} as const;
@@ -385,7 +386,16 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       if(options.showTotals){const totals=await runtime.totals();write(`[adapter=${adapter.id} model=${result.model} steps=${result.steps} tools=${result.toolCalls} in=${totals.inputTokens} out=${totals.outputTokens}]\n`);}
     } finally {process.off("SIGINT",abort);}
     return 0;
-  } finally {if(interactive&&!providedIO)io?.close();}
+  } finally {
+    // Closing the agent closes its background jobs, which is the operator's
+    // explicit choice over letting them outlive the session. A job that survived
+    // this point would be invisible: nothing left running still reports that it
+    // is writing to disk. Reported when anything was actually stopped, so the
+    // count is visible rather than the silence being ambiguous.
+    const stopped = shutdownJobs();
+    if (stopped > 0) write(`[已停止 ${stopped} 个后台作业]\n`);
+    if(interactive&&!providedIO)io?.close();
+  }
 }
 const invokedDirectly=process.argv[1]!==undefined&&import.meta.url===pathToFileURL(process.argv[1]).href;
 if(invokedDirectly)main(process.argv.slice(2)).then(code=>{process.exitCode=code;}).catch((error:unknown)=>{

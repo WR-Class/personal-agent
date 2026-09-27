@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_TIER, TIERS, findTier, resolveTier } from "../src/tiers.ts";
 import { DEFAULT_RULES } from "../src/file-policy.ts";
-import { READ_ONLY_TOOLS } from "../src/write-tools.ts";
+import { READ_ONLY_TOOLS, WRITE_TOOLS } from "../src/write-tools.ts";
 import { RULE_TIERS, decide } from "../src/rule-table.ts";
 import { ToolRegistry, createReadFileTool, createEditFileTool } from "../src/tools.ts";
 import { SessionStore } from "../src/session-store.ts";
@@ -86,9 +86,17 @@ describe("tiers: what each one decides", () => {
     assert.equal(decide(tier.rules, "delete_file", {}).decision, "deny");
     assert.equal(decide(tier.rules, "read_file", {}).decision, "allow");
     // Asserted as the property rather than as a fixed list, so adding another
-    // read-only tool does not require rewriting the test: what matters is that
-    // nothing here writes.
-    assert.deepEqual([...tier.tools], ["read_file", "inspect_file"]);
+    // read-only tool does not require rewriting this test: what matters is that
+    // nothing here writes. The list is derived from the same source the tiers
+    // use, so a tool cannot be read-only here and writing there.
+    assert.deepEqual([...tier.tools], [...READ_ONLY_TOOLS]);
+    for (const name of tier.tools) {
+      assert.equal(
+        WRITE_TOOLS.includes(name),
+        false,
+        `${name} is offered by read-only but is classified as writing`,
+      );
+    }
     const writing = ["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"];
     for (const name of writing) {
       assert.equal(tier.tools.includes(name), false, `read-only must not offer ${name}`);

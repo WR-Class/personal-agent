@@ -30,7 +30,8 @@ import {
   INSPECTION_MAX_LINES,
   runInspection,
 } from "./inspection-tools.ts";
-import { runShellCommand } from "./shell-tool.ts";
+import { runShellCommand, shellFor } from "./shell-tool.ts";
+import { FOREGROUND_GRACE_MS, findJob, killJob, listJobs, readJobOutput, startBackgroundJob } from "./background-jobs.ts";
 
 export interface ToolResult {
   content: string;
@@ -574,14 +575,23 @@ export function createRunCommandTool(): Tool {
       "shell (cmd.exe on Windows, /bin/sh elsewhere) with the workspace as its working directory, " +
       "so pipes, redirection and `&&` work as usual. A non-zero exit code is reported together " +
       "with the output rather than treated as a failure of this tool, so read the output to find " +
-      "out what went wrong and correct the command. Output is capped, and a command that runs " +
-      "too long is killed.",
+      "out what went wrong and correct the command. " +
+      `Set run_in_background to true for work that will take longer than ${FOREGROUND_GRACE_MS / 1000} ` +
+      "seconds, such as installing dependencies or running a full test suite; you get a job id " +
+      "immediately, and read it later with job_output. Output is capped, and a command that runs " +
+      "too long in the foreground is moved to the background rather than killed.",
     parameters: {
       type: "object",
       properties: {
         command: {
           type: "string",
           description: "The command to execute, exactly as you would type it in a terminal.",
+        },
+        run_in_background: {
+          type: "boolean",
+          description:
+            "Start the command as a background job and return at once, instead of waiting for it. " +
+            "Read its output later with job_output.",
         },
       },
       required: ["command"],
@@ -591,6 +601,10 @@ export function createRunCommandTool(): Tool {
       const command = args.command;
       if (typeof command !== "string" || command.length === 0) {
         return fail("run_command", "'command' must be a non-empty string");
+      }
+      const background = args.run_in_background;
+      if (background !== undefined && typeof background !== "boolean") {
+        return fail("run_command", "'run_in_background' must be a boolean");
       }
       // The tier decides whether this runs without asking. Measured consequence
       // of leaving this out: under `workspace-write`, whose rule for this tool is
@@ -608,8 +622,97 @@ export function createRunCommandTool(): Tool {
       } catch (error) {
         return fail("run_command", (error as Error).message);
       }
+      if (background === true) {
+        const job = await startBackgroundJob(command, environment, shellFor());
+        // The id is the whole point of the reply: it is what the model uses to
+        // read the output later, and it cannot be derived from the command.
+        return { content: `started background job ${job.id}\n${command}\n\nRead its output with job_output.` };
+      }
       const result = await runShellCommand(command, environment, context.signal);
       return result.isError ? fail("run_command", result.content) : { content: result.content };
+    },
+  };
+}
+
+/**
+ * Read a background job's output (D47).
+ *
+ * Separate from `run_command` because the two answer different questions: one
+ * starts work, the other reports on work that is already running. Folding the
+ * second into the first would mean a model that lost the job id had no way to
+ * ask what was running, and re-running a command to see its output is exactly
+ * the mistake that makes a long job expensive.
+ */
+export function createJobOutputTool(): Tool {
+  return {
+    name: "job_output",
+    description:
+      "Read the output of a background job started with run_command run_in_background. " +
+      "Omit job_id to list every job this session has started, with its state and exit code. " +
+      "Only the tail of a long output is returned, and the amount omitted is stated.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: {
+          type: "string",
+          description: "The job id from run_command. Omit to list all jobs.",
+        },
+      },
+      required: [],
+    },
+    readOnly: true,
+    async execute(args) {
+      const id = args.job_id;
+      if (id !== undefined && typeof id !== "string") {
+        return fail("job_output", "'job_id' must be a string");
+      }
+      if (id === undefined || id === "") {
+        const all = listJobs();
+        if (all.length === 0) return { content: "no background jobs have been started in this session" };
+        const lines = all.map((job) => {
+          const state = job.finishedAt === null ? "running" : `exit ${job.exitCode}`;
+          return `${job.id}  [${state}]  ${job.command}`;
+        });
+        return { content: lines.join("\n") };
+      }
+      return { content: await readJobOutput(id) };
+    },
+  };
+}
+
+/** Stop a background job (D47). */
+export function createJobKillTool(): Tool {
+  return {
+    name: "job_kill",
+    description:
+      "Stop a background job started with run_command run_in_background. The process is killed, " +
+      "along with anything the command itself started. Reports whether the job was found.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "The job id from run_command." },
+      },
+      required: ["job_id"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      const id = args.job_id;
+      if (typeof id !== "string" || id === "") {
+        return fail("job_kill", "'job_id' must be a non-empty string");
+      }
+      // Stopping work needs the same permission as starting it: a tier that may
+      // not run a command should not be able to reach into a running one either,
+      // and the rule table is consulted for this tool under the same rules.
+      const denial = await approveExact("job_kill", args, `Stop background job ${id}?`, context);
+      if (denial) return denied("job_kill", denial, context);
+      const job = findJob(id);
+      if (!job) return fail("job_kill", `no such job: ${id}`);
+      if (job.finishedAt !== null) return { content: `${id} had already finished with exit code ${job.exitCode}` };
+      killJob(id);
+      // "Asked to stop" rather than "stopped": the kill is delivered immediately
+      // but the process may take a moment to exit, and claiming it is gone would
+      // be a claim this call cannot observe.
+      return { content: `asked background job ${id} to stop; its output remains readable with job_output` };
     },
   };
 }

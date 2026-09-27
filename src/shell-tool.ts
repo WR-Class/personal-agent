@@ -22,6 +22,12 @@
  * whether it runs without asking (`full-access`), asks once per call
  * (`workspace-write`), or is not offered at all (`read-only`, where the tool is
  * absent rather than refused).
+ *
+ * A command that outlasts {@link FOREGROUND_GRACE_MS} does not get killed. It is
+ * moved to the background instead, because killing it throws away work that was
+ * nearly done, and that is precisely what happened in a measured round: a
+ * write-and-verify task died at the run deadline with the script already on disk.
+ * Background jobs live in `background-jobs.ts`.
  */
 
 import { spawn } from "node:child_process";
@@ -46,7 +52,7 @@ export interface ShellResult {
  * this file rather than the command, and the model reading the error would draw
  * the wrong conclusion about the machine.
  */
-function shellFor(): { executable: string; args: (command: string) => string[] } {
+export function shellFor(): { executable: string; args: (command: string) => string[] } {
   if (process.platform === "win32") {
     return { executable: process.env.ComSpec ?? "cmd.exe", args: (command) => ["/d", "/s", "/c", command] };
   }
