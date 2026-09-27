@@ -30,19 +30,64 @@ const callsTool = {
 /** HTTP 200, valid JSON, no tool call — the case this probe exists for. */
 const ignoresTool = { choices: [{ message: { role: "assistant", content: "I don't have any tools available." } }] };
 
+/**
+ * The same wire shape as `ignoresTool`, and a completely different problem.
+ *
+ * Measured against a real gateway: an exhausted account answers HTTP 200 with
+ * well-formed JSON, an empty `tool_calls`, and this text in `content`. Nothing
+ * in the status, the headers or the JSON structure distinguishes it from a
+ * provider that ignores tools, so the probe has to read the body.
+ */
+const outOfCredit = { choices: [{ message: { role: "assistant", content: "You've used all your credits. Kindly visit this page to add more: [upgrade](https://example.test/pricing)" } }] };
+
 describe("live tool-calling probe", () => {
   it("reports success when the provider returns a tool call", async () => {
     const result = await probeToolCalling(URL, "m", KEY, reply(callsTool) as unknown as typeof fetch);
     assert.equal(result.request.status, "ok");
     assert.equal(result.tools.status, "ok");
+    assert.equal(result.accountProblem, false);
   });
 
-  it("catches a provider that returns 200 but discards tools", async () => {
+  it("catches a provider that returns 200 but discards tools, without blaming the account", async () => {
     const result = await probeToolCalling(URL, "m", KEY, reply(ignoresTool) as unknown as typeof fetch);
     // The request genuinely succeeded, and the tool capability genuinely failed.
     // Reporting one verdict for both is how this stayed invisible.
     assert.equal(result.request.status, "ok");
     assert.equal(result.tools.status, "fail");
+    assert.equal(result.accountProblem, false, "a provider that ignores tools is not an account problem");
+  });
+
+  it("separates an exhausted account from a provider that ignores tools", async () => {
+    const result = await probeToolCalling(URL, "m", KEY, reply(outOfCredit) as unknown as typeof fetch);
+    // Both of these are HTTP 200 with an empty tool_calls; only the body differs.
+    assert.equal(result.request.status, "ok");
+    assert.equal(result.tools.status, "fail");
+    assert.equal(result.accountProblem, true);
+    // The operator's next move is the opposite of the model-swap advice, so the
+    // wording must not tell them to change models.
+    assert.match(result.tools.detail, /账户|额度|充值/);
+    assert.doesNotMatch(result.tools.detail, /此模型在本 Agent 里无法使用工具/);
+  });
+
+  it("recognises account wording in Chinese too", async () => {
+    const result = await probeToolCalling(URL, "m", KEY, reply({
+      choices: [{ message: { role: "assistant", content: "余额不足，请充值后重试。" } }],
+    }) as unknown as typeof fetch);
+    assert.equal(result.accountProblem, true);
+  });
+
+  it("does not guess an account problem from an unrecognised empty reply", async () => {
+    // Guessing here would be the same class of error being fixed: sending the
+    // operator to fix the wrong thing.
+    const result = await probeToolCalling(URL, "m", KEY, reply({
+      choices: [{ message: { role: "assistant", content: "(empty)" } }],
+    }) as unknown as typeof fetch);
+    assert.equal(result.tools.status, "fail");
+    assert.equal(result.accountProblem, false);
+  });
+
+  it("still warns that a single dropped-tools result may be transient", async () => {
+    const result = await probeToolCalling(URL, "m", KEY, reply(ignoresTool) as unknown as typeof fetch);
     assert.match(result.tools.detail, /丢弃了 tools/);
   });
 

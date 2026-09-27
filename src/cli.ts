@@ -224,6 +224,9 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     // Non-zero when a live run cannot be attempted, so this is usable as a gate.
     // A measured tool-capability failure is also non-zero: a model that ignores
     // every tool cannot serve as this Agent, so it must not exit 0 as "ready".
+    // Exit 5 separates an account problem from a capability one, because the
+    // operator's next move differs: top up the account, versus change the model.
+    if(report.toolCalling==="account")return 5;
     if(report.toolCalling==="tools-dropped"||report.toolCalling==="request-failed")return 4;
     return report.canAttemptLiveRun?0:3;
   }

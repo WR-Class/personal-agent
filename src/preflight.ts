@@ -59,8 +59,12 @@ export interface PreflightReport {
    * Result of the opt-in live tool probe, or `undefined` when it was not run.
    * `undefined` means "not measured", never "fine" — callers must not read it as
    * a pass.
+   *
+   * `account` is separate from `tools-dropped` on purpose: both look like an
+   * empty `tool_calls` over HTTP 200, and they call for opposite responses —
+   * topping up an account versus changing the model.
    */
-  toolCalling?: "works" | "tools-dropped" | "request-failed";
+  toolCalling?: "works" | "tools-dropped" | "account" | "request-failed";
 }
 
 const PROBE_TIMEOUT_MS = 10_000;
@@ -144,7 +148,31 @@ interface ToolProbeOutcome {
   /** Held separately from `accepted`: a 200 that dropped the tool is the case
    * this exists for, and collapsing the two into one boolean would hide it. */
   calledTool: boolean;
+  /**
+   * The body reads as an account or quota problem rather than a capability one.
+   *
+   * Kept as its own flag because the two are indistinguishable from the wire
+   * shape and need opposite responses. Measured across a survey of models on one
+   * endpoint: an exhausted account and a provider that ignores tools both answer
+   * HTTP 200 with an empty `tool_calls`, so `calledTool` alone cannot tell them
+   * apart and reporting the wrong one sends the operator to do the wrong thing.
+   */
+  accountProblem: boolean;
   detail: string;
+}
+
+/**
+ * Does this text read as an account or quota message?
+ *
+ * A deliberately small word list, because a false positive here would tell an
+ * operator to top up an account that is fine, which is the same class of error
+ * as the one being fixed. When nothing matches, the caller reports what it
+ * actually observed (no tool call) rather than guessing at a cause.
+ */
+const ACCOUNT_PROBLEM_PATTERN = /credit|quota|insufficient|balance|billing|payment|top ?up|upgrade|额度|余额|充值|欠费/i;
+
+function looksLikeAccountProblem(text: string): boolean {
+  return ACCOUNT_PROBLEM_PATTERN.test(text);
 }
 
 export async function probeToolCalling(
@@ -152,7 +180,7 @@ export async function probeToolCalling(
   model: string,
   apiKey: string,
   doFetch: typeof fetch,
-): Promise<{ request: PreflightCheck; tools: PreflightCheck }> {
+): Promise<{ request: PreflightCheck; tools: PreflightCheck; accountProblem: boolean }> {
   const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const body = {
     model,
@@ -181,7 +209,7 @@ export async function probeToolCalling(
       // and therefore the key — back in an error page, and the key is short
       // enough to survive a slice.
       outcome = {
-        accepted: false, calledTool: false,
+        accepted: false, calledTool: false, accountProblem: false,
         detail: `HTTP ${response.status}；响应正文（已脱敏并截断）：${redact(text, apiKey).slice(0, 120) || "(空)"}`,
       };
     } else {
@@ -189,27 +217,36 @@ export async function probeToolCalling(
       try {
         parsed = JSON.parse(text) as typeof parsed;
       } catch {
-        outcome = { accepted: false, calledTool: false, detail: "HTTP 200 但响应体不是 JSON" };
+        outcome = { accepted: false, calledTool: false, accountProblem: false, detail: "HTTP 200 但响应体不是 JSON" };
         return {
           request: { name: "真实请求", status: "fail", detail: outcome.detail },
           tools: { name: "工具调用", status: "fail", detail: "无法解析响应，故无法判定" },
+          accountProblem: false,
         };
       }
       const message = parsed.choices?.[0]?.message;
       const calls = message?.tool_calls;
       const calledTool = Array.isArray(calls) && calls.length > 0;
+      const text2 = typeof message?.content === "string" ? message.content : "";
+      const accountProblem = !calledTool && looksLikeAccountProblem(text2);
       outcome = calledTool
-        ? { accepted: true, calledTool: true, detail: "HTTP 200，返回了 tool_calls" }
-        : {
-            accepted: true, calledTool: false,
-            detail: "HTTP 200，但**没有** tool_calls；模型回的是普通文本。" +
-              `它说的话（已脱敏并截断）：${redact(message?.content ?? "(空)", apiKey).slice(0, 160)}`,
-          };
+        ? { accepted: true, calledTool: true, accountProblem: false, detail: "HTTP 200，返回了 tool_calls" }
+        : accountProblem
+          ? {
+              accepted: true, calledTool: false, accountProblem: true,
+              detail: "HTTP 200，但没有 tool_calls：**正文是账户/额度类提示**。" +
+                `它说的话（已脱敏并截断）：${redact(text2, apiKey).slice(0, 200)}`,
+            }
+          : {
+              accepted: true, calledTool: false, accountProblem: false,
+              detail: "HTTP 200，但**没有** tool_calls；模型回的是普通文本。" +
+                `它说的话（已脱敏并截断）：${redact(message?.content ?? "(空)", apiKey).slice(0, 160)}`,
+            };
     }
   } catch (error) {
     const name = (error as Error).name;
     outcome = {
-      accepted: false, calledTool: false,
+      accepted: false, calledTool: false, accountProblem: false,
       detail: name === "TimeoutError"
         ? `探测超时（${TOOL_PROBE_TIMEOUT_MS}ms）`
         : `请求失败：${(error as Error).message}`,
@@ -217,25 +254,43 @@ export async function probeToolCalling(
     return {
       request: { name: "真实请求", status: "fail", detail: outcome.detail },
       tools: { name: "工具调用", status: "fail", detail: "请求未成功，无法判定工具调用" },
+      accountProblem: false,
     };
   }
 
   // The two checks stay separate on purpose. A 200 with no tool call is a
   // *passing* request and a *failing* tool capability, and reporting it as one
   // verdict is exactly how this went unnoticed.
-  return {
-    request: { name: "真实请求", status: outcome.accepted ? "ok" : "fail", detail: outcome.detail },
-    tools: outcome.accepted
+  //
+  // Order matters here: `accepted` is checked first so that a request that never
+  // succeeded is reported as "could not measure" rather than being attributed to
+  // the tool capability. Putting the dropped-tools branch first did exactly that,
+  // and a test caught it.
+  const toolsCheck: PreflightCheck = !outcome.accepted
+    ? { name: "工具调用", status: "fail", detail: "请求未成功，无法判定工具调用" }
+    : outcome.calledTool
       ? {
-          name: "工具调用",
-          status: outcome.calledTool ? "ok" : "fail",
-          detail: outcome.calledTool
-            ? "提供方接受 tools 并返回了工具调用"
-            : "**提供方丢弃了 tools**：HTTP 成功但从不调用工具。此模型在本 Agent 里无法使用工具。" +
+          name: "工具调用", status: "ok",
+          detail: "提供方接受 tools 并返回了工具调用",
+        }
+      : outcome.accountProblem
+        ? {
+            name: "工具调用", status: "fail",
+            detail: "**无法判定：账户/额度问题，不是能力问题。** 提供方以 HTTP 200 回了" +
+              "一段额度提示而不是工具调用，所以这次探测没有测到模型的工具能力。" +
+              "**这与「提供方丢弃 tools」在响应结构上完全一样，处置却相反**：" +
+              "这里该做的是处理账户（充值或换一个可用凭据），换模型不会解决问题。",
+          }
+        : {
+            name: "工具调用", status: "fail",
+            detail: "**提供方丢弃了 tools**：HTTP 成功但从不调用工具。此模型在本 Agent 里无法使用工具。" +
               "注意：单次结果可能来自暂时性的网关故障，**请重跑一次再下结论**——" +
               "本项目实测过同一个模型一次报丢弃、重跑即正常。",
-        }
-      : { name: "工具调用", status: "fail", detail: "请求未成功，无法判定工具调用" },
+          };
+  return {
+    request: { name: "真实请求", status: outcome.accepted ? "ok" : "fail", detail: outcome.detail },
+    tools: toolsCheck,
+    accountProblem: outcome.accountProblem,
   };
 }
 
@@ -350,10 +405,15 @@ export async function preflight(input: PreflightEnv): Promise<PreflightReport> {
     const result = await probeToolCalling(probe.baseUrl, probe.model, probe.apiKey, doFetch);
     checks.push(result.request, result.tools);
     // Only a request that succeeded can say anything about tools; a failed
-    // request leaves the question open rather than answered.
-    toolCalling = result.request.status !== "ok"
+    // request leaves the question open rather than answered. An account problem
+    // is checked before "tools dropped" because both present as an empty
+    // tool_calls, and calling an empty account a provider limitation sends the
+    // operator to change models when they need to top up.
+    toolCalling = result.tools.status !== "ok" && result.request.status !== "ok"
       ? "request-failed"
-      : result.tools.status === "ok" ? "works" : "tools-dropped";
+      : result.accountProblem
+        ? "account"
+        : result.tools.status === "ok" ? "works" : "tools-dropped";
   } else {
     checks.push({
       name: "工具调用",
