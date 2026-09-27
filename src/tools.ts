@@ -24,6 +24,12 @@ import { decide } from "./rule-table.ts";
 import type { Rule } from "./rule-table.ts";
 import type { FileGrant } from "./file-policy.ts";
 import { readBoundedUtf8 } from "./bounded-read.ts";
+import {
+  findInspectionTool,
+  inspectionToolNames,
+  INSPECTION_MAX_LINES,
+  runInspection,
+} from "./inspection-tools.ts";
 
 export interface ToolResult {
   content: string;
@@ -441,6 +447,89 @@ function isRoundTripUtf8(bytes: Buffer): boolean {
  * This is a cooperative check against path confusion, not a race-free
  * guarantee: a target may still be swapped between this call and `open`.
  */
+
+/**
+ * Run one of the product's audited read-only inspection tools (D41).
+ *
+ * The point of this tool is what it cannot express. `tool` is an enum drawn from
+ * {@link INSPECTION_TOOLS}, a constant in this repository, and `path` is a path
+ * — there is no parameter anywhere that accepts a command string. So the model
+ * chooses *which* audited tool to apply, not what to execute, and shell
+ * metacharacters are not filtered out so much as impossible to write down.
+ *
+ * If the model could name an arbitrary executable, this would be a shell with
+ * extra steps, which is the option that was explicitly rejected in favour of
+ * this one.
+ *
+ * Read access is checked by exactly the same function `read_file` uses, so the
+ * workspace boundary and the operator-granted readable roots (D35) apply here
+ * identically and there is still only one implementation of that question.
+ */
+export function createInspectFileTool(): Tool {
+  return {
+    name: "inspect_file",
+    description:
+      "Inspect a file with a fixed, read-only tool from a built-in list. Use this to examine " +
+      "binaries and other non-text files. `tool` is one of: " +
+      `${inspectionToolNames().join(", ")}. ` +
+      "Files outside the workspace need to have been granted read access first. " +
+      "This runs no shell: the tool name and the path are passed as separate arguments.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool: {
+          type: "string",
+          enum: inspectionToolNames(),
+          description: "Which built-in read-only tool to use.",
+        },
+        path: {
+          type: "string",
+          description: "File to inspect. Absolute, or relative to the workspace root.",
+        },
+        lines: {
+          type: "integer",
+          description: `Optional hint for how much to read, at most ${INSPECTION_MAX_LINES}.`,
+        },
+      },
+      required: ["tool", "path"],
+    },
+    readOnly: true,
+    async execute(args, context) {
+      const name = args.tool;
+      const target = args.path;
+      if (typeof name !== "string" || name.length === 0) return fail("inspect_file", "'tool' must be a non-empty string");
+      if (typeof target !== "string" || target.length === 0) return fail("inspect_file", "'path' must be a non-empty string");
+      // The enum is enforced here too, not only advertised in the schema: a
+      // schema is a description of what we accept, not a gate.
+      const tool = findInspectionTool(name);
+      if (!tool) {
+        return fail(
+          "inspect_file",
+          `unknown tool '${name}'; available: ${inspectionToolNames().join(", ")}`,
+        );
+      }
+      const rawLines = args.lines;
+      if (rawLines !== undefined && (typeof rawLines !== "number" || !Number.isSafeInteger(rawLines) || rawLines <= 0)) {
+        return fail("inspect_file", "'lines' must be a positive integer");
+      }
+      const lines = typeof rawLines === "number" ? Math.min(rawLines, INSPECTION_MAX_LINES) : undefined;
+
+      let resolved: string;
+      try {
+        resolved = assertReadablePathOutcome(path.resolve(context.workspaceRoot, target), context);
+      } catch (error) {
+        return fail("inspect_file", (error as Error).message);
+      }
+      const result = await runInspection(
+        tool,
+        resolved,
+        lines === undefined ? {} : { lines },
+        context.signal,
+      );
+      return result.isError ? fail("inspect_file", result.content) : { content: result.content };
+    },
+  };
+}
 
 export function createReadFileTool(): Tool {
   return {

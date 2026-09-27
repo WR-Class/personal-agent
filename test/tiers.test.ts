@@ -52,9 +52,15 @@ describe("tiers: what each one decides", () => {
     assert.equal(decide(tier.rules, "create_file", {}).decision, "deny");
     assert.equal(decide(tier.rules, "delete_file", {}).decision, "deny");
     assert.equal(decide(tier.rules, "read_file", {}).decision, "allow");
-    // Absence, not merely denial: the write tools are not in the set at all.
-    assert.deepEqual([...tier.tools], ["read_file"]);
-    assert.equal(tier.tools.includes("edit_file"), false);
+    // Asserted as the property rather than as a fixed list, so adding another
+    // read-only tool does not require rewriting the test: what matters is that
+    // nothing here writes.
+    assert.deepEqual([...tier.tools], ["read_file", "inspect_file"]);
+    const writing = ["edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"];
+    for (const name of writing) {
+      assert.equal(tier.tools.includes(name), false, `read-only must not offer ${name}`);
+      assert.equal(decide(tier.rules, name, {}).decision, "deny");
+    }
   });
 
   it("read-only refuses even an unknown tool", () => {

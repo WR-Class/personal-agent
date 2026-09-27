@@ -10,7 +10,7 @@ import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
 import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createReadFileTool, createRenameFileTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
 import type { Gene } from "./gene.ts";
 import { GeneStore } from "./gene-store.ts";
@@ -341,7 +341,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       rule:`tier:${tier.name}`});
     // Built from the tier's tool list, so a posture that does not offer a tool
     // makes it genuinely absent rather than merely refused (D28/D32).
-    const allTools={read_file:createReadFileTool,edit_file:createEditFileTool,patch_file:createPatchFileTool,
+    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,edit_file:createEditFileTool,patch_file:createPatchFileTool,
       create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
       batch_files:createBatchFilesTool} as const;
     const tierTools=tier.tools.map(name=>allTools[name as keyof typeof allTools]());

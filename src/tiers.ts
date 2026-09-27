@@ -36,7 +36,7 @@ export interface Tier {
 }
 
 /** Reading and searching. Nothing that writes. */
-const READ_ONLY_TOOLS = ["read_file"];
+const READ_ONLY_TOOLS = ["read_file", "inspect_file"];
 
 function denyAllWrites(reason: string): Rule[] {
   return [
