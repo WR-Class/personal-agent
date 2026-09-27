@@ -52,15 +52,34 @@
 | `sort` | `-o file` / `--output=file` **写文件** |
 | `uniq` | 第二个位置参数就是**输出文件** |
 | `find` | `-delete` **删文件**、`-exec` **跑任意命令**（仍在白名单，但这些标志会拦下） |
-| `git`（整体） | `commit`/`add`/`reset`/`checkout`/`clean`/`stash`/`push` 都改状态；`git branch <名>` **建分支且没有任何标志可扫**；`git diff --output=x` **写文件** |
+| `git`（**全部子命令，含只读的**） | **已实证**：仓库自己的 `.git/config` 设 `core.fsmonitor` 后，**`git status` 会执行它**（实测写出 marker 文件）。另有 `core.pager`（`git log`）、`diff.*.textconv`（`git diff`）。**按子命令收窄无效** —— 每个只读子命令都读同一份仓库配置 |
+| `rg` | `--pre` 预处理标志**执行外部命令**。本机未安装 rg，**无法实测**；无法为每个标志担保的工具不进这张"全靠逐条担保"的表 |
+| `npm ls` / `list` | npm 读项目自带 `.npmrc`，**是否能影响执行未经验证** |
 | `node`/`python`/`go`/`cargo` | `-e`/`-c`/脚本路径 = **任意代码**；`go env -w` 写配置 |
 | `npm test` / `npm run` / `npx` | **执行项目自己的脚本**，等于任意代码 |
 
-**因此只放行**：`git` 的读取子命令（`status`/`log`/`diff`/`show`/`branch` 无参/`rev-parse`/`ls-files` 等）、纯读取动词（`ls`/`cat`/`grep`/`head` 等）、以及解释器的**精确版本查询形式**（`node --version`，多一个参数就不算）。
+**由此提炼出的准入准则**（替代原先含糊的"看起来像只读"）：**一个工具能进白名单，当且仅当——它自己的标志、以及它读取的任何项目本地配置，都不能导致它去执行另一个程序。**
 
-**含 `>` `|` `&` `;` 或换行的命令一律要问** —— 因为它们能让一个读取动词变成写入（`git status > /etc/passwd`、`ls & rm -rf /`）。**注意 crush 的同类检查实测漏掉单个 `&`**（见 [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md) D46），本项目没有复制那个漏项。
+**因此现在只放行**：不读项目配置、也无执行型标志的纯读取动词（`ls`/`dir`/`cat`/`type`/`head`/`tail`/`wc`/`pwd`/`cd`/`which`/`where`/`whoami`/`grep`/`findstr`）、`find`（且拦下 `-delete`/`-exec`/`-execdir`/`-ok`/`-okdir`/`-fls`/`-fprint`/`-fprintf`）、以及解释器的**精确版本查询形式**（`node --version`，多一个参数就不算）。
 
-**一个仍然存在的残留风险，不假装已解决**：`git log` 会调用 `core.pager`。如果**仓库自己的 `.git/config` 把 pager 设成恶意命令**，那么一条被判为"只读"的 `git log` 就会执行它。这与 D26 记下的"仓库配置不能自己给自己提权"是同一个问题，而那条**尚未实现**。目前缓解只有：白名单不含会写配置的 `git config`，且路径收敛与写预算仍然生效。**彻底解决要么禁用 pager（`--no-pager`），要么等 D26 落地。**
+**含 `>` `|` `&` `;` 或换行的命令一律要问** —— 因为它们能让一个读取动词变成写入（`dir > /etc/passwd`、`ls & rm -rf /`）。**注意 crush 的同类检查实测漏掉单个 `&`**（见 [REFERENCE_DECISIONS](REFERENCE_DECISIONS.md) D46），本项目没有复制那个漏项。
+
+### git 这条是本轮修掉的真实漏洞，不是理论担忧
+
+**时间顺序很重要，如实记录**：中间档**先发布过一版把 `git status`/`log`/`diff` 判为只读免问**，当时的文档把它写成"残留风险：`git log` 会调用 `core.pager`"——**这个说法是错的，低估了**。实际复现比那严重：
+
+```
+仓库内 .git/config:  core.fsmonitor = <会写文件的脚本>
+运行 git status  →  脚本被执行  →  marker 文件出现（内容 EXECUTED）
+```
+
+**即：一条被本档位判为"只读、不必问"的命令，执行了仓库自带的任意代码。** 这正是同一份文档里写明"不可接受"的失败方向（"漏判只多问一次，误判就是一次没人批准的写入"）。
+
+**为什么不能用环境变量或参数修**：`GIT_CONFIG_NOSYSTEM` **只关系统级配置，不关仓库级 `.git/config`**；而用 `git -c key=` 逐键覆盖需要**枚举全部危险键**（`fsmonitor`/`pager`/`editor`/`sshCommand`/`hooksPath`/`diff.*.textconv`/`filter.*.clean|smudge`/`alias.*`…）——**那就是本项目已经失败过两次的"枚举危险项"形态**（argv 方案、字符串检测方案），不再重犯。
+
+**当前处置**：`git` **整族移出白名单**，任何 git 命令都要问。**代价是真实的便利损失**（`git status` 现在会打断一次）。**恢复条件**：等 D26（"仓库自带配置不得自行提权"）落地，届时可以强制 `--no-pager`、禁用 `fsmonitor`/`textconv` 后再放行只读子命令。
+
+**已固化为回归测试**（`test/middle-tier.test.ts`，走完整链路 runtime → 工具 → 审批门，不是只查 `decide()`）：先建真实投毒仓库，**在 `full-access` 下证明 marker 真的被写出**（反证：否则测试可能只是空过），再在 `ask-before-writing` 下断言 **marker 不出现**。
 
 ## 后台作业的执行边界（D47）
 

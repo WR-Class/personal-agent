@@ -316,9 +316,9 @@ describe("live: the middle tier asks only about writing", () => {
     // interruption. This run has no approval channel at all, so if the tier were
     // still asking about reads the command could not possibly succeed — a pass
     // here is evidence about the tier rather than about the model's willingness.
-    // `node --version` is used rather than `git status` because the fixture is not
-    // a repository, and a command that fails for an unrelated reason would make
-    // this test measure the fixture instead of the posture.
+    // `node --version` is used rather than a git command because git is off the
+    // middle tier's read-only whitelist (repository config can run code), so it
+    // would ask and prove nothing about the tier letting reads through.
     const code = await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
       "--max-steps", "6", "--tier", "ask-before-writing", "--session", "live-middle-read",
       "运行 node --version,把真实输出告诉我。"]);

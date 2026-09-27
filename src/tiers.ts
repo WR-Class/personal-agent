@@ -169,7 +169,7 @@ function askBeforeWriting(): Rule[] {
 }
 
 /**
- * Commands whose whole meaning is to read.
+ * Commands allowed to run without being asked about.
  *
  * This is a whitelist and is meant to be a small one. It is not a safety
  * mechanism — the safety is that everything unrecognised still asks — so a miss
@@ -177,10 +177,34 @@ function askBeforeWriting(): Rule[] {
  * unasked-command list (`internal/agent/tools/safe.go`), and the same reason its
  * gaps are not security holes: the fallback is to ask, not to allow.
  *
- * Several entries that look like pure reads are absent, because each was checked
- * against its own flags and found able to write. They are recorded here rather
- * than quietly dropped, since "that verb is obviously a read" is exactly the
- * assumption that produced them:
+ * **The admission criterion.** A tool belongs here only if *neither its own flags
+ * nor any project-local configuration it reads* can cause it to run another
+ * program. "Looks like a read" is not the test, and trusting it produced a real
+ * hole that was reproduced rather than reasoned about: `git status` was on this
+ * list, and in a repository whose `.git/config` sets `core.fsmonitor` to a
+ * command, running `git status` executed that command and wrote a file. The
+ * operator's own posture had classified it as a read and not asked.
+ *
+ * That is the failure this project has said it cannot accept — a miss costs one
+ * interruption, a false pass is a write nobody approved — so the entries below
+ * were re-checked against the criterion and three came off:
+ *
+ * - `git` — reads `.git/config`, which can run code through `core.fsmonitor`
+ *   (on `status`), `core.pager` (on `log`/`diff`/`show`) and `diff.*.textconv`
+ *   (on `diff`). There is no environment variable that disables repository-level
+ *   config: `GIT_CONFIG_NOSYSTEM` only covers the system file. Overriding the
+ *   dangerous keys one by one with `git -c key=` would mean enumerating them,
+ *   which is the "list the dangerous things" shape this project has already
+ *   failed with twice. Restoring git needs D26 (repository config must not
+ *   escalate its own privileges) rather than a longer list here.
+ * - `rg` — ripgrep's `--pre` flag runs a preprocessor command. Not verified on
+ *   this machine, which has no ripgrep installed; it is excluded because a tool
+ *   whose flags cannot all be vouched for does not belong on a list whose entire
+ *   safety argument is that each entry was vouched for.
+ * - `npm ls` / `list` — npm reads the project's own `.npmrc`, and whether that
+ *   can influence execution was not verified. Only the exact version query stays.
+ *
+ * Entries that were checked and *can* write, kept out for that reason:
  *
  * - `date` and `time` — both *set* the system clock when given an argument
  *   (`time 10:00`), so they are not reads at all.
@@ -188,15 +212,15 @@ function askBeforeWriting(): Rule[] {
  * - `uniq` — takes an optional second positional argument that is an output file.
  * - `echo` — harmless alone, but its entire purpose is to produce output that is
  *   normally redirected; it costs one interruption and is left out on principle.
- * - `find` is included, but only with its writing flags refused (below).
+ * - `find` is included, but only with its executing flags refused (below).
  */
 const PURE_READ_COMMANDS: ReadonlySet<string> = new Set([
   // Listing and locating.
   "dir", "ls", "pwd", "cd", "which", "where", "whoami",
   // Reading file contents.
   "cat", "type", "head", "tail", "wc",
-  // Searching.
-  "grep", "findstr", "rg",
+  // Searching. `rg` is absent: see the admission criterion above.
+  "grep", "findstr",
 ]);
 
 /**
@@ -205,21 +229,6 @@ const PURE_READ_COMMANDS: ReadonlySet<string> = new Set([
  */
 const FIND_WRITING_FLAGS: ReadonlySet<string> = new Set([
   "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprintf",
-]);
-
-/**
- * `git` subcommands that only read.
- *
- * The first word cannot decide anything for git: `git status` reads and
- * `git commit` writes. So the subcommand is what is matched, and only these are
- * let through. `config` is absent because `git config key value` writes, `branch`
- * because `git branch -D name` deletes, `tag` because `git tag name` creates, and
- * `stash` because every form of it changes the working tree.
- */
-const GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  "status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree",
-  "blame", "shortlog", "describe", "cat-file", "reflog", "name-rev",
-  "count-objects", "branch",
 ]);
 
 /**
@@ -276,28 +285,16 @@ function isReadOnlyCommand(args: Record<string, unknown>): boolean {
     return !rest.some((token) => FIND_WRITING_FLAGS.has(token));
   }
 
-  if (name === "git") {
-    const [subcommand] = rest;
-    if (subcommand === undefined || !GIT_READ_SUBCOMMANDS.has(subcommand)) return false;
-    // `git diff --output=file` writes one, so the subcommand alone is not the
-    // whole story: refuse the flag that writes even though its verb reads.
-    if (rest.some((token) => token.startsWith("--output"))) return false;
-    // `git branch` with no argument lists branches, but `git branch name` creates
-    // one and `git branch -D name` deletes one. Only the bare listing is a read,
-    // which is why this is a length check rather than a scan for delete flags —
-    // the creating form has no flag to scan for.
-    if (subcommand === "branch") return rest.length === 1;
-    return true;
-  }
+  // No branch for `git`, on purpose: it reads repository configuration that can
+  // run code, so it falls through to "ask" like anything else unrecognised. See
+  // the admission criterion above before adding a special case for it.
 
   if (name === "npm" || name === "pnpm" || name === "yarn") {
-    const [subcommand] = rest;
-    if (subcommand === undefined) return false;
-    // `npm ls` reads the tree. `npm test`, `npm run` and `npm install` execute
-    // whatever the project's own scripts say, which is arbitrary code and is the
-    // reason a test in this project's suite asserts they still ask.
-    if (subcommand === "ls" || subcommand === "list" || subcommand === "ll") return true;
-    return rest.length === 1 && VERSION_ONLY_FLAGS.has(subcommand);
+    // Only the exact version query. `npm test`, `npm run` and `npm install`
+    // execute whatever the project's own scripts say, which is arbitrary code;
+    // `npm ls` was removed as well because npm reads the project's `.npmrc` and
+    // whether that can influence execution was never verified.
+    return rest.length === 1 && VERSION_ONLY_FLAGS.has(rest[0]!);
   }
 
   if (name === "go") {

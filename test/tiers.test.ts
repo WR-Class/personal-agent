@@ -53,8 +53,10 @@ describe("tiers: naming and resolution", () => {
         `${tool} must still ask in the middle tier when nothing marks it as a read`,
       );
     }
-    // The one intentional exception, stated as such.
-    assert.equal(decide(middle.rules, "run_command", { command: "git status" }).decision, "allow");
+    // The one intentional exception, stated as such. `dir` rather than `git
+    // status`: git is off the read-only whitelist because repository config can
+    // run code (see test/middle-tier.test.ts), so it now asks like everything else.
+    assert.equal(decide(middle.rules, "run_command", { command: "dir" }).decision, "allow");
     assert.equal(decide(middle.rules, "run_command", { command: "rm -rf build" }).decision, "approve");
   });
 
