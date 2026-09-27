@@ -8,7 +8,7 @@ import type { CycleEvent, CycleEvaluation } from "../src/cycle.ts";
 import { CycleStore } from "../src/cycle-store.ts";
 import { GeneStore } from "../src/gene-store.ts";
 import { mintGene } from "../src/gene.ts";
-import type { Gene } from "../src/gene.ts";
+import type { Gene, GeneDraft } from "../src/gene.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { ToolRegistry, createReadFileTool } from "../src/tools.ts";
@@ -30,7 +30,7 @@ function call(name: string, args: Record<string, unknown>, id = "call_1"): ToolC
   return { id, name, arguments: JSON.stringify(args) };
 }
 
-function gene(overrides: Partial<Gene> = {}): Gene {
+function gene(overrides: Partial<GeneDraft> = {}): GeneDraft {
   return {
     name: "loop-discipline",
     intent: "build",

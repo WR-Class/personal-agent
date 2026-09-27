@@ -191,9 +191,13 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     let raw:string;
     try{raw=await readFile(options.mintGene,"utf8");}
     catch(error){throw new UsageError(`无法读取基因文件：${(error as Error).message}`);}
+    // A BOM is what Windows editors and `Set-Content -Encoding utf8` write by
+    // default. JSON.parse rejects it, and "not valid JSON" would send the
+    // operator looking for a syntax error that is not there, so it is stripped.
+    if(raw.charCodeAt(0)===0xfeff)raw=raw.slice(1);
     let draft:unknown;
     try{draft=JSON.parse(raw);}
-    catch{throw new UsageError("基因文件不是合法 JSON");}
+    catch(error){throw new UsageError(`基因文件不是合法 JSON：${(error as Error).message}`);}
     let minted;
     try{minted=mintGene(draft as Gene);}
     catch(error){throw new UsageError(`基因不合格：${(error as Error).message}`);}

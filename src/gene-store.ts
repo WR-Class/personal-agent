@@ -71,6 +71,12 @@ export interface AppliedGene {
    * so these bound the round mechanically (D18).
    */
   readonly constraints: Gene["constraints"];
+  /**
+   * The gene's claims, carried so the runtime can compare them against what the
+   * round actually did (D20). Like `constraints`, this is enforcement data: the
+   * prompt says what to prove, this decides whether it was proven.
+   */
+  readonly validation: Gene["validation"];
 }
 
 export class GeneStore {
@@ -227,7 +233,7 @@ export class GeneStore {
     const candidates = [...state.genes.entries()].map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression }));
     const { selection } = selectGene(candidates, request, DEFAULT_SELECTION_POLICY, now);
     if (!selection) return undefined;
-    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, block: renderGeneBlock(selection) };
+    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection) };
   }
 }
 

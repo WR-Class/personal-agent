@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { DEFAULT_SELECTION_POLICY, canonicalize, geneAddress, mintGene, scoreCandidates, selectGene } from "../src/gene.ts";
 import { GeneStore } from "../src/gene-store.ts";
-import type { Gene, GeneExpression } from "../src/gene.ts";
+import type { Gene, GeneDraft, GeneExpression } from "../src/gene.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { createEchoAdapter } from "../src/echo-adapter.ts";
@@ -21,7 +21,7 @@ before(async () => {
 
 const NOW = 1_700_000_000_000;
 
-function draft(overrides: Partial<Gene> = {}): Gene {
+function draft(overrides: Partial<GeneDraft> = {}): GeneDraft {
   return {
     name: "snippet-edit-discipline",
     intent: "build",

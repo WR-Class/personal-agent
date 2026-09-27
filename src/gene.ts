@@ -33,6 +33,17 @@ export interface GeneConstraints {
   readonly forbiddenPaths: readonly string[];
 }
 
+/**
+ * A validation entry: an observable fact the round must show, or — as a bare
+ * string written before this existed — a command kept verbatim and reported as
+ * unverifiable until a runner exists (D20).
+ */
+export type GeneValidation =
+  | { readonly kind: "files-written"; readonly paths: readonly string[] }
+  | { readonly kind: "no-write" }
+  | { readonly kind: "tool-used"; readonly tool: string; readonly times?: number }
+  | { readonly kind: "command"; readonly command: string };
+
 /** An immutable capability unit. Superseded, never edited. */
 export interface Gene {
   readonly name: string;
@@ -41,13 +52,20 @@ export interface Gene {
   readonly signalsMatch: readonly string[];
   readonly preconditions: readonly string[];
   readonly strategy: readonly GeneStep[];
-  /** Recorded at mint; enforced by the write gate once that slice exists. */
+  /** Recorded at mint; enforced mechanically by the write gate (D18). */
   readonly constraints: GeneConstraints;
-  /** Commands that prove the strategy worked. Empty until M3 can run them. */
-  readonly validation: readonly string[];
+  /** Claims the round must show. Checked against the journal (D20). */
+  readonly validation: readonly GeneValidation[];
   /** Compact warnings from past failures — never naive appended prose. */
   readonly avoid: readonly string[];
 }
+
+/**
+ * A gene draft as callers may write it: `validation` accepts bare strings for
+ * convenience and for drafts written before claims existed, and `mintGene`
+ * normalises them to a `command` claim.
+ */
+export type GeneDraft = Omit<Gene, "validation"> & { readonly validation: readonly (GeneValidation | string)[] };
 
 /** A minted gene: the body plus the identity derived from it. */
 export interface MintedGene {
@@ -87,9 +105,9 @@ function strings(value: unknown, what: string, options: { allowEmpty?: boolean }
  * Mint a Gene. Structural invariants refuse a draft here, so no caller can
  * bypass them: an acting strategy must carry a verify step (without one there
  * is no signal to evolve against), budgets must be positive, and validation
- * must be declared so M3 can enforce the admission gate mechanically later.
+ * must be declared as claims the runtime can compare against the journal.
  */
-export function mintGene(draft: Gene): MintedGene {
+export function mintGene(draft: GeneDraft): MintedGene {
   if (typeof draft.name !== "string" || draft.name.trim() === "") throw new GeneValidationError("name must be a non-empty string");
   if (!GENE_INTENTS.includes(draft.intent)) throw new GeneValidationError(`intent must be one of: ${GENE_INTENTS.join(", ")}`);
   const gene: Gene = {
@@ -99,10 +117,55 @@ export function mintGene(draft: Gene): MintedGene {
     preconditions: strings(draft.preconditions ?? [], "preconditions", { allowEmpty: true }),
     strategy: parseStrategy(draft.strategy ?? []),
     constraints: parseConstraints(draft.constraints),
-    validation: strings(draft.validation, "validation"),
+    validation: parseValidation(draft.validation),
     avoid: strings(draft.avoid ?? [], "avoid", { allowEmpty: true }),
   };
   return { gene, address: geneAddress(gene) };
+}
+
+/**
+ * Validation entries. A bare string is a hand-written command: kept verbatim and
+ * reported as unverifiable rather than reinterpreted (D20). Structured claims are
+ * checked for the fields their kind needs, so a malformed claim is refused at
+ * mint rather than silently comparing as "met" later.
+ */
+function parseValidation(entries: unknown): GeneValidation[] {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new GeneValidationError("validation must be a non-empty array");
+  }
+  return entries.map((entry, index) => {
+    const where = `validation[${index}]`;
+    if (typeof entry === "string") {
+      if (entry.trim() === "") throw new GeneValidationError(`${where} must not be empty`);
+      return { kind: "command", command: entry } as const;
+    }
+    if (entry === null || typeof entry !== "object") {
+      throw new GeneValidationError(`${where} must be a string or an object with a known kind`);
+    }
+    const claim = entry as Record<string, unknown>;
+    switch (claim.kind) {
+      case "files-written": {
+        const paths = strings(claim.paths, `${where}.paths`);
+        return { kind: "files-written", paths } as const;
+      }
+      case "no-write":
+        return { kind: "no-write" } as const;
+      case "tool-used": {
+        const [tool] = strings([claim.tool], `${where}.tool`);
+        if (claim.times === undefined) return { kind: "tool-used", tool: tool! } as const;
+        if (!Number.isSafeInteger(claim.times) || (claim.times as number) < 1) {
+          throw new GeneValidationError(`${where}.times must be a positive integer when present`);
+        }
+        return { kind: "tool-used", tool: tool!, times: claim.times as number } as const;
+      }
+      case "command": {
+        const [command] = strings([claim.command], `${where}.command`);
+        return { kind: "command", command: command! } as const;
+      }
+      default:
+        throw new GeneValidationError(`${where}.kind must be one of: files-written, no-write, tool-used, command`);
+    }
+  });
 }
 
 function parseStrategy(steps: readonly GeneStep[]): GeneStep[] {

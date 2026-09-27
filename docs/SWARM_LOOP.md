@@ -46,7 +46,7 @@
 | 基因定义与存储 | ✅ | `src/gene.ts` 铸造不变量与内容寻址；`src/gene-store.ts` 追加式 JSONL、状态=折叠、幂等入库、截断尾容忍；outcome 行含 `status`/`failureClass` | 无基因版本/血缘；无修订与淘汰；无组合基因 |
 | 基因选择 | ✅ 基础版（含反馈） | intent 门控 + 信号重叠（词元与中文子串）+ 拉普拉斯平滑成功率 + 新近度（只认最后一次**成功**）+ 连续失败隔离（`quarantineStreak`=2）；零重叠即排除 | 选择理由与候选分数未落盘（只有被选中者进 SendResult）；无探索/利用权衡；失败归因不细分到"基因错还是任务错" |
 | PDRI 执行 | ✅ 骨架 + 写入门与硬预算 | `src/cycle.ts` 纯状态机：`planned→executing→reviewing→integrating→completed`，异常 `failed/cancelled`；顺序错乱抛错、终点不可逆、**评审未通过不得整合**；`src/cycle-store.ts` 追加式 `cycles.jsonl`，状态=对事件日志折叠可重放；runtime 每个 send 一个周期（`cycleId`=`runId`）；**`src/write-budget.ts` 每周期账本**：不同路径精确计文件、只在参数真带内容时计行、读不出就记 `null` 不估算；**拒绝发生在执行之前**（被拒写入根本没发生，不留半写文件），拒绝以失败工具结果 + `audit(denied)` 呈现而非抛异常；**选中基因的 `maxFiles`/`maxLines` 就是本轮预算**（constraints 从记录变成机械强制），无基因轮用默认 3 文件/200 行 | 无返工轮次（v1 单趟）；无悬空周期定时收口（单进程串行，暂不可能）；Plan 阶段目前= TaskSpec+基因+既有预算事实，没有独立的计划产物；账本不覆盖 shell 造成的写入（无 shell）；无"整轮不许写"的表达方式（零预算被参数守卫拒绝） |
-| 结果评估 | ✅ 机械版 | `evaluateRun`：从 steps/toolCalls/toolErrors + 失败类别读出 `success/partial/failed/blocked`，证据逐条落盘，`reviewer: "mechanical"`；**不采信模型自报成功**；失败归因区分 budget/model/validation/cancelled/unknown | **没有验证执行器**（首要缺口）：`Gene.validation` 只被存储并渲染进提示词，**从未执行**，所以 `failureClass=validation` 目前没有真实来源，也无法区分"看起来成功"与"声称的证明成立"；独立评审者**后置**（须先有证据可校准，见 D19）；`objectiveSatisfied` 这类判断仍无机械依据，因此**没有**这个字段；低置信度结果无人工复核入口 |
+| 结果评估 | ✅ 机械版 + 结构化验证比对 | `evaluateRun`：从 steps/toolCalls/toolErrors + 失败类别读出 `success/partial/failed/blocked`，证据逐条落盘，`reviewer: "mechanical"`；**不采信模型自报成功**；失败归因区分 budget/model/validation/cancelled/unknown；**`Gene.validation` 已是结构化声明**（files-written / no-write / tool-used / command），轮末逐条比对日志事实，三态 `met/unmet/unverifiable`，被推翻的声明把本轮降为 `partial` | **仍无验证执行器**：`command` 声明一律 `unverifiable`（无 shell），所以 `failureClass=validation` 仍无真实来源；独立评审者**后置**（须先有证据可校准，见 D19）；`objectiveSatisfied` 这类判断仍无机械依据，因此**没有**这个字段；低置信度结果无人工复核入口 |
 | 能力沉淀 | ✅ 基础闭环 + 蒸馏 + 归纳草稿 | outcome 行带四态与失败类别；无基因轮记基线（`address: null`）；表达式折出 attempts/successes/lastSuccessAt/streak；选择器消费这些统计（已测：一次失败即改变下一轮选择）；**失败档案** = outcome 行带 `intent`/`signals`/`evidence`，`geneStore.failures()` 读出；**蒸馏** = `src/distill.ts` 纯函数：按 (intent, 失败类别) 分组、保留达到阈值（3）的复发信号、产出**只含 guard 步**的 Gene 草稿 + 机械证据；**归纳** = `src/induct.ts` 纯函数：只取 **无基因的成功轮**（用过基因的不是缺口），按 intent 分组保留复发信号（阈值 2），产出候选草稿——其 act 步骤**就是转录事实证明用过的工具顺序**；`--distill` / `--induct` 打印草稿并按已有基因去重 | **归纳不产出策略洞见**：转录能证明"调用了哪些工具、什么顺序"，不能推出"应该先读再改"，那需要把意图读进工具序列（模型叙述），正是 D14/D16 禁止的，所以草稿附一句 caveat 明说这一点；草稿**不含 validation**，`mintGene` 拒绝（蒸馏的 guard 草稿还会因"有 act 无 verify"再被拒一次）——操作者必须补真正的验证命令；无增益定价；无失败档案的独立查询面 |
 
 ---
@@ -113,7 +113,7 @@ Evaluation
   ├─ status: success | partial | failed | blocked
   ├─ objectiveSatisfied
   ├─ constraintsSatisfied
-  ├─ evidence[]
+  ├─ evidence[]            ← 含 validation:<outcome>=<claim> 逐条结果
   ├─ failureClass
   ├─ confidence
   ├─ reviewer
@@ -121,9 +121,11 @@ Evaluation
   └─ notes
 ```
 
+**已落地的部分（D20）**：`constraintsSatisfied` 有了机械依据——基因的 `validation` 声明逐条比对写入账本与工具序列，三态 `met/unmet/unverifiable`；被推翻的声明使本轮降为 `partial`；`satisfied` 只在全部 `met` 时为真。**`objectiveSatisfied` 仍然故意不存在**：没有任何机械依据能判断"目标是否达成"，加一个字段就是编造。
+
 评估优先使用客观证据：测试是否通过、文件是否存在、工具是否返回成功、输出是否符合 schema、是否越权、是否超预算、是否满足 spec 验收条件。
 
-**当前最重要的缺口（D19）**：上面这一串里，"验证通过"这一项**还没有执行器**——`Gene.validation` 只是一个字符串数组。因此评估目前只能回答"这轮跑成了什么样"，不能回答"它是否真的做到了"。这不是措辞问题：它是"独立评审者"和"增益定价"两个后续环节共同的前置条件。
+**当前最重要的缺口（D19/D20）**：上面这一串里，"验证通过"这一项**只有半机械形态**——声明与比对已经落地（`Gene.validation` 是结构化声明，轮末按日志事实逐条比对，三态 `met/unmet/unverifiable`），但 **`command` 声明无法执行**（无 shell），一律记为 `unverifiable`。所以系统现在已经能抓出"基因过度声明"（声明与事实不符 → 降为 `partial`），但还不能证明"测试真的通过了"。**这一半是有意为之，不许假装它是真的执行**；M3 进程工具落地后才补上另一半，那之后独立评审者与增益定价才具备前置条件。
 
 验收条件：
 
@@ -227,8 +229,8 @@ TaskSpec → 选择基因 → PDRI 四阶段 → Review → Outcome → 更新�
 
 阶段 A（最小闭环）、阶段 C（失败档案 + 蒸馏 + 成功归纳）与写入门硬预算已落地并测试。**顺序已在 D19 重排**：验证先于评审。
 
-1. **机械验证执行器（`Gene.validation` 真正跑起来）**：当前 `Gene.validation` 只被存储并渲染进提示词，**从未执行**——所以现在无法区分"看起来成功了"和"声称的证明真的成立"。这是下一步，因为独立评审者必须先有证据可校准。前置条件是受控进程工具（M3）。
-2. **验证结果进入评估**：`evaluateRun` 消费真实验证事实，`failureClass=validation` 才终于有真实来源（现在是空类别）。
+1. **验证执行器（把 `command` 声明真正跑起来）**：结构化的声明与比对已落地（D20），但 `command` 目前一律 `unverifiable`——系统能抓"过度声明"，不能证"测试通过"。前置条件是受控进程工具（M3）；接口已按"换执行器不改判据"设计。
+2. **`validation` 失败类别接真实来源**：`command` 能执行后，`failureClass=validation` 才不再是空类别。
 3. **独立评审者**：等 ① ② 落地后再做——那时它的分数是叠加在证据之上的信号，且自报校准 α 可测。**不采用**"让另一个模型说这轮干得不错"式评审（D19）。
 4. **增益定价**：基线行（`address: null`）已从第一天积累，数据够厚后做"用了基因 vs 没用"的反事实对照——**没有它，基因库的进化无法被证伪**。
 5. **M3 进程工具接入时复用同一写账本**：当前写入门只覆盖六个文件工具（D18 已记）。

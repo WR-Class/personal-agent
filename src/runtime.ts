@@ -13,6 +13,7 @@ import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import type { GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
@@ -381,6 +382,8 @@ export function formatBudget(budget: RunBudget): string {
 
 export interface SendResult {
   reply: ChatMessage;
+  /** The applied gene's claims compared against the round, when a gene applied. */
+  validation?: ValidationReport;
   /** Reasoning trace of the final reply, when the provider exposed one. */
   reasoning?: string;
   usage: ChatUsage;
@@ -783,13 +786,27 @@ export class AgentRuntime {
         signal?.throwIfAborted();
         const compaction = await this.store.compaction(this.sessionId);
         const covered = compaction ? Math.min(compaction.covers, (await this.store.history(this.sessionId)).length) : 0;
-        // Review: the verdict is read off what the round mechanically did. Then
-        // integration records it. A failed review never reaches here — the loop
-        // returned a reply, so the worst this can be is partial.
+        // Review: the verdict is read off what the round mechanically did, and
+        // then the applied gene's claims are compared against that same record.
+        // A claim that was contradicted makes the round partial at best — the
+        // gene said what proof would look like and the proof is not there.
         const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null });
-        cycle = await this.advance(cycle, { type: "review-ready", at: Date.now(), evaluation });
+        const validation = applied ? checkValidation(applied.validation, {
+          filesWritten: this.writeLedger.files,
+          tools: this.outcomeTools ?? [],
+        }) : null;
+        const verdict = validation && validation.failed.length > 0
+          ? {
+            ...evaluation,
+            status: "partial" as const,
+            evidence: [...evaluation.evidence, ...validationEvidence(validation)],
+          }
+          : validation
+            ? { ...evaluation, evidence: [...evaluation.evidence, ...validationEvidence(validation)] }
+            : evaluation;
+        cycle = await this.advance(cycle, { type: "review-ready", at: Date.now(), evaluation: verdict });
         cycle = await this.advance(cycle, { type: "integrate-ready", at: Date.now() });
-        await this.journalOutcome(evaluation);
+        await this.journalOutcome(verdict);
         cycle = await this.advance(cycle, { type: "complete", at: Date.now() });
         return {
           reply: assistant,
@@ -797,8 +814,9 @@ export class AgentRuntime {
           model,
           taskSpec,
           cycleId: runId,
-          evaluation,
+          evaluation: verdict,
           ...(applied ? { appliedGene: { address: applied.address, name: applied.name } } : {}),
+          ...(validation ? { validation } : {}),
           ...(reasoning === undefined ? {} : { reasoning }),
           // `buildPrompt`, not `store.history`: this field means "what the model
           // saw", which includes the system prompt; the persisted log does not.
