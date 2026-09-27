@@ -104,6 +104,21 @@
   - `taskkill /T /F` 修复后：3 项 kill 相关测试全绿，输出停止增长。
 - **未验证**：`taskkill` 在非 Windows 上不存在（代码按平台分支，非 Windows 走 `child.kill()`，**未在真机验证过非 Windows 路径**）；作业在 agent 非正常终止（`SIGKILL`）时是否残留**未测**——退出清理只覆盖正常退出路径。
 
+### 中间档 / 只读命令免问（D48，2026-09-29）
+
+- **参考**：goose 的 `SmartApprove`。[permission_inspector.rs](../../_research/repos/goose/crates/goose/src/permission/permission_inspector.rs)：159–196 `inspect`，五层顺序为 ①用户设定权限（164）②`read_only_hint` 标注（173–174）③扩展管理必问（178）④**交 LLM 判只读**（183–189，实现在 [permission_judge.rs](../../_research/repos/goose/crates/goose/src/permission/permission_judge.rs)：145–185）⑤**默认问**（192–193）。缓存见 `cache_non_readonly_decision`（22）。
+- **采用**：第 ①②③⑤ 层的**形状** —— 已知只读放行、写入必问、未知必问（fail-closed）。第 ② 层在本项目里换成**静态事实**：工具全是内置的，`READ_ONLY_TOOLS` 就是答案，不需要标注协议。
+- **不采用第 ④ 层（LLM 判定只读）**，理由是可核对的：goose 的工具经 MCP 从外部来，它**无从知道**某工具是否只读，只能问模型；本项目工具全在自己代码里，**这是已知事实而非待推断的未知**。用一次额外的 provider 往返去猜一个已知事实，只增加延迟与不可预测性。这与本项目此前拒绝 `chars/4` token 估算同一理由：**宁可显示"未测量"，也不打印一个可能双向都错的数字。**
+- **同时记录了 goose 第 ④ 层的失败方向**：`permission_judge.rs` 179–185，取不到 model config、provider 报错、响应解析失败**都返回空集合** = 全部都要问。**这是 fail-closed，方向正确**，本项目沿用同一方向（未识别 → 问）。
+- **不采用**：crush 的 `safeCommands` 免问清单（D46 已记录其 `chainingMetacharacters` 漏掉单个 `&`）。本项目自己写白名单，并且**没有复制那个漏项**：`>` `|` `&` `;` 与换行一律拦下。
+- **本轮由测试逼出的设计修正**（都是真实写入途径，非假想）：
+  - 首版按**第一个词**放行，`node -e "require('fs').writeFileSync(...)"` 与 `git commit -m x` 都被判成只读 —— **测试抓到，改为按子命令 + 标志判定**。
+  - 审计动词表时发现 `date`/`time` 带参数**设置系统时钟**、`sort -o`/`uniq <in> <out>` **写文件**、`find -delete`/`-exec` **删文件/跑任意命令**、`git branch <名>` **建分支且无标志可扫**、`git diff --output=x` **写文件**、`npm test`/`npm run`/`npx` **执行项目自己的脚本**。全部移出白名单或加标志拦截。
+  - 首版只有一条条件 `allow` 规则，未命中时落到通配 `deny`，于是**未识别命令被 outright 拒绝**而非"要问"。补一条无条件 `approve` 规则修正。
+- **残留风险（未解决，已写入 SAFETY）**：`git log` 会调用 `core.pager`；若仓库自身 `.git/config` 把 pager 设为恶意命令，一条被判"只读"的 `git log` 就会执行它。这与 **D26"仓库配置不能自己给自己提权"是同一问题，而 D26 尚未实现**。可选缓解：强制 `--no-pager`，或等 D26 落地。
+- **验证**：单测 82 项（`test/middle-tier.test.ts`，逐条覆盖上述每个漏洞）；全量 **525 通过 / 0 失败 / 1 跳过**；**真机两条**（网关在线那一轮）：`ask-before-writing` 下 `node --version` **无人可批仍跑通**、`echo pwned > <文件>` **被拦且磁盘无文件**。
+- **未验证**：非 Windows 平台（白名单含 Unix 动词但只在 Windows 实测）；`git log` pager 风险**未做真机复现**（只做了源码与文档层面的认定）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

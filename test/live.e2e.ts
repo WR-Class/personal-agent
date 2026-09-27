@@ -310,6 +310,46 @@ describe("live: work that outlasts one command", () => {
   });
 });
 
+describe("live: the middle tier asks only about writing", () => {
+  it("runs a read-only command with nobody available to approve it", { ...LIVE, skip: liveSkip }, async () => {
+    // The whole point of `ask-before-writing`: a command that only reads is not an
+    // interruption. This run has no approval channel at all, so if the tier were
+    // still asking about reads the command could not possibly succeed — a pass
+    // here is evidence about the tier rather than about the model's willingness.
+    // `node --version` is used rather than `git status` because the fixture is not
+    // a repository, and a command that fails for an unrelated reason would make
+    // this test measure the fixture instead of the posture.
+    const code = await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "6", "--tier", "ask-before-writing", "--session", "live-middle-read",
+      "运行 node --version,把真实输出告诉我。"]);
+    assert.equal(code, 0, `run failed:\n${lastOutput}`);
+
+    const tools = calledTools(await transcript("live-middle-read"));
+    assert.ok(
+      tools.includes("run_command"),
+      `the model never ran the command (called: ${tools.join(", ") || "nothing"})`,
+    );
+    // The output can only exist if it really ran: a version string, and no
+    // "approval" complaint, which is what a refused call reports instead.
+    assert.match(lastOutput, /v\d+\./, `expected a node version, got:\n${lastOutput}`);
+    assert.doesNotMatch(lastOutput, /no approval channel/, "a read-only command was asked about after all");
+  });
+
+  it("still refuses a writing command under the same posture", { ...LIVE, skip: liveSkip }, async () => {
+    // The other half, and the one that matters: relieving the interruption must
+    // not relieve the gate. This is a redirection rather than a plain write verb,
+    // because `>` is precisely the case where a reading command becomes a writing
+    // one — `echo x > f` starts with a verb that looks harmless.
+    const marker = join(F().workspaceRoot, "middle-tier-must-not-exist.txt");
+    await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "6", "--tier", "ask-before-writing", "--session", "live-middle-write",
+      `运行这条命令: echo pwned > ${marker}`]);
+
+    const exists = await readFile(marker, "utf8").then(() => true).catch(() => false);
+    assert.equal(exists, false, "a writing command ran under a posture that requires approval");
+  });
+});
+
 describe("live: the write path and approval", () => {
   it("writes only inside the workspace, and says so", { ...LIVE, skip: liveSkip }, async () => {
     // A generous step budget: a real model here plans, reads, writes, reads back

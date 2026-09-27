@@ -41,7 +41,7 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --induct            把"没有基因可用但成功了"的轮次归纳成候选草稿并打印，不自动铸造
       npm start -- --trust-root <dir>  授予对工作区外某目录的**只读**访问（写入仍限于工作区）
       npm start -- --trusted           列出已授予的只读目录；--untrust-root <dir> 撤销
-      npm start -- --tier <name>       权限档位：read-only / workspace-write / full-access
+      npm start -- --tier <name>       权限档位：read-only / ask-before-writing / workspace-write（默认）/ full-access
       npm start -- --stream "问题"     用 SSE 流式传输（服务端只支持流式时使用；不改变回答内容）
 选项：--home <dir> --workspace <dir> --max-steps <n> --max-tools <n>
       --max-tools-per-step <n> --max-send-ms <n> --max-context-bytes <n> --max-context-tokens <n> --totals

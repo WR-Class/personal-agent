@@ -21,7 +21,7 @@ const FILE_TOOLS = ["edit_file", "patch_file", "create_file", "delete_file", "re
  * something it could never call. `run_command` joins by being in `WRITE_TOOLS`,
  * which is the same list the tiers read, so the two answers cannot drift.
  */
-const APPROVAL_TOOLS: readonly string[] = [...FILE_TOOLS, ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool))];
+export const APPROVAL_TOOLS: readonly string[] = [...FILE_TOOLS, ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool))];
 
 /**
  * The built-in rules. These express exactly what the previous hardcoded switch

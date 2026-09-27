@@ -1,5 +1,5 @@
 /**
- * Named permission tiers (D22, D26, D32).
+ * Named permission tiers (D22, D26, D32, D48).
  *
  * A tier is a name for a whole posture, so that a person choosing one is
  * choosing a coherent set of answers rather than assembling them by hand. The
@@ -16,11 +16,38 @@
  *    reachable through a permission label, and `resolveTier` refuses to fall
  *    back to it when a name is unknown. Refusing to *guess* full access is what
  *    keeps a stranger's default safe.
+ *
+ * The middle tier (D48) exists because the default asked about every single
+ * write, which was measured to be more interruption than the mature products
+ * impose. goose's `SmartApprove` is the reference: it stops asking when the
+ * request is one it already knows to be harmless, and asks otherwise.
+ *
+ * What "harmless" means here is deliberately narrower than goose's, and the
+ * difference is worth stating because it is the interesting part of the design.
+ * goose has no way to know whether an arbitrary MCP tool is read-only, so layer 4
+ * of its inspection asks the *model* to judge, and any failure of that call
+ * (no provider, an error, an unparseable reply) falls back to asking — see
+ * `permission_judge.rs` 179–185, which returns an empty set on every failure
+ * path. That is fail-closed and correct for a system whose tools arrive from
+ * outside.
+ *
+ * This project has no MCP and no third-party tools: every tool is built here, so
+ * whether one writes is a fact in this codebase rather than an inference. Asking
+ * a model to guess it would take a known fact and turn it into a guess, adding a
+ * round trip and an unpredictable failure mode to buy nothing. (The same reason
+ * an earlier round refused `chars/4` token estimates: prefer "not measured" to a
+ * number that can be wrong in both directions.) So layer 4 is not adopted, and
+ * the middle tier decides from `READ_ONLY_TOOLS` — the same list the tiers and
+ * the rule table already read.
+ *
+ * What this tier therefore cannot do: stop asking about a *command*. Whether
+ * `run_command` is harmless depends on the command, and the tool makes no promise
+ * about it, so it keeps asking. That is a real limit, not an oversight.
  */
 
 import { RULE_TIERS } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
-import { DEFAULT_RULES } from "./file-policy.ts";
+import { APPROVAL_TOOLS, DEFAULT_RULES } from "./file-policy.ts";
 import { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
 export { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
@@ -63,12 +90,251 @@ function denyAllWrites(reason: string): Rule[] {
   ];
 }
 
+/**
+ * The middle tier's rules (D48).
+ *
+ * It stops asking about reads and keeps asking about writes. That is the whole
+ * intent, and it is worth being precise about how much it buys, because an
+ * earlier draft of this file claimed more than the code delivers and its own test
+ * caught it.
+ *
+ * Measured while building it: every `approveExact` call site in `tools.ts` is on
+ * a write tool — `run_command`, `job_kill`, and the six file tools. No read tool
+ * asks at all. So under `workspace-write` the interruptions an operator actually
+ * sees are already writes, and a tier that merely re-states the read/write split
+ * decides *exactly* what `workspace-write` decides. That is a synonym, not a
+ * posture, and a test in `tiers.test.ts` now fails if the two ever collapse into
+ * one another again.
+ *
+ * What genuinely differs is `run_command`. It is classified as a writing tool
+ * because it can write; but a command is very often only a read — `git status`,
+ * `ls`, `grep`. goose resolves this by asking the model to judge whether a request
+ * is read-only, which this project declines to do (see the header: the fact is
+ * known here, not guessed). The middle tier therefore takes the narrower, honest
+ * position: a command that *only reads* does not need approval, and that is
+ * decided by whether the command writes, not by asking anyone.
+ *
+ * The judgement is deliberately conservative: anything not recognised as a pure
+ * read still asks. A miss costs an interruption, which is the failure this design
+ * can afford; a false pass would be a write nobody approved, which it cannot.
+ */
+function askBeforeWriting(): Rule[] {
+  return [
+    // `run_command` needs *two* rules, and the first draft had only one, which
+    // its own test caught: a single conditional allow left every command that did
+    // not match the predicate falling through to the wildcard deny, so an
+    // unmatched command was refused outright instead of being asked about. The
+    // unconditional `approve` below is what makes the conditional allow a
+    // *convenience* rather than the only path through.
+    {
+      id: "ask-before-writing.read-only-command",
+      tool: "run_command",
+      decision: "allow",
+      tier: RULE_TIERS.WORKSPACE,
+      priority: 80,
+      when: (args) => isReadOnlyCommand(args),
+      reason: "只读命令：本档不询问",
+    },
+    {
+      id: "ask-before-writing.run_command",
+      tool: "run_command",
+      decision: "approve",
+      tier: RULE_TIERS.WORKSPACE,
+      priority: 10,
+    },
+    // Every other write keeps asking. Listed explicitly rather than inherited, so
+    // a change to `DEFAULT_RULES` cannot silently quieten the posture an operator
+    // chose by name.
+    ...APPROVAL_TOOLS.filter((tool) => tool !== "run_command").map(
+      (tool): Rule => ({
+        id: `ask-before-writing.${tool}`,
+        tool,
+        decision: "approve",
+        tier: RULE_TIERS.WORKSPACE,
+        priority: 10,
+      }),
+    ),
+    // Reads are allowed, one rule per tool, for the reason recorded in
+    // `file-policy.ts`: a wildcard would also admit the write tools.
+    ...READ_ONLY_TOOLS.map(
+      (tool, index): Rule => ({
+        id: `ask-before-writing.read-${tool}`,
+        tool,
+        decision: "allow",
+        tier: RULE_TIERS.WORKSPACE,
+        priority: 50 - index,
+      }),
+    ),
+  ];
+}
+
+/**
+ * Commands whose whole meaning is to read.
+ *
+ * This is a whitelist and is meant to be a small one. It is not a safety
+ * mechanism — the safety is that everything unrecognised still asks — so a miss
+ * here loses a convenience and nothing else. That is the same shape as crush's
+ * unasked-command list (`internal/agent/tools/safe.go`), and the same reason its
+ * gaps are not security holes: the fallback is to ask, not to allow.
+ *
+ * Several entries that look like pure reads are absent, because each was checked
+ * against its own flags and found able to write. They are recorded here rather
+ * than quietly dropped, since "that verb is obviously a read" is exactly the
+ * assumption that produced them:
+ *
+ * - `date` and `time` — both *set* the system clock when given an argument
+ *   (`time 10:00`), so they are not reads at all.
+ * - `sort` — `-o file` / `--output=file` writes a file.
+ * - `uniq` — takes an optional second positional argument that is an output file.
+ * - `echo` — harmless alone, but its entire purpose is to produce output that is
+ *   normally redirected; it costs one interruption and is left out on principle.
+ * - `find` is included, but only with its writing flags refused (below).
+ */
+const PURE_READ_COMMANDS: ReadonlySet<string> = new Set([
+  // Listing and locating.
+  "dir", "ls", "pwd", "cd", "which", "where", "whoami",
+  // Reading file contents.
+  "cat", "type", "head", "tail", "wc",
+  // Searching.
+  "grep", "findstr", "rg",
+]);
+
+/**
+ * `find` reads by default but deletes and executes on request. These flags turn
+ * it into a writing command, so their presence ends the read-only judgement.
+ */
+const FIND_WRITING_FLAGS: ReadonlySet<string> = new Set([
+  "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprintf",
+]);
+
+/**
+ * `git` subcommands that only read.
+ *
+ * The first word cannot decide anything for git: `git status` reads and
+ * `git commit` writes. So the subcommand is what is matched, and only these are
+ * let through. `config` is absent because `git config key value` writes, `branch`
+ * because `git branch -D name` deletes, `tag` because `git tag name` creates, and
+ * `stash` because every form of it changes the working tree.
+ */
+const GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree",
+  "blame", "shortlog", "describe", "cat-file", "reflog", "name-rev",
+  "count-objects", "branch",
+]);
+
+/**
+ * Interpreters allowed only in their exact version-query form.
+ *
+ * These are the sharpest case in the file, because the same executable is either
+ * harmless or unrestricted depending on the next word: `node --version` prints a
+ * number and `node -e "..."` can do anything at all. So the match is on the exact
+ * token sequence, not on a prefix or a search — any extra argument means this
+ * project no longer knows what will run, and the answer becomes "ask".
+ */
+const VERSION_ONLY_FLAGS: ReadonlySet<string> = new Set(["-v", "-V", "--version"]);
+
+/** Characters that can turn a reading command into a writing one. */
+const SHELL_CHAINING = /[>|&;\n\r]/;
+
+/**
+ * Whether a command only reads, so the middle tier need not ask about it.
+ *
+ * Every branch here ends in `false` unless something positively identified the
+ * command as a read. That direction matters more than the contents of any list:
+ * an unrecognised command costs the operator one interruption, while a
+ * misidentified one is a write nobody approved.
+ */
+function isReadOnlyCommand(args: Record<string, unknown>): boolean {
+  const raw = args.command;
+  if (typeof raw !== "string") return false;
+  const command = raw.trim();
+  if (command === "") return false;
+  // Redirection, pipes and chaining all mean the command is doing more than
+  // reading, whatever it starts with. `git status > /etc/passwd` and
+  // `ls & rm -rf x` both begin with a verb on the read list.
+  if (SHELL_CHAINING.test(command)) return false;
+
+  // Every comparison below is made against a lowercased copy. Windows does not
+  // distinguish `GIT STATUS` from `git status`, so a judgement that did would
+  // answer differently for the same command depending on how it was typed. Only
+  // this copy is folded: the command the shell actually receives is untouched,
+  // which matters because a filename in it may be case-sensitive.
+  const [head, ...rest] = command
+    .split(/\s+/)
+    .filter((token) => token !== "")
+    .map((token) => token.toLowerCase());
+  if (head === undefined) return false;
+  // Strip the Windows suffixes so `npm.cmd` and `git.exe` match their entries.
+  const name = head.replace(/\.(exe|cmd|bat|com)$/, "");
+
+  if (PURE_READ_COMMANDS.has(name)) return true;
+
+  if (name === "find") {
+    // Kept out of PURE_READ_COMMANDS on purpose: `find` reads by default but
+    // deletes and executes on request, so it needs this check and the set does
+    // not express one.
+    return !rest.some((token) => FIND_WRITING_FLAGS.has(token));
+  }
+
+  if (name === "git") {
+    const [subcommand] = rest;
+    if (subcommand === undefined || !GIT_READ_SUBCOMMANDS.has(subcommand)) return false;
+    // `git diff --output=file` writes one, so the subcommand alone is not the
+    // whole story: refuse the flag that writes even though its verb reads.
+    if (rest.some((token) => token.startsWith("--output"))) return false;
+    // `git branch` with no argument lists branches, but `git branch name` creates
+    // one and `git branch -D name` deletes one. Only the bare listing is a read,
+    // which is why this is a length check rather than a scan for delete flags —
+    // the creating form has no flag to scan for.
+    if (subcommand === "branch") return rest.length === 1;
+    return true;
+  }
+
+  if (name === "npm" || name === "pnpm" || name === "yarn") {
+    const [subcommand] = rest;
+    if (subcommand === undefined) return false;
+    // `npm ls` reads the tree. `npm test`, `npm run` and `npm install` execute
+    // whatever the project's own scripts say, which is arbitrary code and is the
+    // reason a test in this project's suite asserts they still ask.
+    if (subcommand === "ls" || subcommand === "list" || subcommand === "ll") return true;
+    return rest.length === 1 && VERSION_ONLY_FLAGS.has(subcommand);
+  }
+
+  if (name === "go") {
+    const [subcommand] = rest;
+    // `go env -w` writes configuration, so only the bare forms are reads.
+    if (subcommand === "version" && rest.length === 1) return true;
+    return subcommand === "env" && rest.length === 1;
+  }
+
+  if (name === "cargo") {
+    return rest.length === 1 && VERSION_ONLY_FLAGS.has(rest[0]!);
+  }
+
+  // Interpreters: exactly `node --version` and nothing else. A script path, an
+  // `-e`, or any additional flag all mean this project cannot see what will run.
+  if (
+    name === "node" || name === "python" || name === "python3" ||
+    name === "java" || name === "tsc" || name === "dotnet"
+  ) {
+    return rest.length === 1 && VERSION_ONLY_FLAGS.has(rest[0]!);
+  }
+
+  return false;
+}
+
 export const TIERS: readonly Tier[] = [
   {
     name: "read-only",
     summary: "读取与检索；写入类工具在本会话中不存在",
     tools: READ_ONLY_TOOLS,
     rules: denyAllWrites("read-only tier: writing is not available in this session"),
+  },
+  {
+    name: "ask-before-writing",
+    summary: "读取不询问；写入类工具仍然逐次批准",
+    tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
+    rules: askBeforeWriting(),
   },
   {
     name: "workspace-write",

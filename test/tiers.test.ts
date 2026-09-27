@@ -2,9 +2,10 @@ import { before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_TIER, TIERS, findTier, resolveTier } from "../src/tiers.ts";
-import { DEFAULT_RULES } from "../src/file-policy.ts";
+import { APPROVAL_TOOLS, DEFAULT_RULES } from "../src/file-policy.ts";
 import { READ_ONLY_TOOLS, WRITE_TOOLS } from "../src/write-tools.ts";
 import { RULE_TIERS, decide } from "../src/rule-table.ts";
+import type { Rule } from "../src/rule-table.ts";
 import { ToolRegistry, createReadFileTool, createEditFileTool } from "../src/tools.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { createTestFixture } from "./fixtures.ts";
@@ -22,8 +23,39 @@ function call(name: string, args: Record<string, unknown> = {}, id = `call_${nam
 }
 
 describe("tiers: naming and resolution", () => {
-  it("offers the three designed postures", () => {
-    assert.deepEqual(TIERS.map((t) => t.name), ["read-only", "workspace-write", "full-access"]);
+  it("offers the four designed postures", () => {
+    assert.deepEqual(TIERS.map((t) => t.name), ["read-only", "ask-before-writing", "workspace-write", "full-access"]);
+  });
+
+  it("has a middle tier that differs from the default in what it asks", () => {
+    // A tier that decides exactly what another one decides is not a posture, it
+    // is a synonym — and it would leave an operator unable to tell which of the
+    // two they had chosen. This asserts the difference exists rather than
+    // assuming the rules above produce one.
+    const middle = findTier("ask-before-writing")!;
+    const standard = findTier("workspace-write")!;
+    const sameDecisions = (a: readonly Rule[], b: readonly Rule[]) =>
+      a.length === b.length &&
+      a.every((rule) => b.some((other) => other.tool === rule.tool && other.decision === rule.decision));
+    assert.equal(
+      sameDecisions(middle.rules, standard.rules),
+      false,
+      "ask-before-writing decides exactly what workspace-write decides, so choosing between them means nothing",
+    );
+    // Whichever way they differ, neither may become more permissive on writes:
+    // that is what would turn a convenience tier into a silent escalation. Checked
+    // with arguments that are not a recognised read, which is the case that must
+    // fall back to asking rather than to running.
+    for (const tool of APPROVAL_TOOLS) {
+      assert.equal(
+        decide(middle.rules, tool, {}).decision,
+        "approve",
+        `${tool} must still ask in the middle tier when nothing marks it as a read`,
+      );
+    }
+    // The one intentional exception, stated as such.
+    assert.equal(decide(middle.rules, "run_command", { command: "git status" }).decision, "allow");
+    assert.equal(decide(middle.rules, "run_command", { command: "rm -rf build" }).decision, "approve");
   });
 
   it("defaults to the safe tier when nothing was chosen", () => {
@@ -36,7 +68,10 @@ describe("tiers: naming and resolution", () => {
     // Falling back here would let a typo quietly change the posture, and falling
     // back to the permissive tier would hand out access on a misspelling.
     assert.throws(() => resolveTier("workspace-writ"), /unknown permission tier: workspace-writ/);
-    assert.throws(() => resolveTier("yolo"), /known: read-only, workspace-write, full-access/);
+    assert.throws(
+      () => resolveTier("yolo"),
+      /known: read-only, ask-before-writing, workspace-write, full-access/,
+    );
   });
 
   it("marks only the permissive tier as removing a boundary", () => {

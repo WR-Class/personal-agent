@@ -2,3 +2,18 @@ node_modules/
 .personal-agent/
 *.tsbuildinfo
 .test-artifacts/
+
+# Test and verification fixtures.
+#
+# These live inside the project directory rather than the system temp directory
+# for a reason that is easy to mistake for carelessness: buildToolEnvironment
+# refuses an agent home inside a protected host location, and the Windows temp
+# directory is one. That refusal is correct — it is what stops an agent home from
+# landing somewhere the operator does not control — so the fixtures moved instead
+# of the guard being weakened. The consequence is that scratch directories appear
+# here, and two of them were committed before this ignore list existed.
+.probe*/
+.bg-fixture-*/
+.spill-fixture-*/
+.verify-*/
+.wt-*/
