@@ -534,8 +534,18 @@ export function createInspectFileTool(): Tool {
 export function createReadFileTool(): Tool {
   return {
     name: "read_file",
+    // The description has to match what this actually does, and it did not.
+    // It says text, but since binary reading was added it will also return a
+    // hex dump for a binary or a NUL-containing file. Measured consequence: in
+    // a live run asking about a real executable, the model chose `read_file`
+    // over `inspect_file` and got the right answer from the hex dump, which was
+    // a rational choice given a description that said text and a tool with
+    // fewer parameters. Naming the binary case here, and saying what to prefer
+    // instead, is the fix.
     description:
-      "Read a UTF-8 text file inside the workspace. `path` is relative to the workspace root (absolute paths inside it also work).",
+      "Read a file inside the workspace. `path` is relative to the workspace root (absolute paths inside it also work). " +
+      "Text comes back as text; a binary file comes back as a hex dump, which is not a substitute for a real tool — " +
+      "prefer `inspect_file` for binaries, executables and archives.",
     parameters: {
       type: "object",
       properties: {

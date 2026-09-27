@@ -111,6 +111,9 @@ describe("rule table: matching", () => {
 
   it("reports which rule decided, so a decision can be attributed", () => {
     const result = decide(DEFAULT_RULES, "read_file", {});
-    assert.equal(result.rule?.id, "read-file");
+    // Asserted as "a read allow rule, named for its tool" rather than a frozen
+    // id, so that adding another read-only tool does not require editing this.
+    assert.equal(result.decision, "allow");
+    assert.match(result.rule?.id ?? "", /read-tool\.read_file/);
   });
 });

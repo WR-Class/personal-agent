@@ -354,7 +354,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
-      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace facts. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. Every action needs its own approval. Respect denied paths; never pretend a tool succeeded.",
+      systemPrompt:"You are a concise, helpful assistant. Use read_file for workspace text, and inspect_file for binaries, executables and archives. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. Every action needs its own approval. Respect denied paths; never pretend a tool succeeded.",
       ...(interactive && io ? { approve: async (prompt: string) => {
         io.write(`${prompt}\n回答“是”才执行这一次。\n`);
         const answer = await io.ask("批准？> ");

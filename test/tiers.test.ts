@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_TIER, TIERS, findTier, resolveTier } from "../src/tiers.ts";
 import { DEFAULT_RULES } from "../src/file-policy.ts";
+import { READ_ONLY_TOOLS } from "../src/write-tools.ts";
 import { RULE_TIERS, decide } from "../src/rule-table.ts";
 import { ToolRegistry, createReadFileTool, createEditFileTool } from "../src/tools.ts";
 import { SessionStore } from "../src/session-store.ts";
@@ -46,6 +47,38 @@ describe("tiers: naming and resolution", () => {
 });
 
 describe("tiers: what each one decides", () => {
+  /**
+   * A tool that is listed but then denied hands the model something it can never
+   * successfully call, and the refusal it gets ("this tool is not available")
+   * reads as a policy boundary, so it stops trying rather than looking for the
+   * real problem. Measured live: an inspection tool was listed in one tier while
+   * the rule table allowed only `read_file`, and the model was refused with
+   * "unknown tool" for doing exactly what the system prompt told it to.
+   *
+   * Two mechanisms answer the same question — presence in the list is absence,
+   * the rule table is denial — so this asserts that they agree.
+   */
+  it("never lists a tool its own rules deny", () => {
+    for (const tier of TIERS) {
+      for (const tool of tier.tools) {
+        assert.notEqual(
+          decide(tier.rules, tool, {}).decision, "deny",
+          `${tier.name} lists ${tool} but its rules deny it`,
+        );
+      }
+    }
+  });
+
+  it("offers every read-only tool in every tier", () => {
+    // No tier exists to remove the ability to read; they exist to grant writing.
+    for (const tier of TIERS) {
+      for (const tool of READ_ONLY_TOOLS) {
+        assert.ok(tier.tools.includes(tool), `${tier.name} must offer ${tool}`);
+        assert.notEqual(decide(tier.rules, tool, {}).decision, "deny", `${tier.name} must allow ${tool}`);
+      }
+    }
+  });
+
   it("read-only denies writing and never offers the write tools", () => {
     const tier = findTier("read-only")!;
     assert.equal(decide(tier.rules, "edit_file", {}).decision, "deny");

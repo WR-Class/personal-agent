@@ -21,6 +21,9 @@
 import { RULE_TIERS } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
 import { DEFAULT_RULES } from "./file-policy.ts";
+import { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
+
+export { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
 export interface Tier {
   readonly name: string;
@@ -35,15 +38,20 @@ export interface Tier {
   readonly removesBoundary?: boolean;
 }
 
-/** Reading and searching. Nothing that writes. */
-const READ_ONLY_TOOLS = ["read_file", "inspect_file"];
-
 function denyAllWrites(reason: string): Rule[] {
   return [
     // The allow must rank *above* the wildcard deny, or the deny swallows reads
     // too and the tier becomes "read nothing" rather than "read only". Ordering
     // is the mechanism here, so the numbers are load-bearing, not cosmetic.
-    { id: "read-only.allow-read", tool: "read_file", decision: "allow", tier: RULE_TIERS.USER, priority: 900 },
+    // One allow per read-only tool: a wildcard allow would also admit the write
+    // tools, and this tier's whole point is that they are absent.
+    ...READ_ONLY_TOOLS.map((tool, index) => ({
+      id: `read-only.allow-${tool}`,
+      tool,
+      decision: "allow" as Decision,
+      tier: RULE_TIERS.USER,
+      priority: 900 - index,
+    })),
     {
       id: "read-only.deny-writes",
       tool: "*",
@@ -65,13 +73,13 @@ export const TIERS: readonly Tier[] = [
   {
     name: "workspace-write",
     summary: "在工作区内读写；写入仍需逐次批准",
-    tools: ["read_file", "edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"],
+    tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
     rules: DEFAULT_RULES,
   },
   {
     name: "full-access",
     summary: "移除写入门禁；路径收敛、写预算与审计仍然生效",
-    tools: ["read_file", "edit_file", "patch_file", "create_file", "delete_file", "rename_file", "batch_files"],
+    tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
     removesBoundary: true,
     rules: [
       { id: "full-access.allow-all", tool: "*", decision: "allow" as Decision, tier: RULE_TIERS.ADMIN, priority: 0 },

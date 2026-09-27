@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "./gene.ts";
 import { RULE_TIERS, decide } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
+import { READ_ONLY_TOOLS } from "./write-tools.ts";
 
 export interface FileGrant {
   tool: string;
@@ -27,13 +28,18 @@ export const DEFAULT_RULES: readonly Rule[] = [
     tier: RULE_TIERS.WORKSPACE,
     priority: 10,
   })),
-  {
-    id: "read-file",
-    tool: "read_file",
+  // Every read-only tool gets its own allow, not just `read_file`. Measured
+  // consequence of listing only that one: adding an inspection tool left it
+  // *offered* by the tier while this table *denied* it, so the model was handed
+  // a tool it could never successfully call. Offering and allowing have to agree,
+  // and one rule per name is what keeps a wildcard from also admitting writes.
+  ...READ_ONLY_TOOLS.map((tool, index): Rule => ({
+    id: `read-tool.${tool}`,
+    tool,
     decision: "allow",
     tier: RULE_TIERS.WORKSPACE,
-    priority: 50,
-  },
+    priority: 50 - index,
+  })),
 ];
 
 /** Read is allowed. The six file tools need a grant. Everything else is denied. */
