@@ -9,6 +9,7 @@
  * tool failure is information for the model, not a crash for the loop.
  */
 
+import { createHash } from "node:crypto";
 import { open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -143,6 +144,39 @@ function sameFile(before: string, workspace: string, protectedRoots: readonly st
   } catch (error) {
     return (error as Error).message;
   }
+}
+
+/**
+ * A content hash of what the operator was actually shown (D30).
+ *
+ * Approving a write approves *that* content. The window between the prompt and
+ * the write is not instant — the operator may take minutes — so the file can
+ * move underneath the decision. Binding to the content read for the prompt and
+ * re-reading immediately before the write is what turns "the operator approved
+ * this" into "the operator approved this, and it is still what is on disk".
+ *
+ * Without it the stale read is written back verbatim: for `patch_file` the new
+ * content is spliced into the old text, so a concurrent edit is not merely
+ * overwritten, it is silently reverted.
+ */
+export function contentStamp(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/** Re-read and compare. Returns the refusal reason, or undefined to proceed. */
+async function unchangedSinceApproval(resolved: string, stamp: string, tool: string): Promise<string | undefined> {
+  let current: string;
+  try {
+    current = await readFile(resolved, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Gone or unreadable is drift too: the approved content is no longer there.
+    return `${tool}: file changed after approval (${code ?? "unreadable"}); re-read it and try again`;
+  }
+  if (contentStamp(current) !== stamp) {
+    return `${tool}: file changed after approval; re-read it and try again`;
+  }
+  return undefined;
 }
 
 function schemaError(pathName: string, message: string): Error {
@@ -390,6 +424,8 @@ export function createEditFileTool(): Tool {
       }
       const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
       if (changed) return fail("edit_file", changed);
+      const drifted = await unchangedSinceApproval(resolved, contentStamp(current), "edit_file");
+      if (drifted) return fail("edit_file", drifted);
       const temporary = `${resolved}.${process.pid}.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -436,6 +472,10 @@ export function createPatchFileTool(): Tool {
       if (denial) return denied("patch_file", denial, context);
       const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
       if (changed) return fail("patch_file", changed);
+      // The new content was spliced into `current`; if the file moved, writing it
+      // would revert whatever the other writer added rather than merely conflict.
+      const drifted = await unchangedSinceApproval(resolved, contentStamp(current), "patch_file");
+      if (drifted) return fail("patch_file", drifted);
       const temporary = `${resolved}.${process.pid}.patch.tmp`;
       await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
       await rename(temporary, resolved);
@@ -499,11 +539,20 @@ export function createDeleteFileTool(): Tool {
       catch { return fail("delete_file", `no such file: ${target}`); }
       if (!info.isFile()) return fail("delete_file", `not a regular file: ${target}`);
       if (info.nlink > 1) return fail("delete_file", "hard-linked files are denied");
-      const preview = info.size <= WRITE_FILE_MAX_BYTES ? (await readFile(resolved, "utf8")).split(/\r?\n/).slice(0, 40).join("\n") : "文件超过预览上限";
+      // Read once; the preview and the stamp must describe the same bytes, or the
+      // comparison degenerates into comparing a value with itself.
+      const previewed = info.size <= WRITE_FILE_MAX_BYTES ? await readFile(resolved, "utf8") : undefined;
+      const preview = previewed === undefined ? "文件超过预览上限" : previewed.split(/\r?\n/).slice(0, 40).join("\n");
       const denial = await approveExact("delete_file", args, `Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
       if (denial) return denied("delete_file", denial, context);
       const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
       if (changed) return fail("delete_file", changed);
+      // The preview showed the operator *this* content. Deleting a file that has
+      // since become something else destroys work they never saw.
+      if (previewed !== undefined) {
+        const drifted = await unchangedSinceApproval(resolved, contentStamp(previewed), "delete_file");
+        if (drifted) return fail("delete_file", drifted);
+      }
       await rm(resolved, { force: false, recursive: false });
       return { content: `deleted ${target}` };
     },
