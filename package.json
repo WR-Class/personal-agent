@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:live": "node --experimental-strip-types --test test/live.e2e.ts",
     "build": "tsc --noEmit",
     "start": "node --experimental-strip-types src/cli.ts"
   },
