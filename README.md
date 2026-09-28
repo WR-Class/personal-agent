@@ -2,6 +2,25 @@
 
 独立于 DSH 的个人 Agent，现已支持**持续对话的交互式 CLI**。当前仅提供只读文件工具，不执行 shell 或修改项目文件。
 
+> **⚠️ 上一行已过期，原文按规矩保留不改写**：本项目**早已不止只读**——D46 落地了 `run_command` + 权限三档（真机 7/7），写工具（`create_file`/`patch_file` 等）与写入门/硬预算（D18）也早已存在。**当前能力以 [WHERE.md](docs/WHERE.md) 为准。**
+
+## 文档分层（谁是规范、谁是活文档、谁是冻结的历史）
+
+**⚠️ 本项目曾出现"`STATUS.md` 自称唯一阶段入口、`WHERE.md` 自称'这个 Agent 现在能做什么'，两个都是入口"的冲突，且没有任何文档声明分层。这一节就是消除它的。**
+
+| 层 | 文档 | 规则 |
+|---|---|---|
+| **① 规范（normative）** | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | **产品应该是什么形状。每轮开工前必读。** 与现状冲突时，以它为目标、以 `CODE_MAP.md` 为现状，**不得把它当成现状读** |
+| **① 规范（折叠视图）** | **[docs/DECISIONS_ACTIVE.md](docs/DECISIONS_ACTIVE.md)** | **现在到底怎么定的。每轮开工前必读。** 它是 `REFERENCE_DECISIONS.md`（1630 行）的折叠，含"已撤回/已更正/已撤销"一节 |
+| **② 活文档（随产品更新）** | [docs/STATUS.md](docs/STATUS.md)（进度）、[docs/CODE_MAP.md](docs/CODE_MAP.md)（代码地图）、[docs/SAFETY.md](docs/SAFETY.md)（安全边界）、[docs/WHERE.md](docs/WHERE.md)（当前能做什么）、[docs/VALIDATION.md](docs/VALIDATION.md)（验证证据与限制）、[docs/SWARM_LOOP.md](docs/SWARM_LOOP.md)（蜂群闭环设计） | **代码行为变了就改这些。** ⚠️ 已知问题：`STATUS.md` 181 行 / 158 KB，单批次是一整行 3.9–11.9 KB，**待拆分** |
+| **③ 决策日志（只追加，永不改写）** | [docs/REFERENCE_DECISIONS.md](docs/REFERENCE_DECISIONS.md)、[docs/ADR-0001-session-fact-source.md](docs/ADR-0001-session-fact-source.md) | **历史批次文档永不改写**；要更正就加**标记式更正块**并保留原文，同时更新 ② 与 `DECISIONS_ACTIVE.md` |
+| **④ 冻结的一次性记录** | [docs/PR1_STATUS.md](docs/PR1_STATUS.md)、[docs/CLI_STATUS.md](docs/CLI_STATUS.md)、[docs/SESSION_RELIABILITY.md](docs/SESSION_RELIABILITY.md)、[docs/LIVE_INTEGRATION.md](docs/LIVE_INTEGRATION.md)、[docs/PONYTAIL_REVIEW.md](docs/PONYTAIL_REVIEW.md)、[docs/AUDIT.md](docs/AUDIT.md) | **写完即冻结**，不随产品更新；引用它们时必须注意可能已过期 |
+| **⑤ 计划（已部分失效）** | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | ⚠️ **其"下一步计划"与"不依赖 DSH/Cordis"已被撤销**，见该文件内的更正块；以 ① 为准 |
+
+**唯一入口**：**要看"现在能做什么"读 [docs/WHERE.md](docs/WHERE.md)；要看"进度到哪了"读 [docs/STATUS.md](docs/STATUS.md)；要开工先读 ①的两份。** `STATUS.md` 标题里的"唯一阶段入口"**仅指进度**，不指能力清单。
+
+**⚠️ 为什么这一节是必需的**：本项目 33 个批次里反复出现的偏离，机制性原因是**只有回溯文档（我做了什么／我读到什么／我决定了什么），没有规范文档（产品应该是什么）**，于是每一轮都从"最后读到的那个外部源"重新推导产品形态。**锚存在，"跑偏"才有意义。**
+
 ## 开始使用：一个命令
 
 在 PowerShell 中：
