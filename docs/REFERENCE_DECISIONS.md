@@ -1285,6 +1285,129 @@ D59 已指出模型不得自报 `done`。**但读完 claim 机制后发现更隐
 
 **未取证 / 未验**：goose（`crates/goose/src/agents/platform_extensions/todo.rs`）、aider、gemini-cli（`packages/core/src/utils/planUtils.ts`）、crush（`internal/agent/tools/todos.go`）、opencode 的 v2 session core（其 `AGENTS.md` 提到 durable `session_input` 行、投影与 "Context Epoch persistence"，**可能有更接近 event sourcing 的做法，未读**）、LangGraph checkpointer、Temporal event history、宿主 dsh 的 swarm 记录方式（**本环境读不到该路径**）。**"业界不累积"这个结论只由两个产品支撑，样本偏小，不应据此推广到全部产品。**
 
+### 存储后端取证：为什么上一轮给不出排序，以及两处自我更正（D67，2026-09-30，**取证轮，无代码**）
+
+**操作员的判断是对的，而且指出了正确的方法论**：*"如果哪个最优应该是有个排序的，而你现在在纠结就说明材料不够。"* **补取证之后排序出来了，并且定位到"纠结"的根因不是累积语义难，而是我默认了 JSONL-only 这个前提 —— 而这个前提正是别人没有的。**
+
+**⚠️ 本轮不改产品代码。** 另需如实记录：**派出的子代理第二次在收尾前失败且无输出**（上一轮也是），**外部取证全部由我自己做**。
+
+#### 一、"别的 agent 是否带 SQL"：是，而且恰恰是有任务状态的那几个全都带
+
+扫 `_research/repos` 下 10 个仓库的清单文件（`package.json` / `Cargo.toml` / `go.mod` / `pyproject.toml`）：
+
+| 仓库 | 数据库依赖（清单文件原文命中） |
+|---|---|
+| **codex** | **有专门的 `codex-rs/state` crate**：`sqlx = { workspace = true }`、`libsqlite3-sys = { workspace = true }`、`sqlx-macros`；`app-server` 与 `cli` 也依赖 `sqlx` |
+| **goose** | `sqlx = { version = "0.9.0", default-features = false, features = ["sqlx/tls-rustls", "sqlx/tls-native-tls", …] }`、`libsqlite3-sys` |
+| **crush** | `modernc.org/sqlite v1.58.0`（**纯 Go，无 cgo**）、`github.com/ncruces/go-sqlite3 v0.35.4`、`ncruces/go-sqlite3-wasm/v5`（indirect） |
+| **opencode** | `drizzle-orm`、`drizzle-kit`（即 D66 读到的 `sqliteTable`），脚本 `"db": "bun drizzle-kit"` |
+| aider / gemini-cli / grok-cli / extra | **无命中** |
+| claude-code / assistant-code | **仓库无源码**（只有 plugins/examples/scripts）⇒ **无命中不等于无数据库** |
+
+**codex `state` crate 的迁移文件里有什么**（实读 `state/migrations/`）：`threads`、`logs`、`thread_goals`、`thread_goal_continuation_deferrals`、`thread_dynamic_tools`、`thread_spawn_edges`、`agent_jobs`/`agent_job_items`、`memories`（`stage1_outputs`/`jobs`/`consolidation_progress`）、`backfill_state`、**以及 `rollout_migration_state`** ⇒ **他们做过从 rollout(JSONL) 往 SQLite 的迁移。这件事本身就是一个证据：JSONL 不足以承载这类状态，否则不会有那张迁移状态表。**
+
+#### 二、三条决定性证据
+
+**证据 1 —— `thread_goals` 是每 thread 一行的可变快照，累积量就是行内计数器**（`codex-rs/state/migrations/0029_thread_goals.sql` 全文 11 行）：
+
+```sql
+CREATE TABLE thread_goals (
+    thread_id TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'budget_limited', 'complete')),
+    token_budget INTEGER,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    time_used_seconds INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+```
+
+⇒ **跨轮累积的量（`tokens_used`、`time_used_seconds`）就是可变行里的计数器**，不是事件折叠出来的。（`0033_thread_goal_stopped_statuses.sql` 又建了 `thread_goals_new` 重建该表 ⇒ 状态枚举后来还长过。）
+
+**证据 2 —— ⚠️ 写它的 SQL 把"状态转移守卫"与"计数器比较"放在同一条语句里原子执行**（`codex-rs/state/src/runtime/goals.rs:287-301`）：
+
+```sql
+UPDATE thread_goals
+SET objective = COALESCE(?, objective),
+    status = CASE
+        WHEN status = ? AND ? IN (?, ?) THEN status
+        WHEN ? = 'active' AND ? IS NOT NULL AND tokens_used >= ? THEN ?
+        ELSE ?
+    END,
+    token_budget = ?, updated_at_ms = ?
+WHERE thread_id = ? AND (? IS NULL OR goal_id = ?)
+```
+
+写法是 `INSERT INTO thread_goals (…) ON CONFLICT(thread_id) DO UPDATE SET`（upsert，`:75-86`）加**六处 `UPDATE thread_goals`**（`:289/324/355/384/444/534`）。
+
+⇒ **没有读-改-写竞争、没有崩溃窗口；"非法转移被拒"（第一个 `WHEN` 分支）与"超预算自动转 `budget_limited`"（第二个 `WHEN` 分支，直接比较行内的 `tokens_used`）都由数据库在同一条语句里保证，不靠调用方自觉。**
+
+**证据 3 —— `agent_job_items` 是"跨轮分项状态"的业界形状**（`codex-rs/state/migrations/0014_agent_jobs.sql`）：
+
+```sql
+CREATE TABLE agent_job_items (
+    job_id TEXT NOT NULL, item_id TEXT NOT NULL, row_index INTEGER NOT NULL,
+    source_id TEXT, row_json TEXT NOT NULL, status TEXT NOT NULL,
+    assigned_thread_id TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+    result_json TEXT, last_error TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    completed_at INTEGER, reported_at INTEGER,
+    PRIMARY KEY (job_id, item_id),
+    FOREIGN KEY(job_id) REFERENCES agent_jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_agent_job_items_status ON agent_job_items(job_id, status, row_index ASC);
+```
+
+⇒ **每个分项一行、有稳定 id（`item_id` 在主键里）、带累积计数器（`attempt_count`）、记录哪一轮做的（`assigned_thread_id`）与结论（`status`/`result_json`/`completed_at`）。不是 append-only 事件，也不是重算。**
+
+#### 三、⚠️ 两处自我更正（本轮最重要的产出）
+
+**更正一：上一轮否定 (B) 的理由是"前提相对的"，不是绝对的。**
+
+上一轮写的是"(B) 不建议：两个可变快照正是 ADR-0001 要防的形状"。**这句话在 JSONL 前提下成立，在数据库前提下不成立** —— 因为证据 2 显示**条件更新是原子的**：比较与写入在同一条语句里，**不存在"读到旧值、算出新值、写回去时世界已经变了"的那个窗口**，而那正是 ADR-0001 §1 描述的故障（*"一次崩溃落在任一行之间，都可能产生两套事实不一致的状态"*）。
+
+⇒ **别人都选 latest-wins 的可变快照，正因为他们有那个原子性；我否定它，正因为我没有。** **"纠结"的根因是存储前提，不是累积语义。**
+
+**更正二：上一轮的 (D)「存证据、并集、重判」方向是错的，(B′)「存当时的判定」方向是对的。**
+
+上一轮把 (D) 列为"完整解"、把 (B′) 列为"比 (D) 多一层派生"。**这个排序反了。** 理由正是上一轮自己发现的并集悖论：`files-written` 是**双向集合相等**，**拿各轮证据的并集去重判一条旧 claim，会把原本 `met` 的改判成 `unmet`** —— **(D) 恰好会触发那个悖论，而 (B′) 不会**，因为 (B′) 记下的是"这条 claim 在它自己那一轮被判为 met"，**根本不拿新证据去重判它**。
+
+**证据 3 印证了这一点**：`agent_job_items` 存的是 `status` + `completed_at` + `result_json`（**当时的结论**），**不是**各轮证据的并集。
+
+⇒ **上一轮那句"`files-written` 可能根本没有可靠的累积规则"要改写**：正确的说法是 **"不该拿新证据重判旧 claim，而应把当时的判定结果记下来"**。累积是可行的，**只是不能靠并集证据实现**。上一轮把 (B′) 的"存结论"当成缺点（*"语义变更时旧结论与新语义不一致"*），**这个顾虑站不住**：**"在当时那套规则下它被判为 met"本身就是一个历史事实**，规则变了不该追溯改写历史 —— 这与 `chargeWrite` 注释里 *"the ledger stays a record of the workspace, not of intent"* 是同一种立场（记录当时是什么，不记录现在希望它是什么）。
+
+#### 四、⚠️ 于是真正缺的东西浮出来了：稳定的步骤身份
+
+- **codex 有 `item_id` 在主键里**（证据 3），所以"第 X 项在第 Y 轮达成"有锚可挂。
+- **本项目的 `TaskStateStep` 是 `{ readonly text: string; readonly claim?: GeneValidation }`，没有 id** —— 靠**位置与文本**辨认，而**模型每轮重写整份列表**（`appendTaskState` 是 latest-wins）。⇒ **"第 2 步在第 5 轮达成"这句话没有可挂的锚**：第 5 轮的"第 2 步"未必是第 2 轮的那个"第 2 步"。
+- **⚠️ 而且本项目自己的源码就否认了"文本可以当身份锚"**：`TaskStateStep.text` 的注释是 *"Prose. Not authority — the claim is. **May be rewritten freely.**"* ⇒ **文本被明确设计成可自由重写**，所以它**不可能**兼任稳定身份。**位置更不行**（整份列表被重写，位置会漂移）。**⇒ 稳定 id 不是"最好有"，而是"累积在现有形状下根本无法表达"。**
+- **opencode 的 `TodoTable` 也只有 `position` 没有 id**（D66 已读）—— **因为它整份替换、不累积，所以不需要 id**。
+
+⇒ **是否需要稳定 id，正是"累积"与"替换"的分水岭。本项目想要累积，就必须先给步骤一个身份。** 这是本轮取证指出的**唯一必须新增的概念**，也是上一轮所有候选都不满意的共同原因。
+
+#### 五、排序（操作员要的东西）
+
+| 名次 | 方案 | 为什么在这个位置 | 主要代价 |
+|---|---|---|---|
+| **1** | **给步骤一个稳定 id + 每轮追加一条"第 X 步在本轮被判为 met/unmet"的不可变事实，进度由折叠得出** | 与证据 3 同构；**不需要并集语义**（不拿新证据重判旧 claim）；单调、后续轮次不可能与之矛盾 ⇒ **在 JSONL 下也安全**（append-only 事实，不是快照）；按 ADR-0001 §4.3 判据**删掉它丢的是真相**（该轮 `RoundEvidence` 无处重算）⇒ 是新事实，允许存在会话日志之外 | **必须新增 step id**，且要定 id 由谁生成、模型重写列表时如何保持（**这是本方案唯一的设计难点，也是必须先定的**）；每轮多一条事件 |
+| **2** | **采用 `node:sqlite` 作键控存储** | 与业界一致（4/4 有任务状态的产品都带 DB）；**拿到证据 2 那种原子条件更新**；**且 `node:sqlite` 是标准库 ⇒ 仍然零生产依赖**，符合本项目取向 | 多出**第二个事实存储**（与 JSONL 并存，需要划界，正如 `cycle-store.ts` 头注为 cycle 库划的那样）；**⚠️ 与 D50 的"按位置拒绝"是否兼容未验**；**⚠️ `engines: node >=22.6` 下 `node:sqlite` 的可用性未验**（本机 Node v24.19.0 有，不等于下限有） |
+| **3** | **"半份 (C)"：只累积 `tools`** | 最省、零新增存储（`tools` 可从日志的 `assistant.toolCalls[].name` 直接收集，D66 取证 8） | **没解决 `files-written` 步骤的跨轮问题**，能力缺口照旧；且只覆盖一种 claim kind，是局部答案 |
+| **4** | **(D) 存证据、并集、重判** | **由上一轮的"完整解"降级** | **会触发并集悖论**：把已达成改判为未达成（第三节更正二） |
+| **5** | **(B) 在 JSONL 里存"当前进度"可变快照** | 仍不建议，**但理由改为前提相对的** | 无原子条件更新时，两个快照就是 ADR-0001 §1 的故障形状；**若先做了名次 2，本方案会升到名次 1 之上**（那就是 codex 的做法） |
+| **死** | **(A) 用 outcome 日志合并** | 已被 `journalOutcome` 的 `if (address === undefined \|\| !this.geneStore) return;` 推翻 | — |
+
+**⚠️ 名次 1 与名次 2 不是互斥的，而是正交的**：名次 1 决定**记什么**（不可变的分项判定 + 稳定 id），名次 2 决定**记在哪**（JSONL 追加 vs SQLite 行）。**codex 同时做了两者**（`item_id` 主键 + 可变行 + 原子更新）。**本项目可以只做名次 1 而留在 JSONL** —— 因为 append-only 的单调事实不需要原子条件更新就安全。**这是本轮取证给出的最小充分改动。**
+
+#### 六、如实记录的局限
+
+**未读**：goose / crush / aider / gemini-cli 的**存储细节**（只有依赖命中，**没有读它们的表结构或写入路径**，所以"它们怎么累积"仍是未知）；opencode 的 **v2 session core**（其 `AGENTS.md` 提到 durable `session_input` 行、投影、"Context Epoch persistence"，**可能有更接近 event sourcing 的做法**）；LangGraph checkpointer；Temporal event history；宿主 dsh（**本环境读不到该路径**）。
+
+**概括的样本**：**"有任务状态的产品都带数据库"由 4 个产品支撑**（codex 深读、opencode 读到 todo 表、goose/crush 只有依赖命中），**比上一轮的 2 个强，但仍不是全样本**；且 `claude-code`/`assistant-code` 无源码，**它们的机制完全未知**。
+
+**未验**：`node:sqlite` 在本项目 Node 下限（22.6）下的可用性；`node:sqlite` 写入 agent home 与 D50 按位置拒绝的兼容性；**step id 的生成与保持方案**（名次 1 的关键难点，本轮只指出它必须存在，没有设计它）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
