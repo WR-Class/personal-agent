@@ -85,6 +85,37 @@
 
 **已固化为回归测试**（`test/middle-tier.test.ts`，走完整链路 runtime → 工具 → 审批门，不是只查 `decide()`）：先建真实投毒仓库，**在 `full-access` 下证明 marker 真的被写出**（反证：否则测试可能只是空过），再在 `ask-before-writing` 下断言 **marker 不出现**。
 
+## 配置文件的提权边界（D26 主体 / D51）
+
+`<agentHome>/config.json` 可以设默认档位与规则。**它能改变 agent 被允许做什么，所以它自己必须不能提权。** 三条保证：
+
+**1. 只读 agent home，绝不读工作区。** gemini-cli 会读工作区的 settings 文件、再靠 `isTrusted` 把它整体丢弃（`settings.ts:262`）；本项目**连发现都不做**——没有"找项目里的 `.agentrc`/`agent.json`"这段逻辑。**门控依赖信任状态判断正确，不读则不依赖任何状态。** 真机验证过：删掉 home 里的配置、在工作区放一份 `{"rules":[{"tool":"*","decision":"allow"}]}`，运行后审计里 **0 条** `config:widen`。配合 D50 已核实的"agent home 整棵树按位置拒绝写入"，**克隆一个仓库带不来配置，agent 也改不了自己的配置**。
+
+**2. 两条自我提权路径按结构封死，不是靠检查拦住。**
+
+| 路径 | 为什么封死 | 代价（如实说） |
+|---|---|---|
+| 配置里写 `tier` 字段 | `RULE_TIERS` 中**高层永远压过低层，无论 priority**；若配置能自选层号，就能把自己写进 ADMIN、压过所选档位与 `full-access` 的审计记录。故**层号由代码钉死在 WORKSPACE，JSON 里出现 `tier` 键直接报错** | 无 |
+| 配置里写 `when` 谓词 | `Rule.when` 是**函数**，从 JSON 造函数只有 `eval`/`new Function` 一条路，等于**配置文件即代码执行**（同理由拒绝 crush 的 bash 脚本 `crushrc`） | **配置只能按工具名匹配，不能按参数内容匹配**——无法表达"只放行 `git status`"，只能表达"`run_command` 一律 allow/approve/deny" |
+
+**选 WORKSPACE 层是承重的，不是随手挑的**：`read-only` 的 deny-every-write 钉在 **USER 层**、`full-access` 的 allow-all 钉在 **ADMIN 层**，WORKSPACE 在两者之下，所以**配置压不过姿态自己的边界**；同时它与写作姿态留在 WORKSPACE 的规则同层，所以**配置仍能调整那些**（收紧自由，放宽要审计）。**同层内大 priority 胜出，所以这件事不能用 priority 表达，只能用层号。** 我最初把配置钉在 USER 层，测试才发现那会让 `priority:999` 压过 read-only 的 `priority:800` —— **差点亲手实现 D26 要禁的东西**。该层名有误导性（本项目不读工作区配置），源码注释已显式警告。
+
+**3. 放宽必须落审计，逐条具名。** 配置把"要问"变成"不问"就是移除边界，与选 `--tier full-access` 同类，必须像它一样写进会话审计（D26/D32：移除边界须是可审计的显式决定，不是凭一个标签解锁）。真机实测的审计行：
+
+```json
+{"v":1,"kind":"audit","ignorable":true,"tool":"run_command","decision":"allowed",
+ "reason":"configuration allows \"run_command\" without asking: operator trusts shells here",
+ "rule":"config:widen"}
+```
+
+**操作员自己写的 `reason` 被带进去**，事后能回答"谁停止了询问、为什么"。判定"是否算放宽"用的是 `decide()` 本身而非自己重写匹配——第一版按工具名建集合，**漏了 `tool:"*"`，把 full-access 误报成被放宽**。
+
+**4. 配置加不回工具。** 它只作用于规则表，碰不到注册表。`read-only` 让写入工具**缺席**（`ToolRegistry` 两个方向都强制缺席），配置写 `{"tool":"run_command","decision":"allow"}` 也**加不回来**——缺席与许可是两条独立的轴。有测试钉住这一点。
+
+**5. 损坏的配置报错，不静默当空。** 与 `trust.json` 同一条理由：配置是用来**放宽**的，"读成空"与"仍然受限"在行为上无法区分，静默降级会让操作员以为自己放宽了而实际没有。未知键同样报错——**一个本项目不认识的键，通常正是操作员以为在起作用的键**。
+
+**一处类型检查盲区，只有真机抓到**：`AuditEvent.decision` 是 TS 联合类型，但 `SessionStore` 读回持久化行时**另有一道运行时校验**，两者是各自独立的真相来源。只放宽联合类型的结果是：**编译干净、单元测试全绿、全量 544 项全绿，真机跑 CLI 直接失败**。已同时放宽运行时守卫并补往返测试（变异验证：守卫改回严格版，测试立刻变红）。**既有的 `tier:` 审计行仍写 `decision:"denied"`**（把授权记成拒绝），本轮未改，如实记为遗留不一致。
+
 ## 后台作业的执行边界（D47）
 
 **这是本项目第一次让命令在操作者视野之外持续运行**，所以边界要写清。

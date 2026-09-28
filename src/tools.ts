@@ -92,7 +92,7 @@ export interface ToolContext {
   /** Exact grants already approved by a parent operation. */
   grants?: readonly FileGrant[];
   /** Records a denial without changing the conversation. */
-  audit?(event: { tool: string; decision: "denied" | "expired"; reason: string; rule?: string | null }): Promise<void>;
+  audit?(event: { tool: string; decision: "denied" | "expired" | "allowed"; reason: string; rule?: string | null }): Promise<void>;
   /** The rule table this session runs under. Defaults to the built-in rules. */
   rules?: readonly Rule[];
 }

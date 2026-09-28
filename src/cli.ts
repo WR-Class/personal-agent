@@ -21,6 +21,7 @@ import { inductGenes, uncoveredCandidates } from "./induct.ts";
 import { agentHomeProblem } from "./tool-environment.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
+import { configRules, loadAgentConfig, wideningRules } from "./config.ts";
 import { createTerminal, safeText } from "./terminal.ts";
 import type { TerminalIO } from "./terminal.ts";
 import { runInteractive } from "./interactive.ts";
@@ -50,6 +51,10 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       三项须一起配置；不与已保存配置混合，不再静默回退 Echo。
       预算：PERSONAL_AGENT_MAX_STEPS / _MAX_TOOL_CALLS / _MAX_TOOLS_PER_STEP / _MAX_SEND_MS / _MAX_CONTEXT_BYTES / _MAX_CONTEXT_TOKENS
       档位：PERSONAL_AGENT_TIER（不从工作区内的文件读取，克隆来的仓库无法自行提权）
+      配置文件：<home>/config.json —— 设默认档位与规则；**只读 agent home，绝不读工作区**。
+                形如 {"tier":"ask-before-writing","rules":[{"tool":"run_command","decision":"deny","reason":"…"}]}
+                规则里**不接受** tier 与 when 字段（前者会让配置压过所选档位，后者等于让配置文件执行代码）；
+                配置放宽了原本要问的事，会像 --tier full-access 一样写入会话审计。损坏的配置**报错**，不静默当空。
       按模型窗口：PERSONAL_AGENT_CONTEXT_WINDOWS='{"<model>":<tokens>,"*":<tokens>}'
       精确预判（可选，不内置分词器）：PERSONAL_AGENT_TOKENIZER='<命令>'，读 stdin 的 prompt JSON，向 stdout 打印单个非负整数
       该命令失败/超时/输出非数字一律报错，不静默退回估算
@@ -336,15 +341,46 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       // 120s adapter default left almost no headroom once tool calls were added.
       else adapter=createOpenAIChatAdapter({...config,timeoutMs:options.deadlineMs,...(options.stream?{stream:true}:{})});
     }
-    const tier=resolveTier(options.tier);
+    // Operator configuration, read from the agent home only (D26). A corrupt file
+    // throws rather than being ignored: it exists to change what the agent may do,
+    // and running on defaults while the operator believes they configured
+    // something is the worst of the three possible outcomes.
+    const agentConfig=await loadAgentConfig(paths.agentHome);
+    // Precedence is CLI flag > environment > agent-home config > built-in default.
+    // `options.tier` already folds the first two together, so config is consulted
+    // only when neither was given. gemini-cli merges its operator layer last so it
+    // overrides the workspace layer; the equivalent here is that an explicit
+    // command-line choice is never silently replaced by a file.
+    const tier=resolveTier(options.tier??agentConfig.tier);
+    // Asked of argv rather than inferred by comparing values, because `--tier X`
+    // with `PERSONAL_AGENT_TIER=X` would otherwise be attributed to the
+    // environment, and an audit line that names the wrong source is worse than one
+    // that names none.
+    const tierSource=argv.includes("--tier")?"--tier"
+      :options.tier?"PERSONAL_AGENT_TIER"
+      :agentConfig.tier?`config file ${agentConfig.source}`:"built-in default";
     // Removing a boundary is a recorded operator decision, not something that
     // happens because a label was set (D26/D32). It is written to the session
     // audit so the choice can be reviewed after the fact.
     if(tier.removesBoundary)await store.appendAudit(options.session,{tool:"*",decision:"denied",
-      reason:`permission tier "${tier.name}" removes the write prompt; chosen via ${options.tier?"--tier":"PERSONAL_AGENT_TIER"}`,
+      reason:`permission tier "${tier.name}" removes the write prompt; chosen via ${tierSource}`,
       rule:`tier:${tier.name}`});
+    // Configuration sits a tier below the posture's own boundaries, so it can
+    // adjust what a writing posture leaves open but cannot out-prioritise
+    // `read-only`'s deny-every-write or `full-access`'s audited allow-all.
+    const configuredRules=configRules(agentConfig);
+    // A configured `allow` that the posture would have asked about is a boundary
+    // removal, and gets the same treatment as choosing a permissive tier: named in
+    // the audit, one line per rule, so "who stopped the prompting" has an answer.
+    for(const widened of wideningRules(agentConfig,tier.rules)){
+      await store.appendAudit(options.session,{tool:widened.tool,decision:"allowed",
+        reason:`configuration allows "${widened.tool}" without asking${widened.reason?`: ${widened.reason}`:""}`,
+        rule:"config:widen"});
+    }
+    const rules=[...configuredRules,...tier.rules];
     // Built from the tier's tool list, so a posture that does not offer a tool
-    // makes it genuinely absent rather than merely refused (D28/D32).
+    // makes it genuinely absent rather than merely refused (D28/D32). Configuration
+    // cannot add a tool back: it reaches the rule table, never the registry.
     const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,job_output:createJobOutputTool,job_kill:createJobKillTool,
       edit_file:createEditFileTool,patch_file:createPatchFileTool,
       create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
@@ -352,7 +388,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     const tierTools=tier.tools.map(name=>allTools[name as keyof typeof allTools]());
     const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
-      tools:new ToolRegistry(tierTools,tier.tools),rules:tier.rules,maxSteps:options.maxSteps,
+      tools:new ToolRegistry(tierTools,tier.tools),rules,maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),

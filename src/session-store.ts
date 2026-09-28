@@ -128,14 +128,21 @@ export interface SummaryEvent {
   summary: string;
 }
 
-/** A denied or expired file approval. Ignorable so older readers skip it. */
+/**
+ * A recorded permission decision: something was denied, an approval expired, or a
+ * boundary was widened by configuration. Ignorable so older readers skip it.
+ *
+ * `"allowed"` exists because an audit log that records a grant under the word
+ * "denied" is worse than no log: the whole point of the file is that someone can
+ * read it later and answer "who stopped asking, and when".
+ */
 export interface AuditEvent {
   v: number;
   kind: "audit";
   ignorable: true;
   at: string;
   tool: string;
-  decision: "denied" | "expired";
+  decision: "denied" | "expired" | "allowed";
   reason: string;
   /** The rule that refused, when a rule decided it. Null when nothing matched. */
   rule?: string | null;
@@ -361,7 +368,13 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
     }
     case "audit": {
       const decision = record.decision;
-      if (decision !== "denied" && decision !== "expired") throw new Error("audit.decision must be denied or expired");
+      // Widened for "allowed" (D26) when configuration gained the ability to stop
+      // a prompt, which is a boundary removal and has to be as reviewable as a
+      // refusal. This is the reader, so it also has to keep accepting every value
+      // an older build already wrote.
+      if (decision !== "denied" && decision !== "expired" && decision !== "allowed") {
+        throw new Error("audit.decision must be denied, expired or allowed");
+      }
       // Rebuilt field by field, so `rule` must be read here or it would vanish on
       // the way back in. Absent stays absent: an older line has no rule to name,
       // which is different from a line whose rule was "none matched".

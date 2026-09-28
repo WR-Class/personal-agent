@@ -183,6 +183,53 @@ this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRo
 **配置加载 × 规则表**才是 D26 的主体，本轮**没有做**。它必须建在"提权状态不可自写"这个地基上——而地基经本轮核实**已经存在且现在被测试钉住了**，所以可以做。**下一轮的具体约束**：配置只从 agent home 读（**绝不从工作区发现配置文件**，即刻意不实现常见的"找项目里的 `.agentrc`/`agent.json`"模式）；任何**放宽**姿态的字段必须像 `--tier full-access` 一样落盘审计（D26/D32：移除边界必须是可审计的决定，不是凭标签解锁）。
 
 **未验证**：非 Windows 平台；`--trust-root` 授予的根**包含** agent home 时的交互；全量并发下 `background-jobs` 的 kill 测试偶发失败（隔离重跑两次均 11 通过 / 0 失败，判定为负载下的时间窗漂移，**未修**）。
+### D26 主体：配置加载 × 规则表（D51，2026-09-29，实证）
+
+**读过的来源**
+
+| 来源 | 位置 | 读到什么 |
+|---|---|---|
+| gemini-cli | [settings.ts](../../_research/repos/gemini-cli/packages/cli/src/config/settings.ts)：255–281 | `mergeSettings(system, systemDefaults, user, workspace, isTrusted)`；**第 262 行 `const safeWorkspace = isTrusted ? workspace : ({} as Settings)`**——目录不受信任则工作区配置**整体丢弃**；265–271 行给出五层顺序：Schema Defaults → System Defaults → User → Workspace → **System Settings（作为 overrides，最后合并）** |
+| gemini-cli | settings.test.ts：264 | 测试名即断言："system taking precedence over workspace, and workspace over user" |
+| opencode | [permission/index.ts](../../_research/repos/opencode/packages/opencode/src/permission/index.ts)：28–38 | `evaluate(permission, pattern, ...rulesets)`：**`findLast`**（最后匹配者胜出）+ 默认 `action:"ask"`、`pattern:"*"`（fail-closed） |
+| opencode | 同上：186–198 | `fromConfig`：配置可写 `{key: action}`（→ pattern `"*"`）或 `{key: {pattern: action}}`；`expand()` 处理 `~`/`$HOME` |
+| opencode | 同上：204–211 | `disabled()`：规则为 `pattern==="*" && action==="deny"` 时该工具**视为不可用**——与本项目"缺席而非拒绝"同形 |
+| opencode | [permission/arity.ts](../../_research/repos/opencode/packages/opencode/src/permission/arity.ts)：1–163 | `BashArity` 命令元数表（`export:1`/`grep:1`/`deno task:3`/`pipenv:2`/`ufw:2`） |
+| 本项目 | [rule-table.ts](../src/rule-table.ts)：22–33 | `RULE_TIERS={DEFAULT:1,EXTENSION:2,WORKSPACE:3,USER:4,ADMIN:5}`；**"Higher tier always outranks a lower one, whatever the priority"**；`MAX_PRIORITY=999` 使优先级**永不跨层** |
+| 本项目 | [tiers.ts](../src/tiers.ts)：68–89 | **`read-only` 的 deny-every-write 钉在 `USER` 层、priority 800**，只读工具的 allow 在 USER 900−index |
+| 本项目 | [trusted-roots.ts](../src/trusted-roots.ts)：49–58 | 既有决定：**损坏的信任文件报错而非读成空** |
+
+**采用**
+
+1. **gemini-cli 的"不受信任则丢弃工作区配置"，但走得更远：本项目根本不读工作区里的任何配置文件。** gemini-cli 读它、靠 `isTrusted` 门控；我们连发现都不做（刻意不实现"找项目里的 `.agentrc`/`agent.json`"）。**门控依赖信任状态正确，不读则不依赖任何状态**；且 D50 已实测确认 agent home 整棵树按位置拒绝写入，配置放那里天然不可被 agent 自写。真机验证：删掉 home 配置、在工作区放一份 `{"rules":[{"tool":"*","decision":"allow"}]}`，运行后**0 条** `config:widen` 审计行。
+2. **gemini-cli 的"操作员层最后合并"** → 优先级 **CLI 旗标 > 环境变量 > agent home 配置 > 内置默认**（`options.tier ?? agentConfig.tier`，前两者已在 `parseArgs` 里合流）。
+3. **opencode 的 JSON 规则形状与 fail-closed 默认**：`{tool, decision, reason?, priority?}`，无匹配仍由 `decide()` 默认拒绝。
+4. **本项目既有的"损坏即报错"** → 解析失败抛错，不静默当空。
+
+**不采用**
+
+1. **不采用"`tier` 可由配置指定"**——本轮最关键的结构决定。`ADMIN:5 > USER:4` 且高层永远压过低层，**配置规则一律由代码钉死在 WORKSPACE 层，层号绝不出现在 JSON 里**；否则一份配置就能把自己写进 ADMIN、压过 `full-access` 的审计记录。
+2. **不采用"`when` 谓词可由配置提供"**——`when` 是函数，从 JSON 造函数只有 `eval`/`new Function`，等于**配置文件即代码执行**。代价如实说：**配置无法表达"只放行 `git status`"这类按内容的规则**。
+3. **不采用 opencode 的 `findLast`**——本项目是"按有效优先级排序、首个匹配胜出"且 priority 被 clamp 保证永不跨层；改成 findLast 会让层号失去意义，动摇既有不变量（有测试断言）。
+4. **不采用 gemini-cli 的 remote/admin 远程配置**——引入网络来源等于引入一个本项目无法审计的信任根。
+5. **不采用 crush 的 `crushrc`（bash 脚本配置）**——配置文件即 shell 脚本，与不采用 `when` 同理。
+6. **不采用 `BashArity` 式命令元数表**——那是为"从 bash 命令里切出命令名"服务的；本项目 D48 已确立"按第一个词/子命令 + 标志"判定并**刻意保持白名单极短**，元数表增加复杂度却不增加安全性。
+
+**实现中被实测推翻的两个自以为是（都记下来）**
+
+1. **层选错了，是测试逼出来的。** 我最初把配置规则钉在 `USER` 层，理由听起来很自然（agent home 是用户级配置）。写完测试才发现：**`read-only` 的 deny-every-write 也在 USER 层（priority 800）**，而配置规则 priority 可达 999 —— **同层内大 priority 胜出，于是一份配置就能压过姿态自己的边界，把 `read-only` 下的写入判定翻成 allow**。这恰恰是 D26 要禁的自我提权，而我差点亲手实现它。改为 **WORKSPACE 层**：低于 read-only 的 USER 边界、低于 full-access 的 ADMIN 记录，与写作姿态留在 WORKSPACE 的规则同层（故仍可调整它们）。**教训：层号不能靠语义直觉选，必须核对既有规则实际钉在哪一层。** 该名字有误导性（本项目**不读**工作区配置），已在源码注释里显式警告。变异验证：把层改回 USER，3 条测试立刻变红。
+2. **`wideningRules` 第一版自己重写了匹配逻辑，漏了通配符。** 它从姿态的 allow 规则里收集工具名建集合，而 `full-access` 的 allow 规则是 `tool:"*"`，于是**把 full-access 误报成"被配置放宽了"**。改为直接调 `decide(postureRules, tool, {})` —— 匹配本来就是它的职责，且它已处理通配符、层序与谓词。**教训：不要重新实现既有判定器的子集，那正是漏掉边界情况的典型方式。**
+
+**真机验证暴露的一个类型检查盲区（本轮最有价值的一条）**
+
+`AuditEvent.decision` 是 TS 联合类型，但 `SessionStore` 在**读回持久化行时另有一道运行时校验**（`session-store.ts:371`），两者是**各自独立的真相来源**。我只放宽了联合类型：**编译干净、24 项单元测试全绿、全量 544 项全绿**，然后真机跑 CLI 直接失败于 `audit.decision must be denied or expired`。**只有真机验证抓到了它。** 已同时放宽运行时守卫，并补上往返测试；变异验证：把守卫改回严格版，该测试立刻变红。**教训（本项目已多次遇到同一形状）：类型与运行时守卫并存时，改一处必须查另一处；而"全绿"不等于"能用"，凡改动落到真实执行路径上的，必须真机跑一次。**
+
+**审计语义的一处修正**：`decision` 联合类型原为 `"denied" | "expired"`，而既有代码把**移除提示的档位**也记成 `decision:"denied"`（第 343 行）——一份把"授权"记成"拒绝"的审计日志比没有日志更糟，因为它的全部意义就是让事后能回答"谁停止了询问"。故加入 `"allowed"`。**既有的 `tier:` 审计行仍写 `denied`，本轮未改**（属既有行为、有测试覆盖），如实记为遗留不一致。
+
+**本轮刻意不做**：按参数内容的配置规则（需要可序列化的谓词语言，是另一个设计问题）；多档 profile 切换；配置写回（`--set` 之类）；修正上述遗留的 `tier:` 审计语义。
+
+**未验证**：非 Windows 平台；配置与 `--trust-root` 同时使用时的交互；配置里 `tool:"*"` 与注册表缺席工具的完整组合矩阵（已测 read-only 一例）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
