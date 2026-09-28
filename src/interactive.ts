@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { SessionStore } from "./session-store.ts";
 import { formatBudget } from "./runtime.ts";
 import { formatTaskAssessment } from "./task-state.ts";
+import { formatEvaluation } from "./cycle.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import type { TerminalIO } from "./terminal.ts";
 import { assertSafeStateDirectory } from "./security-config.ts";
@@ -111,6 +112,10 @@ export async function runInteractive(options: InteractiveOptions): Promise<numbe
             // trace is what makes the budget line's token count explicable.
             if (result.reasoning !== undefined) io.write(`\n[思考] ${result.reasoning}\n`);
             io.write(`\nAgent > ${result.reply.content}\n${formatBudget(result.budget)}\n`);
+            // Same order as the one-shot entry point: consumed, concluded, then the
+            // cross-round task. The two entry points must not disagree about what a
+            // round reports, or an operator learns one and is misled by the other.
+            io.write(`${formatEvaluation(result.evaluation)}\n`);
             // The second entry point gets the same line. Only printed when a task
             // state was recorded, so an ordinary session shows nothing new.
             const taskLine = result.taskAssessment === undefined ? undefined : formatTaskAssessment(result.taskAssessment);

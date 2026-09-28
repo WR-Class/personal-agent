@@ -145,3 +145,47 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
     reviewer: "mechanical",
   };
 }
+
+/** Evidence lines rendered before the rest are counted rather than shown. */
+const MAX_EVIDENCE_LINES = 8;
+
+/**
+ * Rendering of a round's mechanical verdict, for both CLI entry points — the
+ * sibling of `formatBudget`.
+ *
+ * It exists because the verdict was otherwise invisible: `SendResult.evaluation`
+ * carried it and the cycle journal stored it, but no terminal ever showed it. So
+ * "trust only mechanical facts" held in the log and nowhere the operator looked,
+ * which is the same defect D58 found in `enforceTaskSpec` — built, load-bearing,
+ * reaching nobody.
+ *
+ * Gene claim outcomes need no renderer of their own. `validationEvidence` already
+ * folds them into `evidence` as `validation:<outcome>=<claim> (<detail>)`, so this
+ * one block covers both. Rendering `validation` separately would be a second
+ * presentation of one fact, and the two would drift.
+ *
+ * Two honesty rules, both inherited from `formatBudget`:
+ *
+ * - Evidence the budget line already states (`steps=`, `toolCalls=`) is dropped.
+ *   Not to save characters: repeating numbers the operator just read is noise, and
+ *   noise is how a real warning gets ignored. `toolErrors=` is kept, because the
+ *   budget line reports calls made, not calls that failed.
+ * - Nothing is silently truncated. Past `MAX_EVIDENCE_LINES` the block says how
+ *   many lines it withheld, since `evidence` grows with the gene's claim count and
+ *   that count has no ceiling.
+ *
+ * `reviewer` is always printed. The field exists to say who judged —
+ * "Mechanical until a reviewer exists that is not the worker" — so the day a
+ * non-mechanical reviewer appears, this line is the only place the difference
+ * would be visible.
+ */
+export function formatEvaluation(evaluation: CycleEvaluation): string {
+  const head = `[本轮判定 ${evaluation.status} · 判定者 ${evaluation.reviewer}` +
+    (evaluation.failureClass === null ? "" : ` · 原因 ${evaluation.failureClass}`) +
+    "]";
+  const kept = evaluation.evidence.filter((line) => !/^(steps|toolCalls)=/.test(line));
+  const lines = kept.slice(0, MAX_EVIDENCE_LINES).map((line) => `  ${line}`);
+  const omitted = kept.length - lines.length;
+  if (omitted > 0) lines.push(`  … 另有 ${omitted} 条证据未显示`);
+  return [head, ...lines].join("\n");
+}

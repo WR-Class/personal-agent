@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { SessionStore } from "./session-store.ts";
 import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_MAX_STEPS, DEFAULT_MAX_TOOL_CALLS_PER_RUN, DEFAULT_MAX_TOOL_CALLS_PER_STEP, formatBudget } from "./runtime.ts";
 import { formatTaskAssessment } from "./task-state.ts";
+import { formatEvaluation } from "./cycle.ts";
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
@@ -435,6 +436,11 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       if(result.reasoning!==undefined)write(`[思考] ${result.reasoning}\n`);
       write(result.reply.content+"\n");
       write(`${formatBudget(result.budget)}\n`);
+      // Between the budget and the task assessment, and that order is the meaning:
+      // what this round consumed, then what the system concluded about this round,
+      // then where the cross-round task stands. The task line goes last because it
+      // is the only one of the three that is not scoped to this round.
+      write(`${formatEvaluation(result.evaluation)}\n`);
       // Printed only when a task state was recorded. An assessment computed but
       // never shown would be dead code of exactly the kind D58 found: built,
       // load-bearing in tests, and reaching nobody.
