@@ -1151,6 +1151,41 @@ D59 已指出模型不得自报 `done`。**但读完 claim 机制后发现更隐
 
 **未做 / 未验**：`assessTaskState` **仍只有测试在调用**，接到轮末留下一轮（**刻意不与写入者同轮** —— 混在一轮会让"哪个改动导致哪个红"无法归因）；写入者尚无跨轮真实使用证据（没有真模型跑过它）；`update_task_state` 与 `batch_files` 同批时的交互未测；审计只覆盖工具路径，**运行时内部若直接调 `appendTaskState` 则不落审计**（当前无此调用方）。
 
+### 轮末判定：只报告、绝不降级，以及一处我自己造成的混淆的更正（D64，2026-09-30，有代码）
+
+**⚠️ 先更正我上一轮报告里的一处混淆（我自己造成的）**：我说过"接 `assessTaskState` 会让 D58 那个死代码开关变得有意义"。**这是错的，两件事无关。** 实读 `sendTurn` 确认：`if (text.length === 0) throw new Error("empty input")` 在前，`buildTaskSpec(text, { mode: TASK_MODE })` 恒传已知的 mode ⇒ `unknowns` 恒为 `[]` ⇒ `if (verdict.blocked) throw` 不可达。**那是 `assessTaskSpec` 的 `unknowns`（objective/mode 缺失），与 `assessTaskState` 的步骤判定是两套东西。** 本轮不碰它。
+
+**本轮读了什么（符号+引文为主定位符）**
+
+| 来源 | 读到的承重事实 |
+|---|---|
+| `runtime.ts` 轮末分支（`response.toolCalls.length === 0`） | 已有 `evaluateRun({ steps, toolCalls, toolErrors, failureClass: null })`，其注释：*"the verdict is read off what the round mechanically did"*；`checkValidation(applied.validation, { filesWritten: this.writeLedger.files, tools: this.outcomeTools ?? [] })`；**`validation.failed.length > 0` 会把 `status` 降为 `"partial"`** |
+| `validation.ts` `RoundEvidence` | 就是 `{ filesWritten, tools }` ⇒ **轮末已有的那个字面量正是 `assessTaskState` 要的形参，不需要新证据通道** |
+| `runtime.ts` `SendResult` | 已有 `validation?: ValidationReport`（*"The applied gene's claims compared against the round, when a gene applied"*）与 `evaluation: CycleEvaluation` ⇒ **新字段应与它并列同形** |
+| `runtime.ts` `formatBudget` | *"One-line rendering of a send's budget, for both CLI entry points"*，内置两条诚实规则（未测量就写未测量、超上限就写超多少）⇒ **判定也应有同形单行渲染器** |
+| **⚠️ `cli.ts` / `interactive.ts` grep `validation\|evaluation`** | **CLI 目前完全不显示这两个字段**（只命中 4 处，全与本主题无关）⇒ **这直接决定本轮的硬要求：算出来但不显示，就是 D58 那种"已建成、测试里承重、但没人调用"的死代码重演** |
+| `task-state.ts` `assessTaskState` | `unknowns` 里的字符串是 `步骤 N（text） 缺验收条件` 与 `… 无法判定：detail`，`failed` 里是 `… 未达成：detail` ⇒ **⚠️ 这些字符串自身不带轮次限定**，所以限定必须由渲染器加在它们外面 |
+
+**决定一（核心）：只报告，绝不用它给本轮降级。** 理由是 D62 那条不对称性的直接推论，而且可检验：**证据是每轮的**（`writeLedger`/`outcomeTools` 每轮重置）**而任务是跨轮的** ⇒ **第 2 轮达成的步骤，在第 5 轮的证据下读作 `unmet`**。`validation`（基因 claim）**可以**降级本轮，**因为基因是应用到单轮的**；**任务状态不是**。**若照抄轮末那段降级逻辑，就会产出我在 D62 拒绝注入的那个同样的误导判定 —— 只不过这次写进轮记录而不是 prompt。** 故 `taskAssessment` 与 `verdict` 完全解耦，**测试用最强的形式钉住它**：同一个脚本轮，一次有任务状态、一次没有，**断言两者 `evaluation` 深度相等**（"判定若参与定级，这两份就不可能相同"）。
+
+**决定二：不持久化。** 它是从日志推导出来的事实，**ADR-0001 的原则是不留副本**；更具体的是**跨轮累积规则尚未定案**（哪一轮的 `met` 算数？），**把一条含义未定的记录写进日志比不写更坏** —— 它会变成一堆每条都看起来像判定、实则都不是的东西。**要的人可以从日志重算。** 记为未决项。
+
+**决定三：一份具名证据对象，两个读者。** 把 `{ filesWritten, tools }` 提成 `roundEvidence` 供基因 claim 与任务 claim 共用。**写两遍就会让同一轮的两种判定基于不同的事实** —— 而这类漂移不会报错，只会让两个数字悄悄地不一致。测试用"同一轮里 `budget.filesWritten === 1` 且该步为 `met`"钉住它们读的是同一本账。
+
+**决定四：轮末必须重读 `store.taskState`，不能复用 `buildPrompt` 读到的那份。** **模型可能就在本轮用 `update_task_state` 写过**，复用会评估一个被本轮改掉了的旧状态。代价是每轮多一次全日志 `inspect()`，相对本轮已发生的模型调用可忽略。
+
+**决定五：轮次限定由渲染器承担，因为步骤字符串自己不带。** 渲染文本为 `[本轮任务判定 N/M 步达成 · 未知 K · 本轮未达成 J]（仅对本轮证据：跨轮任务的步骤可能已在更早的轮次达成，此处不代表从未达成）`，**并在任一步为 `unverifiable` 时追加"判不了不等于没做：需要跑命令的验收条件在本运行时恒为 unverifiable"** —— 因为**忘记能力上限的人会把 `unverifiable` 读成"没做"**。**变异验证证明这条限定是承重的**：删掉它 → 1 红。
+
+**决定六：单行只给计数，不给步骤文本。** 这是刻意的：步骤文本是长度无界的散文，而这一行的契约是"一行"（与 `formatBudget` 同形）；**完整的逐步明细已经在 `SendResult.taskAssessment` 上**，要采取行动的人从那里拿。
+
+**⚠️ 顺带发现的一个更大的缺口（本轮不做，如实记）**：**CLI 既不显示 `validation` 也不显示 `evaluation`** —— 也就是说**基因 claim 的比对结果与本轮的机械判定，操作员在 CLI 上看不到**，它们只活在 `SendResult` 与 outcome 日志里。**这比本轮的改动范围大，且需要单独决定显示到什么程度**（一行放不下 claim 明细）。
+
+**本轮我的测试 bug（如实记录）**：三个测试共用一个 workspace 且都写 `a.txt`，而 **`create_file` 不覆盖已存在文件** ⇒ 第一个测试建了它之后，后续 `create_file` 失败、不入账本 ⇒ `complete` 为 `false`。**症状是"最承重的那条断言红了，而形状相同的另一条绿着"**，所以第一反应容易误判成产品缺陷。**实际是测试之间通过文件系统耦合了。** 修法是每个测试用独立文件名，并在端到端那条里**补一句 `outcome === "met"` 的断言**，让"写入真的发生了"成为显式前提 —— **否则那条测试会在写入静默失败时照样通过，只是在测一件别的事**。
+
+**验证**：`tsc --noEmit` 干净；`task-assessment.test.ts` **9/9**；全量 **620 项 / 618 通过 / 1 失败 / 1 跳过** = 基线 611/609/1/1 **+9**，失败数不变（`background-jobs` 已知并行漂移，**隔离重跑 11/0，连续第八轮**）。**变异验证三处全部变红** —— A 删掉 `assessTaskState` 调用 → **5 红**；B 删掉渲染里的轮次限定 → **1 红**；**C 把判定塞进 `systemText`（即故意破坏 D62 的不变量）→ 1 红**；还原后 **9/9**。**真机（D45：真机验证才是可信单位）**：用 `PERSONAL_AGENT_HOME` 指向临时目录（**不碰真实数据**），先跑一次 `--echo` 建会话、播种三步任务状态（一步 `tool-used`、一步 `command`、一步无条件）、再跑一次，**CLI 二进制真实打印**：`[本轮任务判定 0/3 步达成 · 未知 2 · 本轮未达成 1]（仅对本轮证据：…） 判不了不等于没做：…` —— **三类计数全对**（未知 2 = `command` 恒判不了 + 缺条件那步；本轮未达成 1 = 本轮没调 `read_file`），**且 prompt 从 602B 涨到 1.4KB，同时证明状态块仍在注入**。
+
+**未做 / 未验**：**跨轮累积未定案**（见决定二）；`enforceTaskSpec` 的死代码未处理（独立小决定）；**`validation`/`evaluation` 在 CLI 上不可见**（见上）；`taskAssessment` 与 `compactedMessages` 同时出现时的呈现未测；只有 `--echo` 真机跑过，**没有真模型跑过它**。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
