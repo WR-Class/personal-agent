@@ -1721,6 +1721,65 @@ probeC registered={"covers":3} unknownKind=undefined afterDispose=undefined dupl
 
 **⇒ 可执行的纠正（补充 D69 第七节）**：**引用一条机制作为某个问题的解药时，必须引完整句，并说明它解决的是哪一侧（类型/运行时/存储/UI）。**
 
+### D71 打开事件种类，但不打开那个封闭联合（2026-09-30，**有代码**，提交 `7542367`）
+
+**执行的是 D70 采用清单第 1 项**：把 `migrateEvent` 的 8-case 封闭 switch 换成运行时"种类→处理器"注册表。**这是第一个有代码的接缝改造**，形状由 D70 探针 (c) 预先验证（可逆、拒重复）。
+
+#### 一、采用：注册表优先，既有 switch 一行不改
+
+`migrateEvent` 在**版本闸之后、switch 之前**查注册表；命中就交给处理器，否则落进原 switch。**⇒ 8 个既有种类的校验逻辑零改动，回归面为零。** 这把范围刻意收到最小：**不把既有 8 个 case 抽成处理器** —— 那是 200 行重写、有真实回归风险，而目标是"新种类不必改核心"，不是"所有种类同构"。
+
+**三条承重性质，都在代码里强制、不靠信任，各有测试且各做过变异验证**：
+
+| 性质 | 依据 | 变异验证（去掉即变红） |
+|---|---|---|
+| **内置 8 个种类不可注册** | 注册 `"message"` 就等于让调用方重新解释对话事实源 ⇒ **D04「插件不得自行扩大授权」用在事件日志上** | 改成 `if (false)` ⇒ `refuses every builtin kind` 变红 ✅ |
+| **外部种类永远 `ignorable: true`**（类型 + 归一化各强制一次） | 本文件自己的契约（`:50`、`:253-256`）：不认识的种类**跳过**，**未标记**的未知种类是**错误**，因为静默丢弃会改变"模型被重建成看见了什么" | 归一化 return 换成 `return parsed` ⇒ `normalises what a handler returns` 与 `lets a registered kind round-trip` 一起变红 ✅ |
+| **核心强制归一化处理器返回值** | 不能声称未来版本（且**版本闸在注册表之前**）、不能改 kind、不能变成不可跳过 ⇒ **说谎的处理器最多影响自己的 `payload`，而 `payload` 核心从不解释** | 同上 ✅ |
+
+**⚠️ 一个被测试抓住的真缺陷**：disposer 初版按 **handler 身份**判归属（`get(kind) === handler`）。**同一个插件重载会传入同一个函数对象**，于是旧 disposer 会把背后那次活注册删掉。改为注册时生成唯一 `Symbol`、disposer 只认自己的 token。**变异验证**：dispose 变空操作 ⇒ `makes the kind unknown again once disposed` 变红 ✅。
+
+#### 二、⚠️ 拒绝：不把 `ExternalSessionEvent` 加进 `SessionEvent` 联合（**试过、量过、才拒绝**）
+
+**按 D69/D70 立的规矩，这条拒绝附实测证据。** 加进去之后 `tsc --noEmit` 报 **8 处**错误，根因是**开放成员的 `kind` 是 `string`，与所有字面量重叠，TS 无法在 `event.kind === "…"` 处排除它**：
+
+- 6 处平凡：`:852/:870/:871/:898` 形状是 `if (event.kind === "task-state") latest = event`，报 `Type 'TaskStateEvent | ExternalSessionEvent' is not assignable to type 'TaskStateEvent | undefined'`。
+- **⚠️ 1 处不平凡**：`inspect` 的工具批次审计是 `event.kind==="tool/call" || event.kind==="tool/result"` 的**析取收窄**，随后读 `event.callId`、`event.name`、`event.arguments`，承载"孤儿/重复工具审计事件"的完整性校验。**为买一个类型层便利而改写一处安全校验，不划算。**
+- 另有 `:939/:965/:976/:977` 报 `Property 'id'/'message'/'callId'/'name' does not exist on type '… | ExternalSessionEvent'`。
+
+**改法（更小也更诚实）**：**两个集合分开** —— `InspectionResult.events`（核心认识的，与 `eventLines` 保持平行）与 `InspectionResult.external`（注册进来的，`{line, event}`）。分流用已有的 `BUILTIN_EVENT_KINDS.has(kind)` 判定，**运行时明确、不靠类型收窄**。
+
+**为什么这不只是省事**：核心自己的那些投影（`taskState`、`latestMarks`、压缩边界、工具批次审计）**本来就不该关心它们不认识的种类** —— 分开是把这件事**写成结构**，而不是依赖 TS 能不能收窄成功。**安全性质保住**：外部事件走 `.external` 暴露，**不是被静默丢弃**（那正是 `:253-256` 警告的形状）。
+
+**⚠️ 行号是必需的，不是装饰**：`events` 与 `eventLines` 是平行数组，且头部检查断言 `events[0].kind === "session"` —— **一个落在位置 0 的外部事件会把这条完整性检查撞掉**，而它的行号在读取循环里是免费的、事后无从恢复。
+
+**⇒ 本节的限度如实记录**：**类型侧仍然封闭**。运行时开放了，核心投影在类型上看不见外部种类。这是取舍，不是疏漏。
+
+#### 三、⚠️ D70 那条教训在第二个位置复现
+
+D70 从 `docs_development.md:56` 读到：DSH 把仓库拆成 **Host/Client 两个 tsconfig 聚合**，因为*"both sides declaration-merge the cordis `Context` interface under the same keys with different services; **one program seeing both merges reports a collision**"*，我当时记下**"本项目单 program，所以那个具体碰撞不可达"**。
+
+**本轮实测证明这句话只对了一半**：**开放类型的代价没有消失，只是换了个位置** —— 从"两个 program 碰撞"变成"一个 program 里 8 处收窄失败"。**⇒ 补一条可执行的规则：判断一个类型层机制"本项目用不上它的代价"时，不能只看它记载的那个故障形态，要问"这个机制引入的开放性会在哪里被消费"。** 本轮如果没先编译就宣布成功，这 8 处会一直留到别人改那些投影时才炸。
+
+#### 四、验证（如实）
+
+- **`tsc --noEmit` 退出码 0**；新套件 `test/event-kind-registry.test.ts` **9/9**。
+- **全量 638 项 / 635 通过 / 2 失败 / 1 跳过**（基线 629 + 新 9 = 638 ✓）。两处失败都是 `background-jobs` 的 kill 测试（`kills the process…`、`kills everything still running`）约 3050ms 超时 ⇒ **隔离重跑 `background-jobs` = 11/11 全绿，证实是记录在案、11 轮未修的并行负载间歇项，不是本轮回归**。
+- **改动面隔离重跑 = 80/80**（`session-format`、`reliability`、`task-state`、`task-state-writer`、`compaction`、`event-kind-registry`）。
+- **三处变异验证全部变红，且源码字节还原**：`还原后 pass=9 fail=0 与基线一致=true`、`源码已还原=true`。
+- **⚠️ 提交 `7542367` 当时如实标注了两项欠账**（三处变异验证、五份文档），**已在下一轮补齐** —— 周期 `event-kind-registry` 在补齐前一直保持 `doing`，没有以未完成状态提交为完成。
+
+#### 五、⚠️ 本轮新增两条 PowerShell 陷阱（都已踩过）
+
+1. **`.NET` 静态调用用*进程* CWD，不跟随 `Set-Location`。** `[System.IO.File]::ReadAllText("src\session-store.ts")` 解析成了 `D:\DSHXM\AgentKHD\src\...` 而报 `DirectoryNotFoundException`。**这是已记录的陷阱，本轮又踩了一次** ⇒ 读项目内文件一律用 `read` 工具，不用 shell。
+2. **PowerShell 的 `*>` 重定向文件用 node 读不出内容**（编码不匹配：文件大小 113482 B，但 node 侧正则匹配 0 行、连 `ℹ tests` 都读不到）。**必须用 `Select-String` 读**，或改用 `[System.IO.File]::WriteAllText` 显式写 UTF-8 无 BOM。
+
+#### 六、未做（不推断）
+
+- **注册表还没有任何调用方**：本轮只建了扩展点，**没有任何插件真的注册种类**，也没有 CLI 入口能加载外部注册。⇒ **它现在是"能力存在但未被使用"**，与 D58 记录的那类死代码不同（那是逻辑不可达，这是尚无人调用），但同样要在下一轮接线时才算落地。
+- **`external` 集合没有消费者**：`inspect()` 会返回它，但 `history()`/`buildPrompt`/压缩都不读它。这是有意的（核心不该解释它不认识的），但**"谁来读 external"是插件系统那一轮的问题，本轮不预设答案**。
+- **声明合并仍未采用**（D70 已降级为可选）：类型侧封闭就是这个决定的直接后果，两者是一致的。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

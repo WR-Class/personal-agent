@@ -159,6 +159,8 @@ tools.ts         -> … session-store.ts, task-state.ts
 
 **④ 一个真正封闭的扩展点。** `session-store.ts` 的 `migrateEvent` 是 **8 个 case 的 switch** ⇒ **新增事件种类必须改核心**。DSH 的 session events 是开放的（插件可追加种类），这一处不是。**这是"特权核心"最具体的一个实例，也是任务状态这类功能每加一个都要碰核心的原因。**
 
+> **✅ 已修（D71，提交 `7542367`）：`migrateEvent` 前面接了一层运行时"种类→处理器"注册表**（`registerEventKind(kind, handler) → disposer`、`registeredEventKinds()`），**既有 8 个 case 的 switch 一行未改**，所以既有种类的校验逻辑零改动、回归面为零。**⚠️ 但本节说的"封闭"只修掉了一半，必须如实说清**：运行时开放了，**类型侧仍然封闭** —— `ExternalSessionEvent` **故意没有进 `SessionEvent` 联合**，因为加进去实测会让 8 处按 `event.kind === "…"` 收窄的地方全部编译失败（开放成员的 `kind` 是 `string`，与所有字面量重叠，TS 无法排除它），其中 `inspect` 的工具批次审计是 `tool/call || tool/result` 的**析取**收窄后读 `callId`/`name`/`arguments`，为买类型层便利去改写一处安全校验不划算。改法是**两个集合分开**：`InspectionResult.events` 只装核心认识的种类，`.external` 装注册进来的（**连行号一起，什么都没丢**）。**⇒ 这是 D70 那条教训在第二个位置复现**：`docs_development.md:56` 记 DSH 因"两侧声明合并同一个 `Context` 键会碰撞"而拆成两个 tsconfig 聚合，我当时写"本项目单 program 所以不可达"，**实测证明开放类型的代价只是换了个位置，落在收窄点上。**
+
 **⑤ 真正的病灶：组合根与循环按名字硬 import。**
 
 | 文件 | out-degree | 含义 |
