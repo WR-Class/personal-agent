@@ -765,6 +765,392 @@ D56 曾断言"② 的逃生口被 ① 堵着"。**实读源码后：错。** 该
 
 **未验证**：`PERSONAL_AGENT_TOKENIZER` 端到端真机跑通（无可用分词器命令，网关亦 DOWN）；`node:sqlite` 在 `engines` floor（22.6）上是否打 ExperimentalWarning 或需 flag（本机只有 v24.19.0）；`node:sqlite` 写入 agent home 是否与 D50 的按位置封死相容（**索引文件须落在 agent home 内，而 agent home 对文件工具封死 —— 但封死的是"工具"，运行时自己写不受限，此点须实测确认而非推断**）；词法相似度的实际准确率（无数据）。
 
+### TaskSpec 的真实状态：已建成且承重，缺的只是跨轮持久层（D58，2026-09-30，实读，无代码）
+
+**触发**：上一轮结尾明确承诺 *"下一轮必须先读 `taskspec.ts` 再断言它缺什么，不得凭 `IMPLEMENTATION.md` 的顺序表述推断"*，因为发现 `runtime.ts:15` 已 import 它。**读完证明这个承诺救了本轮** —— D55 采用清单第 3 项写作"任务状态层（TaskSpec 核心）"，读起来像待建项，**实际它已建成，而且是基因选择的前门**。
+
+**若没读就动手，会是本项目第七次同类错误，而且是最贵的一种：重复实现一个已存在且承重的模块。**
+
+#### 一、已存在的（逐条附行号）
+
+[taskspec.ts](../src/taskspec.ts) 全文 115 行，`TASKSPEC_VERSION = 2`：
+
+| 已有 | 出处 |
+|---|---|
+| `TaskSpec` 结构：`schema`/`originalInput`/`objective`/`intent`/`signals`/`selectedMode?`/`unknowns`/`evidence.authoritativeMode` | `taskspec.ts:20-34` |
+| **用户原话逐字保留** | `:22` 注释 *"The user's own words, preserved verbatim"* |
+| **mode 由运行时决定，模型不能** | `:15-16` 注释 *"The runtime sets it; the model cannot"* |
+| **缺 mode 记为未知，绝不猜测** | `:29` 注释 *"Undefined means no mode was decided — never guessed"* |
+| **intent 是确定性分类但不是权威** | `:25` 注释 *"Keyword classification, **deterministic but not authority**"*；`INTENT_HINTS` 正则表 `:39-44`，默认 `build`（`:89`） |
+| **五值 intent 与蜂群协议同一套** | `:18` `"build" \| "fix" \| "research" \| "verify" \| "operate"` |
+| **enforce 是独立开关且默认关** | `:107-114`，注释 *"an incomplete spec is reported, not treated as fatal, until the operator opts into hard refusal"* |
+| **接线到运行时，且位置本身是安全性质** | `runtime.ts:697-702`，注释原文 *"TaskSpec is decided before anything is written or sent: the mode comes from the runtime, and a hard refusal (opt-in) must leave no trace, so it runs **before the session is even ensured**"*（`ensureSession()` 确在其后，`:722`） |
+| **它是基因选择的前门（承重）** | `runtime.ts:704-707` 注释 *"the spec is the front door — its intent gates the library and its signals score it"*；`:709` `this.genePrompt = applied?.block`（**即 D55 采用清单第 1 项所扩展的那个系统提示拼接的上游**）；`:714` `outcomeSpec` 把 intent+signals 写进周期结果 |
+| **每轮重置写账本，无基因时仍有默认预算** | `runtime.ts:716-720` 注释 *"with no gene applied the runtime default still applies, because 'unbounded' is not a safe default (D18)"* |
+| **spec 暴露在 send 结果上** | `runtime.ts:416`、`:843` |
+
+#### 二、`extractSignals` 已经显式处理中文 —— 这直接更正 D57
+
+`taskspec.ts:61-82`：归一化 → 按非字母数字切分 → **对 Han/Hiragana/Katakana 连续段发 2 字 bigram**（长度 ≤4 时另保留整段）。注释原文：
+
+> *"CJK has no word boundaries: emit the bigrams so the vocabulary is shared between differently phrased requests. The whole run is only kept when it is short enough to be a word rather than a whole sentence."*
+
+模块注释还解释了**为什么必须这样**（`:57-59`）：*"otherwise a whole sentence is one signal, which matches nothing and (worse) **groups nothing when repeated failures are distilled**"*。
+
+**⇒ 更正 D57 第四节**：那里为"任务切换检测"提议的零依赖方案写作"词法相似度（词面重叠/Jaccard）"，读起来像要新建。**实际词汇抽取器已存在**，应写成 **"复用 `extractSignals`"** —— 它已经解决了中文无词边界这个最难的部分，而且是**蒸馏分组正在依赖的同一套词汇**，复用它可保证"切换检测"与"失败归纳"用同一种相似度 notion，不会出现两套词汇打架。
+
+#### 三、一个非显然的发现：enforce 开关在运行时路径上目前是死代码
+
+**三段论，每步附出处，可复核：**
+
+1. `runtime.ts:694-695`：`const text = input.trim(); if (text.length === 0) throw new Error("empty input");` ⇒ 进入 `buildTaskSpec` 的 `text` **必非空** ⇒ `objective = originalInput.trim()`（`taskspec.ts:86`）必非空 ⇒ `:88` 的 `unknowns.push("objective")` **不会执行**。
+2. `runtime.ts:700`：`buildTaskSpec(text, { mode: TASK_MODE })` —— **总是**传 mode ⇒ `hasMode` 必为真（`taskspec.ts:93`）⇒ `:94` 的 `unknowns.push("mode")` **不会执行**。
+3. 由 1、2 ⇒ 运行时路径上 `unknowns` **恒为 `[]`** ⇒ `taskspec.ts:113` 的 `if (!options.enforce || spec.unknowns.length === 0) return { blocked: false };` **恒走后半条** ⇒ `assessTaskSpec` **恒返回 `{blocked:false}`**，**无论 `enforceTaskSpec` 开或关** ⇒ `runtime.ts:702` 的 `if (verdict.blocked) throw` **永不可达**。
+
+**这不是 bug**：没有可拒绝的东西时不拒绝是诚实的，而且注释已说明 enforce 是 opt-in。**但两条推论必须记下**：
+
+- `IMPLEMENTATION.md:116` 写的 *"强制拒绝先默认关闭"* **目前无实际效果** —— 开关在，但没有会被它拦住的状态。
+- **任何"打开 enforce 就能拦住不完整任务"的说法都是错的。** 要让它有意义，**必须先有会真正填进 `unknowns` 的必填项**（例如跨轮持久状态里的目标、验收条件、子任务）。**故 enforce 的正确开启时机是持久层落地之后，不是之前。**
+
+#### 四、真正缺的部分（范围比 D55 原表述窄得多）
+
+**缺**：spec 是**每次 send 从头重建**的（`runtime.ts:700` 在 `send()` 内部），**不是跨轮持续并被更新的状态**；没有进度或子任务完成度；没有视频二说的"更新状态而非追加聊天文本"。
+
+**故 D55 采用清单第 3 项应改写为**：
+
+> ~~任务状态层（TaskSpec 核心）~~ → **给已存在的 TaskSpec 加一层跨轮持久状态**：一个随轮次**被更新**（而非追加）的任务记录，承载目标、验收条件、子任务与进度，并让 `unknowns` 第一次拥有真实内容 —— **进而让 enforce 开关第一次有意义**。
+
+**这比"建 TaskSpec"小得多，也安全得多**：不改前门、不改基因选择、不改 mode 权威归属，只在其上加状态。**且新状态同样必须落在 agent home 内**（复用 D50 的按位置封死），理由与 `constraints.json` 完全相同 —— **agent 能改自己的任务状态，就等于能改自己的验收条件**。
+
+#### 五、方法论
+
+**本轮没有出错，因为上一轮把"必须先读"写成了明文承诺并当轮兑现。** 这值得记为做法而非运气：**当一轮发现自己差点凭印象断言时，把"下一轮必须先读 X"写进文档，比当场记住更可靠** —— 本项目前六次同类错误全部发生在"以为自己已经知道"的地方，而这一次是唯一一次提前设了闸。
+
+**未验证**：`enforceTaskSpec` 的默认值与设置路径（本轮只确认了它在运行时路径上恒不生效，**未读它的声明与 CLI 接线**）；`geneStore.selectFor` 如何用 signals 打分（属 D14，本轮未重读）；跨轮持久状态的存储形状（JSONL 追加 vs 单文件覆写）尚未设计，**须与 ADR-0001 的"唯一真相来源"对齐后才能定**。
+
+### 跨轮持久任务状态层：存储形状与完成判定权（D59，2026-09-30，设计取证，无代码）
+
+**触发**：D58 把采用清单第 3 项改写为"给已存在的 TaskSpec 加一层跨轮持久状态"，并规定 *"存储形状（JSONL 追加 vs 单文件覆写）**须先与 ADR-0001 的'唯一真相来源'对齐才能定**"*。本轮就是那个前置条件。**结论：追加进会话日志，镜像 `summary`；而本轮真正的产出不是存储形状，是完成判定权归谁。**
+
+#### 一、存储形状：ADR-0001 的判据是"无副本"，不是"只有一个文件"
+
+`session-store.ts:22-39` 原文：*"A tool invocation used to be written three times: an audit `tool/call`, an audit `tool/result`, and the `message` that actually feeds the next prompt. **The audit pair was a copy, and keeping a copy meant the two could disagree** — which is why the reader carried conflict checks for exactly that case."*
+
+**⇒ 判据是"是否存在第二份可能与日志不一致的记录"。** 任务状态若只存在日志里一份，就合规；若另开 `<home>/task-state.json`，则日志里有"发生了什么"、另一个文件里有"任务到哪了"，**两者可能不一致且无从判定谁对** —— 这正是 ADR-0001 要消灭的形状。
+
+**store 自己的版本规则明确支持新增类型**（`:41-47`）：*"A version bump is owed only when the shape of an **existing** kind changes. **Adding a new kind is not a structural change: new kinds are written with `ignorable: true`**, and a reader that does not recognise a kind skips it instead of failing."* ⇒ **不需要 bump `CURRENT_EVENT_VERSION`（`:50`，仍为 1）。**
+
+**`summary` 是可照抄的完整先例**，五处细节都应继承：
+
+| 先例 | 出处 | 为什么任务状态也该这样 |
+|---|---|---|
+| `SummaryEvent { v, kind:"summary", ignorable:true, at, covers, summary }` | `:122-129` | `ignorable` 让旧 reader 跳过而非失败 |
+| **写入不删除任何东西**，`history()` 仍重放每条消息 | `:114-117` | 状态更新不得抹掉历史，否则无法审计"任务是怎么走到这一步的" |
+| 旧 reader 的后果被如实描述 | `:119-120` *"skips it and builds the full-length prompt — **longer than intended, but not wrong**"* | 任务状态缺失只会让 prompt 少一块上下文，**不会让已有内容变错** —— 这是"可降级"的正确形状 |
+| **latest wins** | `:638-647` *"The latest event wins because `covers` only ever grows"* | **"更新状态而非追加聊天文本"正是这个语义**：日志里追加，但注入 prompt 的只有最新一份，故模型看到的是当前状态而不是一堆增量 |
+| **边界是被观测的事实，不是声称** | `:610-613` `covers` 必须等于当前消息数，注释 *"Refusing the mismatch keeps the boundary an observed fact"* | 任务状态同样应携带写入时观测到的消息数，使其可核对 |
+| **未完成工具批次时拒绝写入** | `:606-609` *"Summarizing a call whose result has not arrived would leave the model with an answer-shaped summary of a question that was never resolved"* | **同理适用于任务状态**：在一批工具结果尚未回来时写"这步完成了"，就是把一个未决问题记成已决 |
+
+**⇒ 结论一：新增 `task-state` 事件类型，追加进会话日志，`ignorable:true`，latest wins。不新增文件、不新增存储、不新增锁。**
+
+**附带确认**：压缩碰不到它 —— 压缩只替换 `role === "tool"` 消息（D53 更正块已核实），而 `task-state` 不是 message。注入路径复用上一轮建成的机制（并入系统消息），**故它同样免于位置稀释**。
+
+#### 二、完成判定权：本轮真正的产出
+
+**存储形状是照抄，判定权才是设计。** 问题是：**谁有权说"这步做完了"？**
+
+**若是模型 —— 任务状态就成了自报通道。** 而 `validation.ts`（D20）的模块动机原文正是为了消灭这个形状（`:4-8`）：
+
+> *"Until now `Gene.validation` was a list of strings that got rendered into the prompt and never checked — 'Prove it worked: npm.cmd test' was **an instruction to the model, not a claim the system evaluated**."*
+
+**⇒ 结论二：模型可以写散文状态（做了什么、下一步、它的判断）并提出步骤，但 `done` 绝不接受模型自报。** 步骤携带的是一条 **claim**，完成度由 `checkClaim` 对 `RoundEvidence` 算出。**零新机制** —— 三件都已存在：
+
+| 已有 | 出处 | 性质 |
+|---|---|---|
+| `RoundEvidence { filesWritten, tools }` | `validation.ts:24-29` | *"What a round left behind, **as the journal recorded it**"* —— 取自日志，不是取自模型的叙述 |
+| `ClaimOutcome = "met" \| "unmet" \| "unverifiable"` | `:31`，理由见 `:14-19` | **第三值是重点**：*"never counted as met, because that would **manufacture proof**, and never as unmet, because that would punish work that may well have been done. An honest 'we cannot tell' is a real outcome and **the only reason this module can be trusted at all**."* |
+| `ValidationReport.satisfied` | `:42-43` | **仅当每条 claim 都 met；`unverifiable` 不算 met** |
+| `checkClaim` 的比对方式 | `:54` *"never guesses and never reads intent: each kind names one fact"*；`files-written` 用**双向集合相等**（`:56-70`，*"an understated claim would otherwise pass by saying less"*） | **少报也算不合格** —— 这正好堵住"模型把验收条件写窄以让自己通过" |
+
+**⇒ `unverifiable` 必须作为一个真实状态被记录与展示，永不当作完成。** 这与 D55 拒绝清单第 1 条（模型抽取的约束不得自动获得强制力）同源：**模型可以提议，系统只认机械事实。**
+
+#### 三、这让 `unknowns` 第一次有真实内容，从而让 `enforce` 第一次有意义
+
+D58 第 3 节证明 `assessTaskSpec` 的 enforce 开关目前在运行时路径上是死代码，因为 `unknowns` 恒为 `[]`，且推论是 **"要先有会真正填进 `unknowns` 的必填项"**。**本设计正好提供**：
+
+- 步骤**没有 claim** → `unknowns` 记"步骤 N 缺验收条件"
+- 步骤的 claim 判为 **`unverifiable`** → 同样记入（诚实的"无法判定"，不是失败也不是通过）
+- 状态**从未写过** → 是否算 unknown 须由操作员的 enforce 语义决定，**不得默认算**（否则打开 enforce 会拦住所有普通对话）
+
+**⇒ 结论三：enforce 的开启时机确实是持久层落地之后**，与 D58 的预判一致。
+
+#### 四、四个开放问题（下一轮实现前必须先答，不得凭名字推断）
+
+1. **`RoundEvidence` 的采集粒度与来源。** `runtime.ts:715` 有 `this.outcomeTools = []`（每轮重置），故工具序列已有；**但 `filesWritten` 的采集点尚未读**，须确认它与写账本（`runtime.ts:719-720` 的 `writeLedger`/`writeBudget`）是同一来源还是两处 —— **若是两处，就是 ADR-0001 要消灭的副本形状，必须先合并。**
+2. **`GeneValidation` 能否直接复用为步骤 claim。** 复用最省，但会把任务状态耦合到基因 schema（基因是不可变的内容寻址对象，任务状态是可变的）。**须读 `gene.ts` 的 `GeneValidation` 定义再定。**
+3. **⚠️ 最大的风险点：写状态的工具不是文件写。** 追加 `task-state` 由**运行时**执行、不经文件工具，故 **agent home 的按位置封死拦不住它**（那道保护针对的是 `create_file`/`edit_file` 等），**`WRITE_TOOLS` 与写预算也不覆盖它**。而它**会改变下一轮模型被告知的内容** —— 这是一种真实能力，且是**唯一一条能绕过既有两道闸门（路径收敛、写预算）去影响模型认知的路径**。**故它必须自己进写预算并落审计**（与 `config:widen` 同类处理），**否则就是开了第三条路**。此项须在写任何代码之前定案。
+4. **状态块的字节上限。** 沿用 `constraints.ts` 的做法（超限报错并给出实际大小，**不静默截断**，理由同 `maxContextBytes` 注释），但**上限值须独立选取** —— 状态块预期比常驻约束大，直接复用 32768 可能过紧。
+
+#### 五、刻意不做的
+
+- **不做单文件覆写存储**（见第一节：会造出可能与日志不一致的第二份记录）
+- **不让模型标记完成**（见第二节：等于开自报通道）
+- **不做语义进度判定**（零依赖不变，D57 结论；进度来自 claim 的机械比对）
+- **不在本轮 bump `CURRENT_EVENT_VERSION`**（`:41-47` 明确新增类型不需要）
+- **不做状态的跨会话共享**（状态属于一个 session；跨会话是另一个问题，且会把"当前任务"变成需要消歧的东西）
+
+**未验证**：上述四个开放问题全部未验证；`gene.ts` 的 `GeneValidation` 定义本轮未读；`filesWritten` 的采集点本轮未读；**注入状态块与注入约束块同时存在时的字节叠加未测**；旧 reader（若存在）对 `task-state` 的实际跳过行为未实测（仅由 `:41-47` 的规则与 `summary` 的先例推得）。
+
+### 答 D59 的开放问题：两个已定案，并读出一个没预见的陷阱（D60，2026-09-30，实读，无代码）
+
+**触发**：D59 第四节列了四个开放问题，规定 *"下一轮实现前必须先答，不得凭名字推断"*。本轮答了①②，并据读到的事实把③定案。**结果是两处更正 D59，外加一个若不读就会让功能等于没做的陷阱。**
+
+#### 一、问题①已答：`filesWritten` 只有一个来源，不存在 ADR-0001 的副本问题
+
+`runtime.ts:822-825`：
+
+```ts
+const validation = applied ? checkValidation(applied.validation, {
+  filesWritten: this.writeLedger.files,
+  tools: this.outcomeTools ?? [],
+}) : null;
+```
+
+**写账本是唯一采集点**，全链只有一本：`:513` 声明 `private writeLedger: LedgerState = { files: [], lines: 0 }` → `:719` 每轮重置 → `:941` `checkWrite(this.writeLedger, attempt, this.writeBudget)` 是闸门 → `:972` `chargeWrite(this.writeLedger, attempt, position)` 是计费 → `:823` 喂给验证 → `:868-870` 喂给预算行显示。**工具序列同样只有一个来源 `this.outcomeTools`**（`:715` 每轮重置、`:824` 喂给验证）。
+
+**⇒ D59 担心的"若是两处就必须先合并"不成立：本来就是一处。** 而且这个单一来源带来一个好性质：**任务状态的 claim 对 `writeLedger.files` 求值时，与写预算所计费的是同一本账，故一步不可能声称一笔预算没记的写入，反之亦然。**
+
+#### 二、问题②已答并更正 D59：`GeneValidation` 可以复用，那条顾虑是错置的
+
+`gene.ts:41-45` 是一个**判别联合**：
+
+```ts
+export type GeneValidation =
+  | { readonly kind: "files-written"; readonly paths: readonly string[] }
+  | { readonly kind: "no-write" }
+  | { readonly kind: "tool-used"; readonly tool: string; readonly times?: number }
+  | { readonly kind: "command"; readonly command: string };
+```
+
+**其中没有任何字段引用基因** —— 它是"可观测事实"的独立词汇表。**D59 担心的不可变性属于 `Gene` 对象**（内容寻址、不可变），**不属于 claim 类型**；把对容器的顾虑套到内容上，是又一次凭名字推断。
+
+**复用还白得一个严格解析器**：`parseValidation`（`gene.ts:132-166`）已处理裸字符串 → `{kind:"command",command}`（`:140`）、未知 kind 报错（`:166`）、`times` 必须是正整数（`:157`）、空字符串拒绝（`:139`）。
+
+**⇒ 更正 D59 开放问题②：不是"须读 `gene.ts` 再定"，是"复用，且顾虑不成立"。**
+
+#### 三、⚠️ 读出一个 D59 没预见的陷阱：claim 目前只在有基因被应用时才检查
+
+`runtime.ts:822` 的 `applied ? checkValidation(...) : null`。
+
+**而本项目的基因库是空的，故绝大多数轮次是 gene-less 轮。** 若任务状态沿用这个 `applied ?` 门，**实践中每一个步骤都会永久停在 `unverifiable`，功能等于没做** —— 而且它会"看起来在工作"（有状态、有注入、有 claim），只是永远判不出任何东西。**这是那种只有读到 `applied ?` 才会发现的失败形态。**
+
+**⇒ 任务状态的 claim 求值必须独立于基因应用。而这个形状在项目里已有先例**：`:821` 的 `evaluateRun({ steps, toolCalls, toolErrors, failureClass: null })` **本身就是机械的、与基因无关的**；`:817-818` 注释原文：
+
+> *"Review: the verdict is read off what the round **mechanically did**, and then the applied gene's claims are compared against that same record."*
+
+**⇒ 应照 `evaluateRun` 的形状（无条件、机械），不照 `applied ?` 的形状。** 两句话里"mechanically did"是主句，"the applied gene's claims"是附加比对 —— 这个次序本身就是答案。
+
+#### 四、必须如实记录的能力上限：最自然的验收条件恰好是判不了的那种
+
+`validation.ts:14` 明写 `unverifiable` 指 *"nothing in this runtime can decide it (**a shell command, today**)"*。四种 claim 里 `files-written`/`no-write`/`tool-used` **可机械判定**，**`command` 不可**。
+
+**而编码任务最自然的验收条件（"测试通过""构建成功"）正是 `command`。**
+
+**⇒ 它会诚实地停在 `unverifiable`，永不显示为完成。** 要让它可判定需要**验证执行器**，而 D19 已记录本项目没有（*"本项目尚无验证执行器"*，故模型评审者会是"一个永远无法知道准不准的裁判"）。
+
+**这不是本设计的缺陷，是它诚实继承的上限 —— 必须写进文档而不是藏起来**，因为它直接决定了这个功能的实际用处：**它能让"写了哪些文件""用了哪些工具"这类步骤变得可判定，但不能让"测试通过"变得可判定。** 若操作员期待的是后者，**这个功能不会满足他，而现在就该说清**。
+
+#### 五、问题③定案并更正 D59：真正要防的不是"模型说完成"，是"模型把验收条件改窄"
+
+D59 已指出模型不得自报 `done`。**但读完 claim 机制后发现更隐蔽的一条**：模型可以**替换或删掉一个步骤的 claim**，把难判的换成易判的 —— 这比自报 `done` 更难发现，因为它看起来像是"更新了计划"。
+
+**部分已被现有机制堵住**：`files-written` 用**双向集合相等**（`validation.ts:56-70`，注释 *"an understated claim would otherwise pass by saying less"*），故少报文件会失败。**但 `tool-used` 的 `times` 可以调小，步骤也可以整条删除。**
+
+**⇒ 定案：任务状态的 claim 必须单调** —— 后写的状态**可以增加步骤、可以推进散文，但不得削弱或移除既有 claim**。
+
+**这与 `summary` 的 `covers` 只增不减同构**（`session-store.ts:638-639`：*"The latest event wins because `covers` only ever grows"*），**且执行方式有现成先例**：`appendSummary` 在写入时硬校验 `covers` 必须等于当前消息数并**拒绝不匹配**（`:610-613`，*"Refusing the mismatch keeps the boundary an observed fact"*）。**故单调性应在 append 时机械比对 claim 集合、不符即拒，而不是靠审计事后发现。**
+
+**⇒ 因此问题③的预算部分可以简化，且这是对 D59 的第二处更正**：既然单调性挡住了"改窄"，写预算要防的就只剩**体积膨胀**，而体积已由问题④的字节上限管住。**故不必为 `task-state` 发明第二本写账本** —— 那恰恰会造出 ADR-0001 反对的第二份记录。**改为：每次 append 落一条审计**（`appendAudit` 已是现成通道，`session-store.ts:626-633`；`AuditEvent.decision` 已含 `"allowed"`，`:139-149` 注释解释了为什么必须有这个值：*"an audit log that records a grant under the word 'denied' is worse than no log"*），**加字节上限**。**这比 D59 设想的"自己进写预算"更省，且不新增账本。**
+
+#### 六、问题④仍未答，但现在有了定案所需的依据
+
+字节上限须独立于 `constraints.ts` 的 32768 选取。**依据**：状态块预期含多步 claim 与散文进度，而常驻约束是短句列表；但两者**都每轮注入系统消息，故它们的字节是叠加的**（D59 已把"叠加未测"列为未验证项）。**⇒ 定案方式应是：给"约束块 + 状态块"设一个合计上限，而不是各设一个** —— 否则两个各自合规的块相加仍可能顶穿 `maxContextBytes`，而那个错误会以最坏的形式出现（`maxContextBytes` 是**整轮拒绝**，不是截断，见 D53 更正块）。**具体数值留到实现轮，须以实测的注入字节为据，不得凭感觉取整。**
+
+#### 七、汇总：实现轮的输入清单
+
+| 项 | 状态 | 结论 |
+|---|---|---|
+| 存储形状 | **已定（D59）** | `task-state` 事件类型，追加进会话日志，`ignorable:true`，latest wins |
+| ①`filesWritten` 来源 | **已定** | 唯一来源 `writeLedger.files`，无副本问题 |
+| ②claim 类型 | **已定（更正 D59）** | 复用 `GeneValidation`，并复用 `parseValidation` |
+| ③完成判定权 | **已定（D59）** | 模型不得自报 `done`；由 `checkClaim` 对 `RoundEvidence` 求值 |
+| ③'防改窄 | **已定（更正 D59）** | **claim 单调**，append 时机械比对、不符即拒（照 `covers` 的做法） |
+| ③''预算/审计 | **已定（更正 D59）** | 不设第二本账本；每次 append 落审计 + 字节上限 |
+| **求值时机** | **新增约束** | **必须独立于基因应用**（照 `evaluateRun`，不照 `applied ?`），否则 gene-less 轮永久 `unverifiable` |
+| ④字节上限 | **待定** | 应设"约束块 + 状态块"**合计**上限；数值留实现轮以实测定 |
+| 能力上限 | **须如实告知** | `command` 类 claim 永远 `unverifiable`；"测试通过"判不了，需验证执行器（D19：本项目没有） |
+
+**未验证**：`evaluateRun` 的内部实现本轮未读（只确认了它与基因无关且输入是 `steps`/`toolCalls`/`toolErrors`）；`LedgerState`/`chargeWrite`/`readWriteAttempt` 的定义在 `write-budget.ts`，本轮未读；单调性比对的确切语义（`times` 调小算削弱，那 `paths` 增加算不算？）尚未定；合计字节上限的数值未定；`task-state` 与 `summary` 同时存在时的注入顺序未定。
+
+### 实现任务状态核心，并偏离操作员刚批准的一条决定（D61，2026-09-30，有代码）
+
+**触发**：D60 留下一个未定语义 —— *"单调性比对的确切语义未定（`times` 调小算削弱，那 `paths` 增加算不算？）"*。操作员裁定：**"那就算增强"**（即允许 `paths` 增长）。本轮实现时**发现这条裁定对 `files-written` 不成立，故未照办，并在此如实记录。**
+
+#### 一、偏离的内容与理由
+
+**操作员的裁定**：`paths` 增加算增强 ⇒ 允许。
+**实测结果**：`validation.ts:56-70` 的 `files-written` 用**双向集合相等**（`missing.length === 0 && extra.length === 0` 才 `met`）。故：
+
+- `paths:[a]` 成立 ⟺ 恰好写了 `{a}`
+- `paths:[a,b]` 成立 ⟺ 恰好写了 `{a,b}`
+
+**两个条件互斥，谁也不蕴含谁 ⇒ 不可比较，谈不上"增强"。** 而且方向是反的：**若该轮实际写了 `{a,b}`，旧 claim 判 `unmet`（多写了 b），新 claim 判 `met`** ⇒ **增加一个路径会让一个本来失败的 claim 变成通过**，正是 D60 第五节要防的"改窄以让自己通过"的另一种形态。
+
+**⇒ 本轮把 `files-written` 的 `paths` 定为不可变（任何改动即拒；同集合不同顺序视为相同）。**
+
+**若操作员确实想要"paths 可增长"**，代价是改 `validation.ts` 的语义：从"恰好这些文件"改成"至少这些文件"。**而那会削弱基因验证** —— `validation.ts:57-59` 的注释说明双向相等正是为了 *"a claim that omits a file the round wrote is as wrong as one that names a file it never touched — an understated claim would otherwise pass by saying less"*。**故本轮选择了不改语义、只收紧单调性规则**，把选择权留给操作员。
+
+**操作员的意向在 `tool-used` 上可完整兑现**：`validation.ts:81` 是 `times < claim.times` 才 `unmet`，**故 `times` 是下界，增大＝真增强**。本轮允许 `times` 增大与从无到有，拒绝减小与从有到无。
+
+#### 二、读出的另一个事实：新增 kind 必须在 reader 里加 case，否则会被自己的 reader 静默丢弃
+
+`session-store.ts` 的 `default` 分支（**本轮插入后现位于 `:460-462`**）是 `if (record.ignorable === true) return null; throw …`。**`ignorable:true` 的事件走到 `default` 会返回 `null`（丢弃）** —— 对旧 reader 这是正确的向前兼容，**但对本项目自己的 reader 就是静默丢掉它刚写的状态**。故 `migrateEvent` 必须加 `case "task-state"`，并照 `summary`/`audit` 的体例**逐字段重建 + 严格校验**（`audit` 的注释已解释为什么必须逐字段重建：*"Rebuilt field by field, so `rule` must be read here or it would vanish on the way back in"*）。**测试 `round-trips every field, including each claim` 钉住这一条；变异验证（不读 `claim`）使它变红。**
+
+**⚠️ 行号更正（本轮造成，波及 D59/D60）**：本轮往 `session-store.ts` 插入了 117 行（import 块、`TaskStateEvent` 接口、`migrateEvent` 的 `task-state` case、`appendTaskState`/`taskState` 两个方法），**故 D59 与 D60 里所有指向 `session-store.ts` 的行号现已失效**（例如 `appendSummary` 从 `:603` 移走、`compaction()` 从 `:641` 移走、ADR-0001 注释块从 `:22-39` 移走）。**按"历史批次文档不改写、只加更正块"的规矩，那两节的原文保留不动，此处统一声明。**
+
+**⇒ 由本轮起改用的做法：引用 `session-store.ts` 时以"符号名 + 引文"为主定位符，行号为辅。** 理由是本轮亲身撞上的：**行号会被任何一次插入作废，而符号名与引文不会** —— 上面那条 `default` 分支的引文核对通过、行号核对失败，正好证明了哪个更耐用。D59/D60 的引文核对本轮已重跑并全部通过，**故那两节的事实无一失效，失效的只是定位符**。
+
+#### 三、落地范围与刻意不落地范围
+
+**落地（安全核心）**：`src/task-state.ts`（新，单调性 + 求值）、`session-store.ts` 的 `TaskStateEvent`/`SessionEvent` 联合/`migrateEvent` case/`appendTaskState`/`taskState()`、`test/task-state.test.ts`（24 项）。
+
+**刻意不落地**：**`runtime.ts` 未接线** —— 状态尚不注入 prompt，也尚无写入者。**故本轮产出是管道，不是用户可见功能，这一点如实说明。** 两件事各自有未决问题：注入需先定"约束块 + 状态块"的**合计**字节上限（D60 第六节）；写入工具是 D60 问题③'' 的最大风险点（**不经文件工具，故 agent home 的按位置封死与写预算都拦不住它，而它会改变下一轮模型被告知的内容**），须自己进审计。**先造闸再造门。**
+
+#### 四、验证
+
+- `npm run build`（`tsc --noEmit`）无输出
+- `test/task-state.test.ts` **24 项全通过**
+- 全量 **583 项 / 581 通过 / 1 失败 / 1 跳过**（基线 559/557/1/1 **+24**，失败数不变）；那 1 项是 `background-jobs` 的已知并行负载时序漂移，**隔离重跑 11 通过 / 0 失败**（连续第五轮同一漂移）
+- **变异验证三处全部变红**：`assertNotWeakened` 变空函数 → **7 项红**；把 `unverifiable` 当作 `met` → **1 项红**；`migrateEvent` 不读 `claim` → **2 项红**。**还原后 24/24。**
+
+#### 五、方法论
+
+**本轮是"读之前不写"这条纪律第二次拦住错误，而且是第一次拦住的是操作员刚批准的决定。** D58 拦住的是我自己的印象；这一次拦住的是**一个已经获得批准的裁定** —— 而它能被拦住，只因为 D60 把"`paths` 增加算不算增强"写成了一条**未决问题**而不是当成显然。**⇒ 做法：当一个语义问题的答案依赖某个 kind 的实际实现时，把它记为未决并注上"须读 X"，即使当时觉得答案很明显。**
+
+**未验证**：`evaluateRun` 内部实现未读；`write-budget.ts` 的 `LedgerState`/`chargeWrite`/`readWriteAttempt` 未读；合计字节上限数值未定；`task-state` 与 `summary` 同时存在时的注入顺序未定；三者（`genePrompt`、约束块、状态块）叠加的实际注入字节未测；**"给原本无 claim 的步骤补一个很容易满足的 claim"这个残余风险未堵**（见 SAFETY.md）。
+
+### 任务状态进入 prompt：不注入判定，以及合计上限取四分之一的依据（D62，2026-09-30，有代码）
+
+**操作员终局裁定（本轮起点，原话）**：*"如果会削弱蜂群基因，那就放弃增长，进入下一轮吧"* ⇒ **`files-written` 的 `paths` 保持不可变，`validation.ts` 的双向集合相等语义不改，D61 的记录为终稿。** 该项从此不再作为未决项携带。
+
+#### 一、本轮最重要的判断：**不注入每步判定结果**
+
+原计划注入"步骤 → 判定"。实读后否掉了，理由是实测出来的：
+
+- **证据是每轮的**：`runtime.ts:719` 每轮重置 `writeLedger`，`:715` 每轮重置 `outcomeTools`
+- **任务是跨轮的**：状态块的存在意义就是跨轮保留
+
+**⇒ 若把每轮判定注入 prompt，第 5 轮开头会显示"步骤 1：未达成（没有调用 read_file）"，而它其实第 2 轮就做了。那是主动误导模型，比不显示更坏。**
+
+**要正确显示跨轮判定需要跨轮证据，而从日志重推 `filesWritten` 会造出与写账本并存的第二份记录 —— 正是 ADR-0001（`session-store.ts` 的 *"keeping a copy meant the two could disagree"*）要消灭的形状。**
+
+**⇒ 本轮只注入：散文进度 + 步骤 + 每步的 claim（验收条件）。** 模型需要看得见的是"必须证明什么"（那也是单调性保护的对象：看不见的条件无法被有意达成），而"已经证明了什么"留到轮末 —— 那里本轮证据是完整的（`runtime.ts` 轮末验证处）。**这也是 `assessTaskState` 的接线点，本轮它仍只有测试在调用，如实说明。**
+
+**注入块自带三句话**，都是防止它被当成权威：这是记录不是保证／不放宽任何权限，冲突时以档位与规则表为准／**`unverifiable` 既不等于完成也不等于失败**（第三句对应 D60 第四节那条能力上限：`command` 类 claim 恒判不了，若模型把它读成"通过了"就是制造证明）。
+
+#### 二、注入顺序：任务状态排最后
+
+`systemText = [systemPrompt, genePrompt, constraints, taskState]`。理由是权威性递减：产品的 → 基因库的 → 操作员的 → **任务自己的进度记录**。沿用 `buildPrompt` 注释已确立的纪律（*"operator text must not prime the model before the product's own safety text"*），并把同一条推理延伸到第四段。**抗稀释性仍来自"系统消息是对话第一条"，不来自内部顺序。**
+
+#### 三、合计上限取 `maxContextBytes / 4`，以及为什么不取 1/8
+
+**要防的具体失败**：两块各自在写入时合规（各 ≤ 32768），**相加仍可能顶穿 `maxContextBytes`** —— 而那个失败会以**整轮拒绝**的形式出现（`runtime.ts:986` 抛 `ContextBudgetError`，不截断）。这正是 D60 第六节要求的"合计上限"。
+
+**取 1/4 的依据是算出来的，不是凭感觉**：
+
+| 配置 | 上限 | 两块最大合计（约 66000） | 结果 |
+|---|---|---|---|
+| 默认 `512 * 1024`（`runtime.ts:170`） | 131072 | 66000 | **不误伤** |
+| 操作员调低到 8000 | 2000 | 由实际块决定 | **该拦就拦，并报出两者各自大小** |
+| 若取 1/8，默认 | 65536 | 66000 | **⚠️ 与两块最大合计相撞 ⇒ 默认配置下会误伤** |
+
+**⇒ 不取 1/8 的理由是具体的：65536 与 66000 相撞。** 1/4 在默认配置下永不误伤，而在操作员调低预算时才起作用 —— **那正是合计需要被检查的唯一场景**。报错同时报出两块各自的字节数，因为操作员需要知道该缩短哪一个。
+
+#### 四、写入时拒，而不是注入时拒
+
+`MAX_TASK_STATE_BYTES = 32_768`（**与 `MAX_CONSTRAINT_BYTES` 对称**：两者都是"riding 在系统提示里、每轮重发的作者文本块"，都是纯粹的每轮开销）。**校验的是渲染后的字节数**，因为那才是真正进 prompt 的东西。
+
+**为什么在写入时拒**：若在注入时拒，则一次超限写入会让**此后每一次 `buildPrompt` 都抛错** —— 那是对整个会话的拒绝服务。**写入时拒只让写入者损失一次调用，会话仍可用。** 这是 D59/D60 没想到的第三条设计理由，本轮实读 `buildPrompt` 后才浮现。
+
+**照 `constraints.ts` 的做法报出实际大小、不截断**：被静默缩短的验收条件，是写入者没有同意过的条件。
+
+#### 五、顺带修掉一个自己造成的性能问题
+
+`buildPrompt` 原本已调 `store.compaction()`（一次全日志 `inspect()`），本轮再加 `store.taskState()` 就是**每次模型调用读两遍整个会话日志** —— 长会话下这是构建 prompt 的主要成本。故新增 `latestMarks(sessionId)`：**一趟读出两个 latest-wins 标记**，`compaction()` 与 `taskState()` 保留（其他调用方与测试在用），`buildPrompt` 改用 `latestMarks`。测试 `reads both marks together and still answers each correctly` 钉住"合并读取不得与分别读取产生分歧"。
+
+#### 六、本轮测试自己犯的两个错（如实记录）
+
+1. **清理时往 `constraints.json` 写了空字符串**，而空字符串不是合法 JSON ⇒ `loadConstraints` 正确地抛了"不是合法 JSON"。**产品的行为是对的，测试的清理是错的**：应当删除文件（`rm(..., {force:true})`），不是清空它。一次错误清理污染了此后所有测试，故 4 处报错实际同源。
+2. **"恰好在上限"的余量算小了**：预留 400 字节，但渲染开销实测 466 字节（页头 + "进度：" + 三行中文页脚），故 32833 > 32768 被拒。**改为预留 800 字节。** 教训与 D59 的字节上限同构：**渲染后的字节数必须实测，不能按输入长度估算。**
+
+**验证**：`tsc --noEmit` 无输出；`test/task-state.test.ts` **24/24**；`test/task-state-injection.test.ts` **15/15**；全量见 STATUS 批次 ㉗；变异验证三处见同批次。
+
+**未验证**：`assessTaskState` **尚未接入运行时**（本轮如实说明，接线点是轮末验证处）；跨轮证据的取法未定（从日志重推会造副本，故需要一个不造副本的方案）；写入者（模型工具）仍未做，故 D60 问题③'' 的最大风险点仍未落地也未验证；`PERSONAL_AGENT_MAX_CONTEXT_BYTES` 调低时合计上限的真机行为未跑（仅测试覆盖）；注入块与 `genePrompt` 同时存在时的实际字节未测。
+
+### 任务状态的写入者：四张表必须原子改，以及一个只有端到端测试能抓到的守卫（D63，2026-09-30，有代码）
+
+**本轮读了什么（全部实读，附符号与引文；行号为辅，D61 立的规矩）**
+
+| 来源 | 读到的承重事实 |
+|---|---|
+| `src/write-tools.ts` | `WRITE_TOOLS` / `READ_ONLY_TOOLS` 两张表；文档记载 offered 与 allowed 不一致**真发生过一次**：*"an inspection tool was added to one tier's list while the rule table still allowed only `read_file`, and the model was refused with 'unknown tool' for doing what it was told"* |
+| `src/tiers.ts` | 只读档位 `tools: READ_ONLY_TOOLS`；三个可写档位 `tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS]`；并再导出两张表 ⇒ **档位表是从 `WRITE_TOOLS` 派生的，不是第二份硬编码** |
+| `src/file-policy.ts` | `APPROVAL_TOOLS = [...FILE_TOOLS, ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool))]`，其文档：*"Listing these names a second time is what produced the earlier defect … so the two answers cannot drift"*；`DEFAULT_RULES` 把每个 `APPROVAL_TOOLS` 映射成 `decision:"approve"`（WORKSPACE，priority 10），把每个 `READ_ONLY_TOOLS` 映射成 `decision:"allow"` |
+| `src/write-budget.ts` | `isWriteTool` = `Object.hasOwn(WRITE_TOOL_LINE_ARGUMENT, tool)`；**`checkWrite` 的 `path === null` 分支已经存在**：*"A write whose target cannot be read from the arguments still consumes budget: it is charged as its own anonymous slot rather than waved through"*；`chargeWrite` 用 `\u0000<index>` 作匿名槽；`run_command`/`job_kill`/`rename_file`/`batch_files` 的 line argument 就是 `null` |
+| `src/tools.ts` `createJobKillTool` | 工具形状与三个助手 `fail`/`denied`/`approveExact`；`job_kill` 的注释确立先例：*"Stopping work needs the same permission as starting it"* |
+| `src/cli.ts` `allTools` | 是**零参工厂表**，`tierTools` 建在 `createRuntime(sessionId)` **之外** |
+| `src/gene.ts` | `parseValidation` 当时**未导出**；`gene.ts` 只 import `node:crypto` 与一个 type-only ⇒ **无环风险** |
+| `test/constraints.test.ts` | 经 `AgentRuntime` 脚本化工具调用的既有形状（`steps:[{toolCalls:[{id,name,arguments}]}]`） |
+
+**决定一：四张表必须原子改，不能分轮。** 档位表与规则表**都从 `WRITE_TOOLS` 派生**，加一处即自动进三个可写档位、自动在只读档位缺席、自动进规则表 ⇒ **两边不可能漂移**。反过来说，**分开改（先加工具后进表）会留下"给了模型一个它永远调不通的工具"这个已被记载过的缺陷**。
+
+**决定二：写预算这一半是接线，不是新机制 —— 且注册为 `lineArgument: null`。** `checkWrite` 早已处理无路径写入（匿名槽），`run_command`/`job_kill` 早已用 `null`。**故 `update_task_state` 占一个匿名文件槽、不占行预算。** 理由具体：**行预算度量的是写进文件的代码行数，而任务状态不写文件**，收行费会歪曲预算的含义；**但它确实是一次写入**（改变下一轮模型被告知的内容），故占槽是诚实计费。**不新造账本** —— D60 已定：第二本账本就是 ADR-0001 反对的副本。
+
+**决定三：⚠️ 我在计划里写的"它像其他写入一样会征求批准"被实测推翻了一半。** `DEFAULT_RULES` 确实给 `approve`，但**档位规则覆盖它**。真机逐档位实测：
+
+| 档位 | offered | `decide(tier.rules)` | `decide(DEFAULT_RULES)` | 与 `run_command` 同判定 |
+|---|---|---|---|---|
+| read-only | **false** | **deny** | approve | ✓ |
+| ask-before-writing | true | approve | approve | ✓ |
+| workspace-write | true | approve | approve | ✓ |
+| full-access | true | **allow** | approve | ✓ |
+
+**"高档位永远压过低档位，不论 priority"这条既有不变量在这里生效**，所以**全权档位下不弹窗** —— 我原本担心的"频繁批准导致工具不可用"是针对一个不存在的档位形态。**测试因此改成断言"与 `run_command` 同判定"而非某个具体决定**：承重性质是**"没有开例外"**（若这个工具被悄悄豁免询问，它就是唯一一个能在操作员看不见的情况下重塑模型被告知内容的工具），而**断言相等能让未来的例外把测试变红，断言硬编码值则会静默通过**。
+
+**决定四：⚠️ 端到端测试抓到一个只有它能抓到的真 bug —— 我照抄了一个前提不成立的守卫。** 我把 `appendSummary` 的"未完成工具批次时拒绝写入"抄进了 `appendTaskState`。**但 `appendSummary` 由 `/compact` 在批外调用，而 `appendTaskState` 由工具在批内调用 ⇒ 执行写入的那次调用本身必然 pending ⇒ 该守卫会拒绝这个工具的每一次写入，工具永远不可用。** 单元测试全绿（它们直接调 store，不在批内），**只有"写入后下一轮 prompt 里出现该 claim"这条端到端断言暴露了它**。
+
+**修法不是给守卫开洞，而是承认它的前提在这个事件类型上不成立**：摘要**替换**模型所见，所以把一个未决调用摘进去会把 *"an answer-shaped summary of a question that was never resolved"* 冻进 prompt；**任务状态记录什么都不替换** —— 每条消息照常重放，pending 的结果照常到达并照常显示。**那条守卫要防的害处在这里不存在。** 对应测试**反转**（并保留 pending 数仍为 1 的断言，证明没有东西被冻住），**理由写进测试本身，否则下一个人还会照抄**。
+
+**决定五：审计只记拒绝，不记成功。** 成功的写入本身就是日志里的一条 `task-state` 事件，**再记一条审计就是同一事实的第二份记录**（ADR-0001 的形状）；**而拒绝不留痕迹** —— "谁试图把验收条件调低、什么时候被拦住"事后无从回答，**而那正是 `AuditEvent` 文档说自己存在的理由**（*"the whole point of the file is that someone can read it later and answer 'who stopped asking, and when'"*）。故 `decision:"denied"`，`reason` 用 store 抛出的原文。
+
+**决定六：claim 只接受对象形式，裸字符串被 Schema 层拒。** `parseValidation` 接受裸字符串并读成 `command`（D20，适合人手写的基因文件），**但本工具的 Schema 刻意不接受**，理由具体而非风格：**裸字符串会静默变成 `command` claim，而 `command` claim 在本运行时永久 `unverifiable`** —— 于是 `claim:"跑测试"` 会产出一个永远判不了的条件，**而这个后果在调用处看不见**。要求显式 `{kind:"command",command:"..."}` **让写入者亲手说出那个查不了的东西**。**一种被接受的形状也只有一种错法。**
+
+**决定七：`parseValidation` 导出共用，不写第二个解析器。** claim 词汇表不是基因专属（D60 的结论），**两个解析器就是"什么是合法 claim"的两个答案，它们会漂移**。工具侧只在错误消息前加 `'steps[i].claim'` 定位。
+
+**决定八：`cli.ts` 的注册表构造移进 `createRuntime`。** `tierTools` 原本建在 `createRuntime(sessionId)` 之外，而本工具需要 `store` 与该会话 id。**建在外面要么捕获过期 sessionId（⇒ 一个会话能写另一个会话的任务状态），要么需要一个可变持有者（同样的危险，步骤更多）**。改为按会话构造，其余工具仍走零参工厂，**不改 `allTools` 的签名形状**（改成带参工厂会让联合类型无法直接调用）。**这条改动的风险是"测试全绿而 CLI 全崩"**（所有测试都直接构造 `AgentRuntime`），**故必须真机验证**。
+
+**本轮我自己的三处断言错误（如实记录，均非产品缺陷）**
+
+1. 断言 full-access 给 `approve` —— **实际是 `allow`**（见决定三）。
+2. 断言我的解析器错误消息 —— **实际注册表先按 JSON Schema 校验**（`$.state must be a non-empty string`、`$.steps[0].claim must be object`），我的解析器只对"通过 Schema 但 claim 语义非法"的情况起作用。**测试改成断言"消息必须指出位置"这个与层次无关的性质**（`/state|steps/`），只对 Schema 表达不了的那一种（虚构 kind）钉死原文。
+3. 断言裸字符串 claim 被接受 —— **实际被 Schema 拒**，而这促使了决定六。
+
+**教训：三处同源 —— 我在没读注册表的 Schema 校验层与档位覆盖关系之前就写了断言。** 与 D58 起"必须先读 X"写进文档的做法一致：**断言产品行为之前，先读到那条行为。**
+
+**验证**：`tsc --noEmit` 干净；全量 **611 项 / 609 通过 / 1 失败 / 1 跳过** = 基线 598/596/1/1 **+13**，失败数不变，那 1 项是 `background-jobs` 已知并行漂移、**隔离重跑 11/0（连续第七轮）**；`task-state-writer.test.ts` **13/13**。**变异验证三处全部变红** —— A 从 `WRITE_TOOLS` 移除 → 9 红；B 从 `WRITE_TOOL_LINE_ARGUMENT` 移除 → 3 红；C 删掉拒绝路径的 `appendAudit` → 1 红；**还原后 13/13**。**真机**：`--preflight --probe-tools` **验不了接线**（它探测的是"提供方是否接受 tools"，不列出提供的工具），故改用真进程加载真实模块逐档位打印 —— **同时验掉了 `write-tools.ts` 警告过的那种"类型检查通过、运行时 `cannot access before initialization`"的 import 环**（新增 `tools.ts → task-state.ts → gene.ts` 边）。**⚠️ 本轮超预算，经 late 通道整合（半分，不计入连胜）。**
+
+**未做 / 未验**：`assessTaskState` **仍只有测试在调用**，接到轮末留下一轮（**刻意不与写入者同轮** —— 混在一轮会让"哪个改动导致哪个红"无法归因）；写入者尚无跨轮真实使用证据（没有真模型跑过它）；`update_task_state` 与 `batch_files` 同批时的交互未测；审计只覆盖工具路径，**运行时内部若直接调 `appendTaskState` 则不落审计**（当前无此调用方）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
