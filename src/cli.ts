@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { SessionStore } from "./session-store.ts";
 import { AgentRuntime, DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_MAX_STEPS, DEFAULT_MAX_TOOL_CALLS_PER_RUN, DEFAULT_MAX_TOOL_CALLS_PER_STEP, formatBudget } from "./runtime.ts";
+import { formatTaskAssessment } from "./task-state.ts";
 import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
@@ -434,6 +435,11 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       if(result.reasoning!==undefined)write(`[思考] ${result.reasoning}\n`);
       write(result.reply.content+"\n");
       write(`${formatBudget(result.budget)}\n`);
+      // Printed only when a task state was recorded. An assessment computed but
+      // never shown would be dead code of exactly the kind D58 found: built,
+      // load-bearing in tests, and reaching nobody.
+      const taskLine = result.taskAssessment === undefined ? undefined : formatTaskAssessment(result.taskAssessment);
+      if (taskLine !== undefined) write(`${taskLine}\n`);
       if(options.showTotals){const totals=await runtime.totals();write(`[adapter=${adapter.id} model=${result.model} steps=${result.steps} tools=${result.toolCalls} in=${totals.inputTokens} out=${totals.outputTokens}]\n`);}
     } finally {process.off("SIGINT",abort);}
     return 0;

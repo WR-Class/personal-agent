@@ -224,6 +224,46 @@ export function assessTaskState(steps: readonly TaskStateStep[], evidence: Round
   };
 }
 
+/**
+ * One-line rendering of a round's task assessment — the sibling of `formatBudget`,
+ * for the same two CLI entry points.
+ *
+ * The scoping sentence is not decoration, and this function is the reason the
+ * round-end wiring is safe at all. The evidence behind the assessment is one
+ * round's (`writeLedger` and `outcomeTools` are reset every send) while the task is
+ * cross-round, so a step met in round two reads as unmet against round five's
+ * evidence. Printed without that scope the line would be a misleading verdict the
+ * system produced about itself — the exact shape D62 refused to inject into the
+ * prompt, arriving through the display instead. The step strings in `unknowns` and
+ * `failed` carry no scope of their own (`未达成：…`), so the scope has to be stated
+ * here, around them.
+ *
+ * Counts rather than step texts, deliberately: this is one line, the texts are
+ * prose of unbounded length, and the full per-step detail is already on
+ * `SendResult.taskAssessment` for anyone who needs to act on it.
+ *
+ * Returns undefined for an empty assessment, so a session that never recorded task
+ * state prints nothing rather than a comfortable-looking empty verdict.
+ */
+export function formatTaskAssessment(assessment: TaskStateAssessment): string | undefined {
+  if (assessment.steps.length === 0) return undefined;
+  const met = assessment.steps.filter((step) => step.outcome === "met").length;
+  const counts = [
+    `${met}/${assessment.steps.length} 步达成`,
+    ...(assessment.unknowns.length > 0 ? [`未知 ${assessment.unknowns.length}`] : []),
+    ...(assessment.failed.length > 0 ? [`本轮未达成 ${assessment.failed.length}`] : []),
+  ];
+  // Stated whenever it is true of any step, not only when the count is nonzero:
+  // "cannot decide" is the ceiling of this runtime, and a reader who forgets it
+  // will read an unverifiable step as a step that was not done.
+  const ceiling = assessment.steps.some((step) => step.outcome === "unverifiable")
+    ? " 判不了不等于没做：需要跑命令的验收条件在本运行时恒为 unverifiable。"
+    : "";
+  return `[本轮任务判定 ${counts.join(" · ")}]` +
+    "（仅对本轮证据：跨轮任务的步骤可能已在更早的轮次达成，此处不代表从未达成）" +
+    ceiling;
+}
+
 function describe(claim: GeneValidation): string {
   switch (claim.kind) {
     case "files-written": return `files-written:[${claim.paths.join(",")}]`;

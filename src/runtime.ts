@@ -11,7 +11,7 @@ import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
 import { readTrustedRoots } from "./trusted-roots.ts";
 import { formatConstraintsForPrompt, loadConstraints } from "./constraints.ts";
-import { formatTaskStateForPrompt } from "./task-state.ts";
+import { assessTaskState, formatTaskStateForPrompt, type TaskStateAssessment } from "./task-state.ts";
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
@@ -395,6 +395,18 @@ export interface SendResult {
   reply: ChatMessage;
   /** The applied gene's claims compared against the round, when a gene applied. */
   validation?: ValidationReport;
+  /**
+   * The recorded task state's steps compared against **this round's** evidence,
+   * when a task state was recorded. Absent when none was.
+   *
+   * Scoped to the round and deliberately not folded into `evaluation.status`. The
+   * asymmetry is the whole point: a gene is applied to one round, so its claims can
+   * fairly decide that round; a task spans rounds, so a step met in round two reads
+   * as unmet against round five's evidence. Downgrading a round for that would be
+   * the system manufacturing a misleading verdict about itself — the same shape D62
+   * refused to inject into the prompt. So this is reported, never gated on.
+   */
+  taskAssessment?: TaskStateAssessment;
   /** Reasoning trace of the final reply, when the provider exposed one. */
   reasoning?: string;
   usage: ChatUsage;
@@ -820,10 +832,21 @@ export class AgentRuntime {
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
         const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null });
-        const validation = applied ? checkValidation(applied.validation, {
+        // One evidence object, named, and read by both consumers. Writing the pair
+        // out twice would let the gene's claims and the task's claims be judged
+        // against different facts about the same round.
+        const roundEvidence = {
           filesWritten: this.writeLedger.files,
           tools: this.outcomeTools ?? [],
-        }) : null;
+        };
+        const validation = applied ? checkValidation(applied.validation, roundEvidence) : null;
+        // Read here rather than reusing what `buildPrompt` saw: the model may have
+        // written task state during this very round, and reusing the earlier copy
+        // would assess the state as it was before the round changed it.
+        const recordedState = await this.store.taskState(this.sessionId);
+        const taskAssessment = recordedState === undefined
+          ? undefined
+          : assessTaskState(recordedState.steps, roundEvidence);
         const verdict = validation && validation.failed.length > 0
           ? {
             ...evaluation,
@@ -846,6 +869,7 @@ export class AgentRuntime {
           evaluation: verdict,
           ...(applied ? { appliedGene: { address: applied.address, name: applied.name } } : {}),
           ...(validation ? { validation } : {}),
+          ...(taskAssessment === undefined ? {} : { taskAssessment }),
           ...(reasoning === undefined ? {} : { reasoning }),
           // `buildPrompt`, not `store.history`: this field means "what the model
           // saw", which includes the system prompt; the persisted log does not.
