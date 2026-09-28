@@ -253,6 +253,78 @@ export function registeredEventKinds(): readonly string[] {
 }
 
 /**
+ * A projection unit: folds committed events into one typed state.
+ *
+ * This is the Definition role of DSH's projection seam (`docs_architecture.md`
+ * `:113`: "registered units fold committed events incrementally, host consumers
+ * read one typed state with `stateOf()`"), and `:117` is explicit that a seam has
+ * three roles and "one role alone is not a seam" — so this interface means
+ * something only together with {@link registerSessionProjection} (Provider) and
+ * {@link SessionStore.stateOf} (Consumer).
+ *
+ * ⚠️ Step ① of D72's order folds the whole log per call rather than incrementally.
+ * Incremental folding is step ④, together with restoring `latestMarks`' one-pass
+ * optimisation. This round does not do it and does not claim to.
+ */
+export interface SessionProjectionUnit<S> {
+  readonly key: string;
+  readonly initial: S;
+  fold(state: S, event: SessionEvent): S;
+}
+
+const sessionProjections = new Map<
+  string,
+  { readonly token: symbol; readonly unit: SessionProjectionUnit<unknown> }
+>();
+
+/**
+ * Register a projection. Ownership is a unique token for the same reason as in
+ * {@link registerEventKind}: matching on the unit's identity would let a stale
+ * disposer from a reload unregister the live registration behind it.
+ */
+export function registerSessionProjection<S>(unit: SessionProjectionUnit<S>): () => void {
+  if (typeof unit.key !== "string" || unit.key.trim() === "") {
+    throw new Error("projection key must be a non-empty string");
+  }
+  if (sessionProjections.has(unit.key)) {
+    throw new Error(`session projection already registered: ${unit.key}`);
+  }
+  const token = Symbol(unit.key);
+  sessionProjections.set(unit.key, { token, unit: unit as SessionProjectionUnit<unknown> });
+  return () => {
+    const current = sessionProjections.get(unit.key);
+    if (current !== undefined && current.token === token) sessionProjections.delete(unit.key);
+  };
+}
+
+/** The registered projection keys. What can be listed can be audited. */
+export function sessionProjectionKeys(): readonly string[] {
+  return [...sessionProjections.keys()];
+}
+
+/**
+ * The core registers its own projection, at module scope so it happens once per
+ * process rather than once per store instance.
+ *
+ * ⚠️ That the core is both provider and consumer here does **not** make this a
+ * fake seam. `docs_architecture.md:113` closes with "The agent loop registers
+ * shared `turnBoundary` state for its readers", and `:117` says "A package may
+ * combine roles" — DSH's own core does exactly this. Per `:119` the value is not
+ * that a swap is likely but that the dependency is written as an interface instead
+ * of an import.
+ *
+ * The disposer is exported so a test can prove the explicit-failure path. Nothing
+ * calls it in normal operation.
+ */
+export const disposeTaskStateProjection = registerSessionProjection<TaskStateEvent | undefined>({
+  key: "taskState",
+  initial: undefined,
+  // Latest wins, matching the `summary` precedent: the log keeps every version,
+  // readers see the current one.
+  fold: (state, event) => (event.kind === "task-state" ? event : state),
+});
+
+/**
  * The kinds the core itself parses.
  *
  * ⚠️ `ExternalSessionEvent` is deliberately **not** a member. Adding it was tried
@@ -869,13 +941,40 @@ export class SessionStore {
    * ordering to justify it: monotonicity does, because a later state was refused
    * unless it required at least as much as the earlier one.
    */
-  async taskState(sessionId: string): Promise<TaskStateEvent | undefined> {
-    const report = await this.inspect(sessionId);
-    let latest: TaskStateEvent | undefined;
-    for (const event of report.events) {
-      if (event.kind === "task-state") latest = event;
+  /**
+   * Read one projection's folded state. The Consumer role of the seam.
+   *
+   * ⚠️ Two kinds of "absent" must not be conflated, and conflating them is exactly
+   * the D60 trap — a feature that looks like it works (state, injection, claims all
+   * present) while never deciding anything:
+   *
+   * - **The key has no registered projection** ⇒ **throw**. That is a wiring bug,
+   *   and `docs_architecture.md:113` requires it: a host reader "either requires
+   *   this service during activation or **fails explicitly** when the registry or
+   *   required key is absent", registering "**without silently defaulting a missing
+   *   host value**".
+   * - **The key is registered but no event of that kind exists yet** ⇒ return the
+   *   unit's `initial`. That is a legitimate state: nothing has been written.
+   *
+   * ⚠️ This is on the write path too, not only the read path. `appendTaskState`
+   * reads the previous state through {@link taskState} to run D61's monotonicity
+   * check, so an unregistered projection makes the write **fail** rather than being
+   * read as "there was no previous state" — which would admit any claim and make
+   * "lower the acceptance criterion" viable again.
+   */
+  async stateOf<S>(sessionId: string, key: string): Promise<S> {
+    const registered = sessionProjections.get(key);
+    if (registered === undefined) {
+      throw new Error(`no session projection registered for key: ${key}`);
     }
-    return latest;
+    const report = await this.inspect(sessionId);
+    let state = registered.unit.initial;
+    for (const event of report.events) state = registered.unit.fold(state, event);
+    return state as S;
+  }
+
+  async taskState(sessionId: string): Promise<TaskStateEvent | undefined> {
+    return this.stateOf<TaskStateEvent | undefined>(sessionId, "taskState");
   }
 
   /**
