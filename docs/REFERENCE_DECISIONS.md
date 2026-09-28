@@ -1212,6 +1212,79 @@ D59 已指出模型不得自报 `done`。**但读完 claim 机制后发现更隐
 
 **未做 / 未验**：**跨轮累积仍未定案**（任务状态剩下的唯一结构性缺口）；`enforceTaskSpec` 的死代码未处理；`validation` 的详细视图（逐条 claim 的展开）未做 —— **决定一让它当前不必要，但若将来 claim 数变多，"计数 + 展开"仍可能需要**；交互模式（`interactive.ts`）只做了同形接线，**没有真机跑过交互会话**；只有 `--echo` 真机跑过，没有真模型跑过。
 
+### 跨轮累积取证：三候选的代价、第四个形状，以及"哪一轮的 met 算数"根本不是一个问句（D66，2026-09-30，**取证轮，无代码**）
+
+**本轮不改产品代码**（既有规矩：新阶段前先记来源与取舍）。产出是这份取证与给操作员的裁决材料。**结论先行：原先列的三个候选里，(A) 的原始形式被源码推翻，(C) 的代价比预想大且不对称，(B) 有风险；取证过程又推出两个新形状 (A′)/(D)，而 (D) 暴露出一件更要紧的事 —— "哪一轮的 `met` 算数"不是一个问句，而是**逐 claim kind 各有一问**，其中 `files-written` 可能根本没有可靠的累积规则。**
+
+#### 一、内部取证（全部实读；符号+引文为主定位符）
+
+| # | 来源 | 读到的承重事实 |
+|---|---|---|
+| 1 | `ADR-0001` §1 | "不留副本"的理由是**崩溃窗口**，不是审美：*"这些检查之所以存在，正是因为同一事实被写了两遍。一次崩溃落在任一行之间，都可能产生两套事实不一致的状态"* ⇒ **判据是"能不能产生两套不一致状态"，不是"有没有存第二份"** |
+| 2 | `ADR-0001` §4.3（`summary` 先例） | *"message 仍是唯一事实来源，`summary` 是对'模型看到什么'的**派生视图说明**，不是第二条事实来源；**删除全部 summary 事件只意味着 prompt 变长**"* ⇒ **可操作判据：删掉这类记录，是只丢便利，还是丢真相** |
+| 3 | **⚠️ `cycle-store.ts` 头注** | *"It is an operational record of what the agent did — **the session log stays the conversation's fact source (ADR-0001)**"* ⇒ **ADR-0001 的范围是"对话"，不是"全部事实"。产品里已经存在两个会话日志之外的事实存储（cycle 库、gene 库）。所以真问题不是"能不能存"，而是"存进哪个库、存成快照还是存成历史事实"** |
+| 4 | `runtime.ts` `journalOutcome`（`:659-678`） | **`:666` 是 `if (address === undefined \|\| !this.geneStore) return;`** ⇒ **outcome 日志只在有基因被应用时才写**；`appendOutcome({address, …})` **按基因地址归档**、存在**基因库**、内容是**基因声誉**（`succeeded`/`status`/`failureClass`/`intent`/`signals`/`tools`/`evidence`）⇒ **候选 (A) 的原始形式不成立**：基因库为空时（本项目现状）什么都不记，且**归档轴是基因不是任务**，按它合并得到的是"这个基因表现如何" |
+| 5 | `cycle.ts` `CycleState`（`:44-51`） | `readonly evaluation: CycleEvaluation \| null`，注释 *"Set by the review phase"*，由 `review-ready` 写入（`:82`）⇒ **每轮机械判定确实已被持久化**，且 `evidence` 含 `validation:*` 逐条 claim 结论（D65 已核实） |
+| 6 | **⚠️ 但 `evaluateRun`（`cycle.ts:134`）** | `evidence = [\`steps=${…}\`, \`toolCalls=${…}\`, \`toolErrors=${…}\`]` ⇒ **`filesWritten` 的路径列表不在其中** ⇒ **(A′) 能跨轮恢复"基因"结论，恢复不了"任务步骤"结论**，因为重判步骤所需的 `RoundEvidence` 不在 cycle 库里 |
+| 7 | `cycle-store.ts` `states()`/`load()` | **该库是所有会话共用的单一文件**（`this.path` 构造时固定）；`states()` 返回 `Map<cycleId, CycleState>`，**折叠时丢掉了 `sessionId`** ⇒ 要按会话取须新增 API 或绕过折叠读原始记录；**`load()` 遇中间畸形行直接抛错**（`cycle store line N is not a valid v1 record`）⇒ **全有或全无**，共用文件里任一处损坏会让所有会话的历史都读不出来 |
+| 8 | **⚠️ `runtime.ts:957`（(C) 的便宜一半）** | `this.outcomeTools?.push(call.name);` **位于预算检查与执行之前** ⇒ **对每个调用都记名字，不论被拒、失败或取消**，语义是"模型要了哪些工具、按什么顺序"。而 ADR-0001 D1 说 *"`assistant` 消息的 `toolCalls[]` 即「请求了什么」"* ⇒ **`tools` 从日志重算是一次查找：逐条收集 `toolCalls[].name` 即等价，无需重放任何规则** |
+| 9 | **⚠️ `runtime.ts:994-997`（(C) 的昂贵一半）** | `if (result.isError === true) errors += 1; else if (attempt !== null) this.writeLedger = chargeWrite(this.writeLedger, attempt, position);`，注释 *"Only a write that actually happened is charged… **the ledger stays a record of the workspace, not of intent**"* ⇒ **`filesWritten` 从日志重算必须重建四件事：① 顺序依赖**（`checkWrite` 针对累积账本判定，`:966`）**；② 只有 `isError !== true` 才计入；③ 预算拒绝的写入不计入**（`:967-980` 的 `continue` 在 charge 之前）**；④ 匿名槽位按批内位置命名**（`chargeWrite(state, attempt, position)`，`position = index++`，`write-budget.ts` 用 `\u0000${index}`）⇒ **必须逐调用、按原顺序、带原索引地重放整个计费循环** |
+| 10 | `runtime.ts` `taskState`/`appendTaskState` | `taskState(sessionId)` 已是**读最新一条 `task-state` 事件的 latest-wins 语义** ⇒ **候选 (B) 若做成"当前进度"的 latest-wins 标记，就是两个关于同一任务的可变快照，由不同代码路径在不同时刻写入** —— 正是取证 1 那个故障模式的形状 |
+
+**由 9 得到的关键推论（比"重算很贵"更严重）**：**(C) 不是"读一遍日志"，是"把计费规则写第二遍"，而第二遍实现就是"一个问题两个答案"** —— 两份实现会在边界上分歧（尤其 ④ 的索引语义），**且分歧不报错**。**更糟的是：计费规则一旦变更，旧日志会按新规则重算出不同的历史** ⇒ **派生值跨版本静默改变含义，这比存一份副本更坏**（副本至少冻结了当时的判断）。
+
+#### 二、外部取证（本地 `_research/repos`，两个产品的源码直读）
+
+**⚠️ 派出的子代理在收尾前失败且无输出，外部部分改为自己做，因此只覆盖了两个产品**（`claude-code` 仓库无源码，只有 plugins/examples/scripts；宿主 dsh 路径在本环境读不到）。**未读**：goose、aider、gemini-cli、crush、opencode 的 v2 session core、LangGraph checkpointer、Temporal event history。**这一节的结论强度受此限制，如实标注。**
+
+| 产品 | 来源 | 读到的机制 |
+|---|---|---|
+| **Codex** | `codex-rs/protocol/src/plan_tool.rs` | `pub enum StepStatus { Pending, InProgress, Completed }`；`pub struct PlanItemArg { pub step: String, pub status: StepStatus }`；`pub struct UpdatePlanArgs { explanation: Option<String>, pub plan: Vec<PlanItemArg> }`，其字段注释 *"Arguments for the `update_plan` todo/checklist tool (not plan mode)"* ⇒ **纯模型自报，没有 claim、没有证据、没有校验；且 `plan` 是整份 `Vec` 而非增量** |
+| **Codex** | `codex-rs/core/src/tools/handlers/plan.rs:93-98` | **handler 全部逻辑就是**：`let args = parse_update_plan_arguments(&arguments)?; session.send_event(turn.as_ref(), EventMsg::PlanUpdate(args)).await; Ok(boxed_tool_output(PlanToolOutput))`，而 `PlanToolOutput::code_mode_result` 返回 `JsonValue::Object(serde_json::Map::new())`（**空对象**）⇒ **不校验、不合并、不累积；状态以事件形式发出，模型拿回一个空结果** |
+| **opencode** | `packages/core/src/session/todo.ts:32-57` | 存在 **SQL 表** `TodoTable`（字段 `session_id`/`content`/`status`/`priority`/`position`）；`update` 在**一个事务里先整份删除再整份插入**：`tx.delete(TodoTable).where(eq(TodoTable.session_id, input.sessionID)).run()` → `if (input.todos.length === 0) return` → `tx.insert(TodoTable).values(input.todos.map((todo, position) => ({…})))`，随后 `events.publish(Event.Updated, input)` ⇒ **可变快照 + 事务作为崩溃安全机制（而不是 append-only）；`status` 同样是模型自报** |
+
+**外部取证给出的结论（这是本轮最有用的一条）**：**两个产品、两种截然不同的存储机制（发事件 vs SQL 事务整份替换），语义完全相同 —— 整份替换、latest-wins、模型自报 `status`、没有任何跨轮累积逻辑。**
+
+⇒ **业界不累积，业界替换。** 而它之所以负担得起"替换"，是因为**它信任模型写的 `completed`** —— **状态是由模型自己一轮轮带下去的**。
+
+⇒ **本产品的处境因此被精确地定位了**：`task-state` **已经是业界那个形状**（整份 latest-wins、存在会话日志、模型重写步骤文本），**唯一的差别是本项目拒绝让模型写 `done`**（D14/D15/D26：*"没有模型自报成功的通道"*）。**所以缺口不是"少了累积机制"，而是"业界用信任模型填的那个洞，本项目必须用别的东西填"。**
+
+#### 三、四个形状的代价 / 优势对照
+
+| 形状 | 优势 | 代价（具体） | 崩溃窗口下的表现 |
+|---|---|---|---|
+| **(A) 不累积，读者自己合并** —— 原设想用 outcome 日志 | 零新增存储 | **⚠️ 已被推翻**：outcome 日志**只在有基因时写**、**按基因地址归档**、存在基因库（取证 4）。基因库为空 ⇒ 无记录；轴是基因不是任务 ⇒ 合并出来答不了"任务做到哪了" | 不适用（本来就没有记录） |
+| **(A′) 不累积，从 cycle 库合并** | 零新增存储；每轮机械判定**已经**在里面（取证 5） | **缺关键事实**：`evidence` 里没有 `filesWritten`（取证 6）⇒ **恢复不了任务步骤结论**；库全会话共用、`states()` 丢掉 `sessionId`、`load()` 全有或全无（取证 7）⇒ 要按会话读须新增 API，且任一处损坏波及所有会话 | 好：append-only + 截断尾丢弃（`load()` 末尾 `lines.pop()`），坏行在中间才致命 |
+| **(B) 新增 latest-wins 的"当前进度"标记事件** | 读一次即得答案；与既有 `task-state` 同构，实现最省 | **⚠️ 两个关于同一任务的可变快照**（取证 10），由不同路径在不同时刻写 ⇒ **正是 ADR-0001 §1 那个故障模式的形状**；且它存的是**结论**，`checkValidation` 语义一变，旧结论就与新语义不一致而无人察觉 | 差：快照写一半 = 一个既非旧亦非新的进度 |
+| **(C) 需要时从日志重算** | 零新增存储；永远是"当前规则下的答案" | **⚠️ 不对称**：`tools` 是查找，`filesWritten` 是**重新实现整个计费循环**（取证 8/9）⇒ **第二份实现 = 一个问题两个答案，分歧不报错**；**且规则变更后旧日志重算出不同历史**，派生值跨版本静默改变含义，**比存副本更坏** | 最好：无新增写入点 |
+| **(D) 存每轮的证据（不是结论），累积=并集，按需重判** ← 取证推出的新形状 | **存事实不存结论** ⇒ `checkValidation` 语义变更时重判自动跟随，不会冻结旧语义；**"哪一轮的 `met` 算数"这个问题被消解**（对并集重跑同一个 `assessTaskState` 即可，不需要新规则）；按 §4.3 判据**删掉它丢的是真相**（第 Y 轮的 `RoundEvidence` 无处重算）⇒ **它是新事实而非派生视图，按取证 3 允许存在会话日志之外**；每轮一条、不可变、单调 ⇒ **后续轮次不可能与之矛盾，不构成"两套不一致状态"** | 每轮多一条事件（日志增长）；需要 `runId` 作身份（ADR-0001 D3 已有）；**⚠️ 并集语义逐 kind 不同，见第四节** | 好：append-only、单调、丢一条只丢那一轮 |
+| **(B′) 存每轮的"第 X 步在第 Y 轮 met"历史事实** | 不可变、单调、不构成快照冲突；读时折叠即得进度 | 存的是**结论** ⇒ 同 (B) 的语义冻结问题；比 (D) 多一层派生 | 好 |
+
+#### 四、⚠️ 本轮最重要的发现：累积**不是** claim-kind 无关的
+
+原问题被表述为"哪一轮的 `met` 算数"，**但取证后发现它必须逐 kind 拆开问，而答案不一致**：
+
+| claim kind | `validation.ts` 的实际语义 | 跨轮并集是否成立 |
+|---|---|---|
+| `tool-used` | **下界**（`times < claim.times` 才 `unmet`；D61 已核实） | **成立且自然**：把各轮 `tools` 拼接后再数次数，正是"这个任务累计调了几次" |
+| `files-written` | **双向集合相等**（`const actual = [...new Set(evidence.filesWritten)].sort();` 后与 claim 的 paths 比；D61 据此判定 `paths` 不可变） | **⚠️ 不成立**：claim `files-written:[a.ts]` 的意思是"**恰好**写了这些"。对各轮取并集后，**任何一轮多写了任何文件都会让这条原本 `met` 的 claim 变成 `unmet`** ⇒ **并集会把"曾经恰好达成"改判为"未达成"，即累积反而让已达成的步骤失效** |
+| `no-write` | 本轮 `filesWritten.length === 0` 才 `met` | **含义会变**：跨轮变成"任何一轮都没写过" —— 讲得通，但**不再是同一个命题**，须显式决定 |
+| `command` | 恒 `unverifiable`（`validation.ts:86-89`） | 无关（本来就判不了） |
+
+⇒ **对 `files-written`，可能根本不存在可靠的累积规则**：它天然是**每轮**命题（"这一轮恰好写了这些"），把它拉到跨轮就改变了它的含义。**这与 D61 的 `paths` 不可变是同一个根源（双向集合相等），也是 D64"任务判定不得给本轮降级"的同一个不对称性的第三面。**
+
+⇒ **因此任何累积方案都必须逐 kind 定义，并且很可能要公开声明一条新的能力上限：以 `files-written` 为验收条件的步骤，其达成只在当轮可判、跨轮不可累积** —— 与"`command` 恒判不了"并列，写进 `SAFETY.md` 与工具描述。
+
+#### 五、给操作员的裁决材料（本轮不实现）
+
+1. **(A) 已死**，不必再考虑（取证 4）。
+2. **(C) 便宜的一半是真的、贵的一半也是真的**：若只做 `tool-used` 类步骤的跨轮累积，`tools` 确实可以从日志直接收集（取证 8），**不需要重放计费循环**。⇒ **存在一个"半份 (C)"：只累积 `tools`，不累积 `filesWritten`**，代价是 `files-written` 步骤永远只能当轮判 —— 而这恰好与第四节的结论一致（它本来就不该累积）。**这是本轮取证指向的最小可行形状。**
+3. **(D) 是完整解**，但它要求每轮多写一条事件，且要先定并集语义（第四节）。
+4. **(B) 不建议**：两个可变快照正是 ADR-0001 要防的形状。
+5. **业界的做法本项目用不了**：Codex 与 opencode 都靠**信任模型自报 `status`** 来免除累积（第二节）。**本项目拒绝那条通道是有意的**（D14/D15/D26），所以**这个缺口是那条拒绝的直接代价，不是设计疏忽** —— 这一点应当公开写进文档，而不是被某个累积机制悄悄掩盖。
+
+**未取证 / 未验**：goose（`crates/goose/src/agents/platform_extensions/todo.rs`）、aider、gemini-cli（`packages/core/src/utils/planUtils.ts`）、crush（`internal/agent/tools/todos.go`）、opencode 的 v2 session core（其 `AGENTS.md` 提到 durable `session_input` 行、投影与 "Context Epoch persistence"，**可能有更接近 event sourcing 的做法，未读**）、LangGraph checkpointer、Temporal event history、宿主 dsh 的 swarm 记录方式（**本环境读不到该路径**）。**"业界不累积"这个结论只由两个产品支撑，样本偏小，不应据此推广到全部产品。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
