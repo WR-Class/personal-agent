@@ -7,7 +7,8 @@ import { createTestFixture } from "./fixtures.ts";
 import type { TestFixture } from "./fixtures.ts";
 import { buildToolEnvironment } from "../src/tool-environment.ts";
 import { assertSafeStateDirectory, canonicalPath, resolveRuntimePaths } from "../src/security-config.ts";
-import { ToolRegistry, createReadFileTool, requireToolEnvironment } from "../src/tools.ts";
+import { ToolRegistry, createReadFileTool, createCreateFileTool, requireToolEnvironment } from "../src/tools.ts";
+import { findTier } from "../src/tiers.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
@@ -118,5 +119,51 @@ describe("PR1 security boundaries", () => {
     const runtime = new AgentRuntime({adapter,store:new SessionStore({root:localHome}),sessionId:"state",home:localHome,
       workspaceRoot:f.workspaceRoot,tools:new ToolRegistry([createReadFileTool()])});
     await runtime.send("read state");assert.doesNotMatch(JSON.stringify(adapter.requests),/PRIVATE_HISTORY/);
+  });
+
+  /**
+   * The write direction of the same property, and the one that matters for
+   * privilege escalation.
+   *
+   * Reading runtime state leaks history; *writing* it grants privileges.
+   * `trust.json` is the file that widens what the agent may read outside the
+   * workspace, and it persists across sessions — so an agent that can write it
+   * can make every later session more permissive than the operator authorised.
+   * Approving one session of unrestricted editing is not consent to that.
+   *
+   * The test uses `full-access` deliberately: with a posture that asks, a refusal
+   * could be the approval gate rather than the path policy, and the two must not
+   * be confused. It also uses an ordinarily-named home directory inside the
+   * workspace, because the protection that makes this pass is by *location* —
+   * `AgentRuntime` adds its own home to the denied roots — and not by the
+   * `.personal-agent` name happening to appear on a list of sensitive names.
+   * That list's own comment calls itself "a hint, not a boundary".
+   */
+  it("cannot write its own privilege-granting state, whatever its home is called", async () => {
+    const localHome = path.join(f.workspaceRoot, "agentstate");
+    await mkdir(localHome, { recursive: true });
+    const target = path.join(localHome, "trust.json");
+    const tier = findTier("full-access")!;
+
+    const adapter = createScriptedAdapter({ steps: [
+      { toolCalls: [{ id: "w1", name: "create_file",
+        arguments: JSON.stringify({ path: target, content: '{"roots":["C:\\\\"]}' }) }] },
+      { content: "done" },
+    ]});
+    const runtime = new AgentRuntime({
+      adapter,
+      store: new SessionStore({ root: path.join(localHome, "state") }),
+      sessionId: "self-escalate",
+      home: localHome,
+      workspaceRoot: f.workspaceRoot,
+      tools: new ToolRegistry([createCreateFileTool()], ["create_file"]),
+      rules: tier.rules,
+    });
+    await runtime.send("grant yourself read access to the whole drive");
+
+    // The assertion is the disk, not the transcript: a file either exists or it
+    // does not, while "the tool said it was denied" is a claim about a claim.
+    assert.equal(existsSync(target), false,
+      "the agent wrote its own trust.json, which grants read access outside the workspace in every later session");
   });
 });

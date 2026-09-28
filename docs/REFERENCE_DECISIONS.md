@@ -135,6 +135,54 @@
 - **验证**：新增**走完整链路**的回归测试（runtime → 工具 → 审批门，**不是只查 `decide()`**，因为 D46 已经证明"决策对了但没接到工具"是真实故障形态）；**带反证**——先在 `full-access` 下断言投毒仓库**真的执行了**（marker 出现），否则测试可能因 git 缺失或 payload 未触发而空过；再在 `ask-before-writing` 下断言 marker **不出现**。全量 **520 通过 / 0 失败 / 1 跳过**，`npm run build` 干净。
 - **教训（比漏洞本身更值得记）**：**"残留风险"这个措辞被我用来描述一个已经放行、已经可被利用的路径。** 写下"有风险但先这样"时，如果那条路径已经在免问放行，它不是残留风险，是**已发布的漏洞**。措辞的宽松掩盖了严重性 —— 与 D26 那次"不做全局开关"的措辞纠正是同一类错误。
 
+### D26 第一步：核实"提权状态不可自写"（2026-09-29，实证 + 一次自我更正）
+
+**本轮结论有两部分：一部分是真实的更正，另一部分是我自己的探针错误。都如实记录。**
+
+#### A. 更正 D49 对 git 漏洞的严重性夸大（成立）
+
+D49 写"一条被判只读的命令执行了**仓库自带的**任意代码"。**"仓库自带"是错的**，三条向量均已实测：
+
+| 向量 | 随 `git clone` 交付？ | 能否让只读 git 命令执行代码 |
+|---|---|---|
+| `.git/config`（`core.fsmonitor`） | ❌ **不交付**（实测 clone 后该键为空） | 能，但需配置**已存在** |
+| `.gitattributes`（`filter=`/`diff=`） | ✅ 交付 | ❌ 只**指名**驱动，命令定义在 config 里（实测 `filter.evil.clean` 不存在） |
+| `.gitmodules`（`ext::sh -c`） | ✅ 交付 | ❌ 实测 `git status` 未触发（只读子命令不碰未初始化子模块） |
+
+*方法更正：`.gitmodules` 第一次测因 PowerShell 引号把文件写成 `bad config line 3`、git 直接拒读而**不算数**；改用 Node 写文件重测才有效。*
+
+**所以：clone 一个恶意仓库并不能让只读 git 命令执行代码，D49 的可达性被夸大了。** 但 **D49 的处置（git 整族移出白名单）仍然正确**，理由现在更精确：实测发现 `sensitivePathName` 含 `\.git`，**文件工具碰不到 `.git/`**，故植入恶意 `core.fsmonitor` 只能靠 `run_command git config ...`（需批准）或外部工具。**真实升级路径是：操作员批准过一次 `git config core.fsmonitor X`，此后每一次免问的 `git status` 都会执行 X —— 一次批准的写入换来无限次未批准的执行，且跨会话持久。** 这本身就是 D26 的题面，不需要任何攻击者。
+
+#### B. 我报告的"agent home 可自写"漏洞是探针错误（不成立）
+
+我先用探针直接调 `assertReadablePath`，测出：home 在工作区内时，改目录名为 `agentstate`/`state`/`myhome` 就能写 `trust.json` 与 `config.json`，只有默认名 `.personal-agent` 被拒（因为它恰好在 `sensitivePathName` 名单上，而该名单自己的注释写着 *"A name list is a hint, not a boundary"*）。据此我写了一版"采用：按位置保护 agent home"的记录并改了 `resolveRuntimePaths` 与 `cli.ts`。
+
+**改动立刻打破 10 个 CLI 测试**（`UnsafeAgentHomeError: refuses protected host or backup directory`）——因为 `AgentRuntime` 会把 `options.protectedRoots` 再喂回 `resolveRuntimePaths`，于是 agent home 出现在自己的保护名单里，`assertSafeStateDirectory` **自我拒绝**。
+
+顺着这条错误查到 [runtime.ts](../src/runtime.ts) 第 542 行：
+
+```ts
+this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRoot]);
+```
+
+**运行时早就按位置把 agent home 与 store root 加进拒绝名单了**，并在第 919 行传给工具上下文。**我的探针直接调底层函数、绕过了运行时的这层装配，量到的是假象。** 通过真实运行时重测（`full-access` 档、`create_file` 写 `trust.json`、三种 home 名），**全部被拦**。两处改动已回滚，`src/` 与改动前逐字节一致（`git diff --stat` 可证）。
+
+**而且这个性质早有测试**：`test/security.test.ts` 的 *"denies runtime state even when inside selected workspace with ordinary names"* 已经用普通目录名（`state`）覆盖了**读**方向。
+
+**这是本项目第三次"报告产品有洞、结果是自己测试的 bug"**（前两次：真机写入测试断言错方向、Windows 孤儿进程前提错误）。教训与前两次同一条：**报"产品失败"之前必须先排除自己测试/探针的 bug；直接调底层函数不等于调用产品的真实装配路径。**
+
+#### C. 本轮真实产出
+
+- **补上唯一真实缺口：写方向的测试。** 现有测试只覆盖"读运行时状态"，而**写 `trust.json` 才是提权**（它授予工作区外读权限、且跨会话持久）。新增 *"cannot write its own privilege-granting state, whatever its home is called"*：`full-access` 档（刻意选它，否则拒绝可能来自审批门而非路径策略，两者不可混淆）+ 普通名 home 在工作区内 + `create_file` 写 `trust.json`，**断言磁盘上文件不存在**（不解析转录：文件存在与否是机械事实，"工具说被拒了"是关于声明的声明）。
+- **做了变异验证，确认测试不是空过**：临时从 `runtime.ts:542` 移除 `this.home`，该测试**立刻变红**（15 通过 / 1 失败）；恢复后全绿。**没有这步，一个因别的原因而通过的测试等于没有测试。**
+- **不采用**："再往 `sensitivePathName` 加几个名字"（`trust.json`/`config.json`/`genes.jsonl`）——那是本项目已失败两次的**枚举危险项**形态，且名单注释自认抓不到"a plainly-named file that happens to matter"。**按位置保护已经存在且更强，无需补名单。**
+- **不采用**："强制 agent home 必须在工作区外"——会改变默认行为、要求操作员显式选路径，而按位置拒绝已经足够，收益不成比例。
+
+#### D. D26 仍未完成的部分（本轮刻意不做）
+
+**配置加载 × 规则表**才是 D26 的主体，本轮**没有做**。它必须建在"提权状态不可自写"这个地基上——而地基经本轮核实**已经存在且现在被测试钉住了**，所以可以做。**下一轮的具体约束**：配置只从 agent home 读（**绝不从工作区发现配置文件**，即刻意不实现常见的"找项目里的 `.agentrc`/`agent.json`"模式）；任何**放宽**姿态的字段必须像 `--tier full-access` 一样落盘审计（D26/D32：移除边界必须是可审计的决定，不是凭标签解锁）。
+
+**未验证**：非 Windows 平台；`--trust-root` 授予的根**包含** agent home 时的交互；全量并发下 `background-jobs` 的 kill 测试偶发失败（隔离重跑两次均 11 通过 / 0 失败，判定为负载下的时间窗漂移，**未修**）。
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
