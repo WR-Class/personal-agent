@@ -230,6 +230,541 @@ this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRo
 
 **未验证**：非 Windows 平台；配置与 `--trust-root` 同时使用时的交互；配置里 `tool:"*"` 与注册表缺席工具的完整组合矩阵（已测 read-only 一例）。
 
+### SoL-Pi 只读能力接入（D52，2026-09-29，取证完成，尚未写代码）
+
+**读过的来源**（`D:\DSHXM\SoL-Pi\SoL-Pi`，**只读未改**）
+
+| 来源 | 位置 | 读到什么 |
+|---|---|---|
+| SoL-Pi | `LICENSE`（1097B）、`THIRD_PARTY_NOTICES.md` | **MIT**，NVIDIA CORPORATION & AFFILIATES 2026；每个源文件头部都有 SPDX 声明 |
+| SoL-Pi | [docs/compatibility.md](../../../SoL-Pi/SoL-Pi/docs/compatibility.md)：1–20 | 针对 `@earendil-works/pi-coding-agent` **0.85.1** 开发测试；Pi 是 **peer dependency**；**只 import Pi 的公开导出**（`ExtensionAPI.registerTool`、`context`/`before_provider_request`/`tool_result`/`turn_end`/`agent_settled`/`session_before_tree` 事件、`ExtensionContext.getContextUsage()`/`.compact()`/`.model`） |
+| SoL-Pi | 同上："ObservationPack changes only the messages projected through the public `context` event. **Stored session history remains intact.**" | 投影层改写，不动存储 |
+| SoL-Pi | [observation-pack/index.ts](../../../SoL-Pi/SoL-Pi/src/sol-pi/extensions/observation-pack/index.ts)：65–135 | 注册工具 `obs_recall`，参数 `{id: string, offset?: integer>=0}`；**没有路径参数**；硬上限 `RECALL_MAX_BYTES=16KB`、`RECALL_MAX_LINES=400`，且**执行后再校验一次**输出未超限（第 92–94 行 `throw new Error("Recall output exceeded its hard limit")`） |
+| SoL-Pi | 同上：137–210 | `pi.on("context")` 投影钩子；用**后续 assistant 消息数**推算"这是第几次 provider 请求"（142–150）；**fail open**（202–206：`a packing failure must never cost the agent its observation`） |
+| SoL-Pi | [observation-pack/observation.ts](../../../SoL-Pi/SoL-Pi/src/sol-pi/extensions/observation-pack/observation.ts)：13–22 | `THRESHOLD_BYTES=10KB`、`FULL_SENDS=2`、`PLACEHOLDER_EXCERPT_BYTES=1024`；**`O_NOFOLLOW`** 用于读与创建，**`O_EXCL`** 用于创建 |
+| SoL-Pi | 同上：20、94–96 | **`OBSERVATION_ID_PATTERN = /^obs_[a-f0-9]{24}$/u`**，`isObservationId` 在**构造路径之前**校验 |
+| SoL-Pi | 同上：106 | 内容寻址 id：`obs_` + `sha256(toolName\0toolCallId\0contentHash).slice(0,24)` |
+| SoL-Pi | 同上：123–156 | `ensureStored`：目录 `0o700` + **`lstat` 确认是真目录且非符号链接**；文件 `0o600`；**`EEXIST` 时逐字节校验既有对象（size + sha256）才复用**，否则抛错 |
+| SoL-Pi | 同上：207–211 | **`trimUtf8End`**：`(byte & 0xc0) === 0x80` 的续字节被裁掉，**分页永不切断多字节字符** |
+| SoL-Pi | 同上：213–252 | `readRecallChunk`：同时按**字节与行数**双重封顶，返回 `nextOffset`/`eof` 供续读；`offset > size` 抛错 |
+| SoL-Pi | 同上：28、80–82、100 | **`containsReducerReceipt`：evidence-reducer 的回执不参与打包**——"Packing them again would replace verified evidence with an excerpt" |
+| SoL-Pi | 同上：158–176 | `completeLineExcerpt` 用 `split(/(?<=\n)/)`，**只取整行**，头尾各半预算 |
+| SoL-Pi | 其余三个扩展 | `action-fusion` 有 `then-run`（**执行命令**）；`evidence-preserving-reducer` 有 `provider.ts`（**调模型**）；`online-context-compact` 写状态并调 `compact()`。**三者都不是只读能力** |
+| 本项目 | [write-tools.ts](../src/write-tools.ts)：35 | `READ_ONLY_TOOLS = ["read_file","inspect_file","job_output"]`；**`job_output` 已是先例**："reading a job's output changes nothing; it is a view of work that was already permitted to start" |
+| 本项目 | [runtime.ts](../src/runtime.ts)：1043–1049 | `assembleContext` 是投影层：拼接 `past` + 压缩摘要，且明写 **"The full transcript is still in the session log"**——与 SoL-Pi 的"只改投影、不动存储"同构 |
+| 本项目 | runtime.ts：985 | 超过 `maxContextBytes` **抛 `ContextBudgetError`**，即整轮失败 |
+| 本项目 | runtime.ts：138 | **"this project does not estimate"** token——刻意不估算 |
+
+**接入方式：三条路里只有一条可走**
+
+| 方式 | 判定 | 理由 |
+|---|---|---|
+| 把 SoL-Pi 作为依赖 import | ❌ **不采用** | 它紧绑 Pi 的 `ExtensionAPI`/事件与 `typebox`/`pi-tui`，而本项目**零生产依赖、且没有扩展宿主**。引入即同时打破两条既有不变量 |
+| 起子进程调用 SoL-Pi | ❌ **不采用** | [IMPLEMENTATION.md](IMPLEMENTATION.md)：23/118 已明确"**不让 SoL-Pi 成为独立 agent**"；且经 `run_command` 中介会把它的输出变成不可校验的字符串 |
+| **借鉴机制、自己按本项目 Tool 接口重写** | ✅ **采用** | IMPLEMENTATION.md：112 早已定调："**不把 DSH、蜂群或 SoL-Pi 原样接进来。借鉴机制，运行时仍是 `personal-agent` 自己的**"。MIT 许可允许，**须在源文件头与本条注明 NVIDIA / MIT 出处** |
+
+**选哪一个能力：`observation-pack`，且这是唯一选项而非偏好**
+
+四个扩展里只有 `obs_recall` 是模型可见的只读工具：`action-fusion` 的 `then-run` **执行命令**、`evidence-preserving-reducer` **调模型**、`online-context-compact` **写状态并触发压缩**。故队列里"先接一个只读能力"在证据上只有一个候选。
+
+**⚠️ 一处必须说清的精确性**：该机制**内部有写**（把大结果归档进 agent home）。"只读"描述的是**模型可见面**（只有一个读工具、无路径参数），**不是整个机制无写**。归档写入不由模型发起、只落在 agent home 内的固定子目录。本项目本轮已因措辞不精确返工两次（D49 夸大、D50 探针误报），故此处不写"纯只读"。
+
+**⚠️ 本条的"归档侧"设计已被随后的核实推翻，改用下方修正版（尚未写代码，故直接修正而非留更正指针）**
+
+核实 `session-store.ts` 后发现两件事，使 SoL-Pi 的"另存一份内容寻址归档文件"在本项目里**不该照抄**：
+
+1. **完整工具结果本来就逐字存盘了。** `session-store.ts` 的 **ADR-0001「单一真相来源」**（第 22–39 行）明写：一次工具调用过去被写三遍（`tool/call`、`tool/result`、以及真正喂给下一轮 prompt 的 `message`），**"审计那一对是副本，而留着副本意味着两者可能不一致"**，故新写入**只产生 message**；`tool/result` 与 `tool/call` 现在是**可读但永不写**的遗留 kind。
+2. **于是另存归档文件＝给已存好的数据再造一份副本，直接违反本项目自己的 ADR-0001。**
+
+**修正后的设计**：
+
+| | SoL-Pi 原设计 | 本项目修正版 |
+|---|---|---|
+| 归档 | 另写内容寻址文件到 agent home | **不写**——会话日志里已有逐字原文（ADR-0001） |
+| 召回入参 | `id`（内容哈希）+ offset | **`callId`** + offset（`callId` 模型本来就看得见） |
+| 是否碰文件系统 | 是（故须防符号链接/穿越/覆盖） | **否**——走 `SessionStore.read()` 现成且已测的读接口（连损坏行补救路径都是现成的） |
+| 与 ADR-0001 | 冲突（制造副本） | 一致 |
+| agent home 是否多一个模型可达通道 | **是**（这是原设计最大的风险） | **否** |
+
+**修正带来的一个重要后果**：原方案里"最承重的一条"（工具只收 id 不收路径，因为归档在 agent home 里、而 D50 刚把 agent home 按位置封死，该工具会成为模型唯一能伸进 agent home 的通道）——**这条风险在修正版里根本不存在**，因为工具压根不碰文件系统。**`O_NOFOLLOW`/`O_EXCL`/`EEXIST` 逐字节校验/目录 `0o700` 那一整套也因此不需要**（它们防的是文件系统攻击面，而没有文件系统就没有那个面）。
+
+**修正后仍保留的机制**（与存哪无关，是真本事）：字节与行数**双重封顶** + `nextOffset`/`eof` 续读 + **执行后再校验一次输出未超限**；**切页不得切断多字节字符**（SoL-Pi 用 `trimUtf8End` 裁 UTF-8 续字节；本项目读回的是 JS 字符串，对应物是**不得切开代理对**——本项目有 GBK 乱码事故史）；**fail open**（打包/取回失败绝不能让 agent 丢掉观测结果，降级为照常发全文）；摘录**只取整行**、头尾各半预算；**压缩摘要与审计行不参与打包**。
+
+**实现时须核实、不得靠推断的一点**：持久化的 message 内容是否经过任何删改。目前证据指向"逐字保存"（超限时是抛 `ContextBudgetError` 让整轮失败、而非截断），但**必须在实现时验证**，因为整个修正方案都建立在"原文确实在日志里"这一条上。
+
+**以下是被修正的原记录，保留以存证推理过程：**
+
+**采用（机制层面，逐条都是非显然的）**
+
+
+1. **工具只收 `id`，绝不收路径**——这是本轮**最承重的一条**，理由是本项目的：D50 已把 agent home **按位置**对文件工具整体拒绝，而 `obs_recall` 要读的归档恰好在 agent home 里。**于是它会成为模型唯一能伸进 agent home 的通道。** 若它接受路径参数，等于把 D50 刚封上的洞重新打开。收 id + **在构造路径之前**用 `/^obs_[a-f0-9]{24}$/` 校验 + 目录前缀写死在代码里，三者合起来才使这个通道不可滥用。
+2. **内容寻址 id + `O_NOFOLLOW`（读与建）+ `O_EXCL`（建）+ `EEXIST` 时逐字节校验（size + sha256）才复用**——防符号链接、防覆盖、防被植入的同名对象。
+3. **`trimUtf8End`：分页永不切断多字节字符**。**对本项目尤其相关**：本项目有 GBK/乱码事故的历史记录（`哈希`→`鈥希`），任何按字节切片的读路径都必须处理这件事。
+4. **字节与行数双重封顶 + `nextOffset`/`eof` 续读**，且**执行后再校验一次**输出确实未超限（不信任自己的上限计算）。
+5. **fail open**：归档失败**绝不能让 agent 丢掉它的观测结果**——降级为"照常发全文"，而不是让整轮失败。
+6. **只取整行的头尾摘录**（`split(/(?<=\n)/)`），不在行中间截断。
+7. **已被验证的证据不参与打包**（SoL-Pi 用它排除 reducer 回执）。本项目对应物：**压缩摘要与审计行不得被替换成摘录**。
+8. **投影层改写、存储不动**——与 `assembleContext` 现有的"完整转录仍在会话日志里"同构，故接入点是 `runtime.ts:1043` 一带，**不需要新增事件系统**。
+
+**不采用**
+
+1. **不采用 `pi.on("context")` 事件形态**——本项目没有扩展宿主，直接在 `assembleContext` 内联调用即可；为一个钩子引入事件系统是过度设计。
+2. **不采用 `typebox`**——本项目有自己的 JSON Schema 约定与零依赖不变量。
+3. **不采用其 TUI 渲染**（`renderSolPiTool`/`showSolPiSavings`/`pi-tui`）——本项目已有自己的预算行。
+4. **不采用 `estimateTokens = len/4`**——`runtime.ts:138` 明写本项目**刻意不估算 token**（"this project does not estimate"）。**故只采用字节口径**，占位符里报 `original_bytes`/`original_lines`，不报估算 token。这是一处必须主动拒绝的诱惑：抄过来很省事，但会与既有决定矛盾。
+5. **不采用"用后续 assistant 消息数推算第几次请求"**——那是 Pi 缺少直接计数时的代理量；本项目在 `assembleContext` 里能直接数自己的 provider 请求次数，**更准确**。
+6. **暂不采用 JSONL ledger**——它有审计价值但非本轮必需；若采用则须放 agent home（不可被文件工具触及），留作后续。
+7. **不采用 `action-fusion` / `evidence-preserving-reducer` / `online-context-compact`**——均非只读；且后两者分别引入模型调用与压缩策略，属另外的设计问题。
+
+**Policy 与批准如何走（队列条目的硬要求）**
+
+- 在 `tools.ts` 按现有 Tool 接口注册，**走本项目自己的 JSON Schema**；
+- **加进 `write-tools.ts` 的 `READ_ONLY_TOOLS`**——该文件是单一真相来源，`tiers.ts` 与 `file-policy.ts` 都从它派生，故**"提供"与"许可"两个机制自动一致**（该文件的注释记载过两者不一致导致模型被"unknown tool"拒绝的真实事故）；
+- 于是**每个档位都提供它、`ask-before-writing` 档不为它逐次问**，与 `job_output` 同待遇；
+- **它不占用写预算**（读工具）；
+- **它不走 `assertReadablePath`**——因为它不接受路径。**这不是绕过路径收敛，而是它压根没有路径可收敛**；其边界由"固定目录 + id 模式 + 无路径参数"提供，须在源码注释与 SAFETY.md 里写明这条论证。
+
+**真实收益（不是为接而接）**：`runtime.ts:985` 现在**超过 `maxContextBytes` 就抛 `ContextBudgetError`、整轮失败**。大 `run_command` 输出是本项目最常见的超限来源，打包后该失败模式会显著减少，且**原文仍可按页取回**——比压缩摘要更强，因为摘要是有损且不可逆的。
+
+**范围建议（一轮做完，不拆）**：**归档侧与召回侧必须同轮**，因为只接召回侧会得到一个永远返回不了数据的死工具。归档侧是内部实现、不新增模型可见面，故仍满足"接一个只读能力"。**测试须含变异验证**（本项目本轮已两次靠它抓到真问题），并须含一条**"id 模式校验先于路径构造"**的测试与一条**"多字节字符不被切断"**的测试。
+
+**未验证**：SoL-Pi 自身测试未运行（不在本项目职责内，且它是 Pi 扩展、缺 Pi 无法跑）；`FULL_SENDS=2` 与 `THRESHOLD_BYTES=10KB` 是否适配本项目的窗口大小，须真机测过才定；非 Windows 平台；与 `--trust-root`、与既有 `/compact` 的交互。
+
+### 记忆系统设计（D53，2026-09-29，取证完成，尚未写代码）
+
+**⚠️ 更正（D55 核实源码后）：本条两处断言有误，原文保留以存证**
+
+操作员提供三个视频文案后，我去核对本项目源码，**抓出本条自己写的两处错误**：
+
+**错误一（诊断错）：支柱 A 说"操作员对话中途提出的规则会被 `/compact` 摘要掉"——不成立。**
+实读 [runtime.ts](../src/runtime.ts) 第 1037–1057 行 `buildPrompt`：压缩**只替换 `index < covered && message.role === "tool"` 的消息**，替换为 `[tool result omitted; N chars remain in the session log]`；**用户与助手消息永远逐字保留**。第 1028–1029 行注释原文：*"A summary is an index, not a replacement. User and assistant messages stay verbatim, because a rewritten summary can drop a path, an error, or a command."*
+
+**故操作员中途说的规则从不被删，它一直在每次请求的 prompt 里。** 真实失效模式是**位置稀释**：第 3 轮说的话，到第 300 轮仍排在第 3 位，被后面几百条消息淹没。**视频一的表述（"不会被大量闲聊内容稀释""不会随着对话轮次增加被淹没"）比我的诊断准确** —— 它说的是稀释，我说成了删除。
+
+**更正后的支柱 A 诊断**：约束不会丢失，但会**失去显著性**；且因为压缩只覆盖 tool 消息，**对话密集（而非工具输出密集）的会话里 `/compact` 几乎无效**，而 `maxContextBytes` **不是截断策略而是整轮拒绝**（第 114–117 行：*"an over-size prompt is refused with its actual size, because silently dropping messages ... would change what the model is answering without anyone being told"*）。**所以膨胀对本项目不是成本问题，是可用性问题**：会话最终会走到"整轮直接失败"，而压缩救不了它。
+
+**支柱 A 的做法因此不变，但理由变了，而且实现成本比原估更低**：本项目**已有现成先例** —— 压缩摘要本身就是以 **`role:"system"` 消息注入在消息列表最前**（第 1046–1050 行）。所以"每轮前置重新注入约束"不需要新机制，沿用同一形状即可。**并且注入时必须沿用 `genePrompt` 的既定态度**（第 1039–1040 行注释原文：*"the selected strategy is **context, never a rule the model is trusted to obey**"*）：**注入的文本是上下文、不是保证，强制力必须在规则表里**。这恰好就是视频一"前置注入 + 后置独立校验"双层结构的本项目版表述。
+
+**错误二（凭空记了一个不存在的缺口）：我在别处说过本项目缺"最大步骤数/最大工具调用次数"的轮次级熔断——不成立。**
+[runtime.ts](../src/runtime.ts) 早已齐备且**超出**视频二的要求：`maxSteps`→`StepLimitError`（第 754 行）、`maxToolCallsPerStep`→`ToolBudgetError("step")`（第 800–802 行）、`maxToolCallsPerRun`→`ToolBudgetError("run")`（第 803–805 行）、墙钟 `deadlineMs`、`maxContextBytes`→`ContextBudgetError`、`maxContextTokens`→`TokenBudgetError`、写入预算→`WriteBudgetError`，并由 `formatBudget`（第 365–389 行）渲染为一行：步骤 / 工具 / prompt 字节 / 令牌 / 推理 / 写入文件与行数 / 用时。**视频二要的三项我们全有，且多出令牌、上下文、写入三类预算。**
+
+**未受影响的一条**：支柱 D"不采用任何 token 估算"经核实**成立**。`maxContextTokens` 由 provider 自报的 `usage.inputTokens` 强制（第 124–127 行，并诚实标注两个后果：首次调用尚无测量、只能晚一轮叫停）；`countPromptTokens` 是可选宿主钩子且 **"No tokenizer is bundled"**，启发式（字符数除常数）**被刻意排除**，理由是*"an estimate that is wrong in either direction would silently replace the honest 'not measured yet' state with a confident-looking number"*（第 146–149 行）。
+
+**方法论教训（本项目第四次同类）**：D49 夸大 git 严重性、D50 探针假象、D51 钉错层、**本次 D53 诊断错 + 凭空记缺口**。**四次的共同点是"凭对架构的印象下断言"**，而四次都是**实读源码或实跑产品**才抓出来的。**本次尤其值得记：是操作员给的外部内容逼我去核对，才发现自己的错** —— 外部来源的价值不止于提供新机制，也在于**逼你重新读自己以为已经读懂的代码**。
+
+**⚠️ 操作员指定的两个参考源无法访问，如实记录**
+
+操作员要求参考两个抖音视频（《Agent长任务失控怎么解？五问拆透》《为什么你的 Agent 越聊越忘规则？……约束隔离与记忆治理》）。**两条路都试过、都失败**：
+
+- `web_fetch` 两个短链均被跨域重定向策略拒绝：`cross-origin redirect to https://www.iesdouyin.com is not followed automatically`
+- `web_search` 本会话始终不可用：`no API key for "DEEPSEEK_API_KEY"`
+
+**且视频是音视频内容，即使取到页面也只有标题与简介，不等于取到讲述内容。故本条不含任何对该视频内容的转述或推测**——那会是编造。下面全部结论只基于可核对的一手源码。**若操作员提供字幕或要点，须另起一条记录并据此修订本设计。**
+
+**读过的来源**
+
+| 来源 | 位置 | 读到什么 |
+|---|---|---|
+| SoL-Pi | [evidence-preserving-reducer/index.ts](../../../SoL-Pi/SoL-Pi/src/sol-pi/extensions/evidence-preserving-reducer/index.ts)：5–20 | **"delegate the first read of a long build or test log to the configured reducer model, then verify what comes back"**；**"accepts the resulting receipt only when every quoted line is found byte for byte in the archive. A receipt that cannot be checked is discarded and the original output reaches the frontier agent untouched"**；**"Delegation therefore never requires trusting a fluent summary."** |
+| SoL-Pi | 同上：64–75 | 参与门槛：`DIAGNOSTIC_COMMAND` 正则（只对构建/测试类命令）、`minBytes`、`maxChars`、**`LIKELY_SECRET` 命中即回退**（不把疑似密钥送给归约模型） |
+| SoL-Pi | 同上：78–159 | **每一个治理决定都写 journal**：`candidate`/`provider_response`/`applied`/`fallback`，且 fallback **必带 reason**，枚举值包括 `source-over-max-chars`、`likely-secret`、`model-call-timeout`、`reducer-model-unavailable`、`model-call-exception`、`model-response-error`、**`receipt-not-smaller`**（回执没比原文小就不采用） |
+| SoL-Pi | 同上：126–135、156–157 | `validateReceipt` 返回 `{ok, value\|reason}`；回执携带 `evidenceCount` 与 **`uncertain`**（**允许摘要自陈"不确定"，并把这个事实记下来**） |
+| SoL-Pi | 同上：69–148 | **所有回退路径都 `return undefined`**，即原文原样送达——**失败方向一律偏向完整而非偏向紧凑** |
+| SoL-Pi | [online-context-compact/economics.ts](../../../SoL-Pi/SoL-Pi/src/sol-pi/extensions/online-context-compact/economics.ts)：6–31 | 压缩**经济性**：`writeTokens`/`archiveTokens`/`memoTokens` 是成本，`breakevenRequests`/`combinedBreakevenRequests` 与 `expectedRemainingRequests` 比较后才决定 `compact: boolean`；`windowReserveTokens=16384` |
+| SoL-Pi | 同上：22–31 | `CompactionReason` 枚举**含"无法判定"的情形**：`horizon_unavailable`、`cache_ratio_unavailable`、`native_not_compactable`、**`non_positive_saving`**（省不下就不压） |
+| SoL-Pi | 同上：61–68 | `carriedDebtTokens`/`cacheDebtRepaymentTokens`/`cacheWriteReadRatio`——**把 prompt cache 失效当作压缩的成本计入**；`MINIMUM_VARIANCE_SAMPLES=3`、`SMALL_SAMPLE_SCALE=0.5`——**样本不足时保守** |
+| 本项目 | [session-store.ts](../src/session-store.ts)：22–39 | **ADR-0001 单一真相来源**：工具结果只写一遍（`message`），`tool/call`、`tool/result` 可读但永不写；理由是"留着副本意味着两者可能不一致" |
+| 本项目 | [runtime.ts](../src/runtime.ts)：1071–1105 | 现有 `/compact`：拒绝在 send 进行中执行、拒绝空摘要、拒绝摘要里带工具调用；**但不校验摘要内容是否与原文相符** |
+| 本项目 | runtime.ts：1043–1049 | `assembleContext` 是投影层；压缩只替换**前 `covers` 条**，且明写"完整转录仍在会话日志里" |
+| 本项目 | runtime.ts：985 | 超 `maxContextBytes` 抛 `ContextBudgetError`，**整轮失败** |
+| 本项目 | [cli.ts](../src/cli.ts)：359 | `systemPrompt` 是 `AgentRuntime` 的构造参数、**每次请求单独发送**，不属于可被压缩的 `past` |
+| 本项目 | [config.ts](../src/config.ts) | D51 新增的配置只有**权限规则**（tool/decision），**没有承载自然语言约束的地方** |
+
+**核心诊断：本项目"越聊越忘规则"的真实成因，与上下文长度无关**
+
+把约束分成两类，它们对长度的敏感度**完全不同**：
+
+| 约束类型 | 载体 | 会随对话变长而失效吗 |
+|---|---|---|
+| **强制型**（enforced） | 规则表、路径策略、注册表缺席 | **不会**——是代码，不是文本。D51 刚把配置钉在姿态边界之下，`priority` 再大也跨不过层 |
+| **系统提示里的指示** | `systemPrompt` | **不会**——每次请求单独重发，不在可压缩的 `past` 里 |
+| **操作员对话中途提出的规则** | `past` 里的普通消息 | **会**——`/compact` 之后前 `covers` 条被摘要取代；不压缩时也会被挤出窗口 |
+
+**所以第三类是唯一的真实缺口**，而它恰好就是"越聊越忘规则"：**操作员说了一句"以后一律用中文回复""不要动 docs 目录"，这句话就是一条普通消息，压缩会把它摘要掉，长对话会把它挤出去。** 而本项目**没有任何机制承载它**——`config.json` 只放权限规则，放不下散文式约束。
+
+**四个支柱（按依赖顺序）**
+
+**支柱 A：约束隔离——给操作员一个不会被压缩掉的约束层。**
+- agent home 下一份操作员所属的**持久指令**存储，**在投影层每次请求重新注入**，因此既不会被 `/compact` 摘要掉、也不会被挤出窗口。
+- **必须复用 D50/D26 的结论**：这份文件**不可被 agent 自己写**（agent home 已按位置对文件工具封死，D50 实测并钉住）。**否则"agent 改自己的约束"就是最彻底的自我提权，比改 `trust.json` 更糟**——`trust.json` 只放宽读，而这个能改掉一切行为规范。
+- 与 `config.json` **分开**：那个是**代码强制**的权限规则，这个是**只能靠散文表达**的约束。**两者不可混**，因为混了就分不清"哪条是拦得住的、哪条只是嘱咐"。注入时应**标明这一点**，不把嘱咐伪装成保证。
+
+**支柱 B：记忆治理——压缩必须可验证，不能信任流畅的摘要。**
+- SoL-Pi 的原则值得整条采用：**"accepts the receipt only when every quoted line is found byte for byte in the archive"**，且**"Delegation therefore never requires trusting a fluent summary"**。
+- 本项目 `/compact` 现在**只校验形状**（非空、不带工具调用），**不校验内容与原文相符**。这与既有风格一致地可扩展：把"摘要里引用的每一行都必须在转录中逐字找到"作为记录摘要的前置条件，**不满足就拒绝记录、保留原文**。
+- **失败方向必须偏向完整**：SoL-Pi 所有回退路径都 `return undefined`（原文原样送达）。本项目同理——**压缩不成功就宁可上下文长，也不要用一份没验证过的摘要换掉原文**。
+- **`receipt-not-smaller` 这条要照抄**：摘要没比原文小就不采用。**不为"压缩了"这个动作本身付费。**
+- **`uncertain` 要照抄**：允许摘要自陈不确定，并把这个事实**记进审计**。本项目反复强调"把不确定说成确定"是主要事故源（D49 夸大、D50 误报），这一条是同一原则在记忆层的落地。
+
+**支柱 C：记忆治理——大结果分页取回，而不是重发或摘要掉。**
+即 D52（修正版）：占位符替换 + `obs_recall` 按 `callId` 分页读回，**从会话日志读、不另存副本**（ADR-0001）。**它同时缓解 `runtime.ts:985` 的整轮失败**，且比压缩更强，因为原文可按页取回、无损。
+
+**支柱 D：记忆治理——压缩是有成本的，按经济性决定，并记录理由。**
+- SoL-Pi 把压缩当作**投资**：成本是 `writeTokens`+`memoTokens`+**prompt cache 失效的债务**，收益是后续每次请求省下的量，故须比较 `breakevenRequests` 与 `expectedRemainingRequests`。
+- 本项目现在**只有手动 `/compact`，没有"该不该压"的判定**。是否引入自动压缩须谨慎：**自动压缩会在操作员没要求时改掉他看到的上下文**，这与"移除边界须是可审计的显式决定"同源。**若引入，必须落审计、必须带 reason、必须在样本不足时保守**（`MINIMUM_VARIANCE_SAMPLES=3`、`SMALL_SAMPLE_SCALE=0.5`），并且**"无法判定"要是一个显式的 reason 而不是静默不压**。
+- **但本项目的口径不同，不可照抄**：SoL-Pi 全程用 token，而 `runtime.ts:138` 明写本项目**刻意不估算 token**、只用字节与 provider 自报的 `usage.inputTokens`。**故经济性判定必须建在这两个真实量上，不能引入 `len/4` 估算。**
+
+**不采用**
+
+1. **不采用 SoL-Pi 的独立归档文件**（见 D52 修正）——违反 ADR-0001。
+2. **不采用"归约模型"作为默认路径**——`evidence-preserving-reducer` 需要**额外一次模型调用**，而本项目本轮多次实测到免费网关会返回 HTTP 200 + 合法 JSON + **空 `tool_calls`**（额度耗尽），多一次调用就多一个失败点。**故支柱 B 应先做"验证"这一半（零额外调用），"委派归约"留作可选后续。**
+3. **不采用 token 口径的任何估算**（`estimateTokens`、`windowReserveTokens` 等）——与 `runtime.ts:138` 冲突。
+4. **不采用 Pi 的事件钩子形态**——无扩展宿主，内联在 `assembleContext`。
+5. **不采用自动压缩作为第一步**——先做 A/B/C（都不改操作员看到的上下文的"何时变短"这件事），D 的自动触发涉及"未经要求就改变上下文"，须单独一轮并落审计。
+
+**实施顺序建议**：**A（约束隔离）→ C（分页取回，即 D52 修正版）→ B（可验证压缩）→ D（压缩经济性）**。理由：A 是唯一**已存在的真实缺陷**（操作员的话会被摘要掉），且与刚做完的 D50/D26/D51 直接闭环；C 已有完整取证；B 依赖 C 的"原文可取回"才有意义；D 最大且最需谨慎。
+
+**未验证**：持久化 message 内容是否逐字（D52 已列为实现前必核）；`/compact` 的 `covers` 与支柱 A 注入点的相互作用；非 Windows；两个视频的实际内容（**取不到**）。
+
+### 抖音视频取证：全部路径已探到底，均不可行（D54，2026-09-29）
+
+**背景**：操作员要求参考两个抖音视频（见 D53）设计记忆系统，并因"是视频、无法复制字幕"而询问能否自动登录获取。**操作员在四个选项中明确选定"先只跑不需要 key 的部分"**，本轮即执行该选项并跑到边界。
+
+**未做任何自动登录，也未索要凭据**。三条理由：无凭据且不应代管操作员的平台密码；自动登录违反平台条款；把凭据引入 agent 可达范围与本项目既有约束直接冲突（`toolEnvironment` 只放行 PATH/SystemRoot/Windir/ComSpec/Pathext；密钥不得进转录/日志）。
+
+**逐条实测结果（全部为真实命令输出，非推断）**
+
+| # | 路径 | 实测结果 |
+|---|---|---|
+| 1 | `web_fetch` 抖音短链 | 被跨域重定向策略拒绝：`cross-origin redirect to https://www.iesdouyin.com is not followed automatically` |
+| 2 | `curl -I` 解析短链 | **成功**，无需登录。302 → `www.iesdouyin.com/share/video/<id>/`，取得视频 ID `7689090685382698099` 与 `7689040668966030633` |
+| 3 | 抓分享页（移动端 UA） | **反爬拦截**。两页字节数完全相同（32562），可见文本仅 43 字：**"抱歉出错了 请尝试在抖音内观看 打开抖音"**，页面含 `captcha`/`verify`，`_ROUTER_DATA.loaderData.video_layout` 为 `null`。**这是客户端指纹反爬，不是鉴权问题，登录也解决不了** |
+| 4 | 抓网页版 `www.douyin.com/video/<id>` | 返回 72914 字节，但 **`title` 为 `undefined`、可见文本 0 字** —— 纯 JS 壳，`curl` 拿不到渲染后数据 |
+| 5 | 本机转录能力 | **`yt-dlp`/`ffmpeg`/`ffprobe`/`python`/`python3`/`py`/`pip`/`whisper` 全部不存在**（`node`/`npm`/`npx`/`curl` 有）。**故即使取到视频文件也无法本地转录** |
+| 6 | `github.com/Panniantong/Agent-Reach`（上游，MIT，85829 star） | 目录树 `agent_reach/channels/` 为 bilibili/boss/exa_search/facebook/github/instagram/linkedin/mcporter/reddit/rss/twitter/v2ex/web/xiaohongshu/xiaoyuzhou/xueqiu/youtube —— **无 `douyin.py`**。且 `README.md`、`agent_reach/skill/SKILL.md`、`agent_reach/skill/references/video.md` 三份文件中 **`douyin`/`抖音` 命中 0 行**。**上游根本没有抖音能力** |
+| 7 | `skillhub.cn` 的 `@clawhub_neverchenx/agent-reach-en` v1.1.0 | 下载 zip 仅 6012 字节、**3 个 markdown 文件、无任何代码**（`SKILL.md` 10333 / `skill-card.md` 2550 / `_meta.json` 133）。其 `SKILL.md` 第 182–195 行确有 "### Douyin (mcporter + douyin-mcp-server)" 并给出 `parse_douyin_video_info`/`get_douyin_download_link`/`extract_douyin_text`，注明 "No login required to parse videos" 且转录 "requires SiliconFlow API Key"。**但这些在上游不存在**（见第 6 行）。`_meta.json` 的 `publishedAt` 换算为 2026-03-15，而其 Changelog 写 "v1.1.0 \| 2025-03-15" —— **年份差整一年** |
+| 8 | npm `douyin-mcp-server` v2.0.0（MIT） | 描述为 "Douyin MCP Server for automated **video uploads**" —— **能力方向相反**（上传而非解析），且 `repository` 缺失、无 `bin` |
+| 9 | npm `douyin-mcp` v0.2.13（MIT） | **纯转发壳**：唯一依赖 `mcp-remote@0.8.1`；README 原文 **"The business implementation is privately hosted"**；端点 `https://mcp.socialdatax.com/douyin/mcp`，**需 `Authorization: Bearer <SOCIALDATAX_API_KEY>`**，**积分计费**（`socialdatax_get_points_balance`）。工具仅 `douyin_search_videos`/`douyin_search_products`/`douyin_search_users` 与评论抓取 —— **无转录能力，也无第 7 行所说的那三个函数** |
+
+**结论**：**不存在"不需要 key"的抖音口播转录路径。** 不需要 key 的部分拿不到内容（第 3、4 行：反爬与 JS 空壳），能拿到内容的部分全都要付费 key（第 7 行的 SiliconFlow、第 9 行的 SocialDataX），**且第 7 行指名的工具经核实并不存在**。本机也无任何转录工具链（第 5 行）。**故 D53 无法从这两个视频取得一手内容，该状态维持不变。**
+
+**本轮采用的方法论教训（比结论更值得留下）**
+
+1. **技能市场的条目不是能力的证据，必须回上游核实。** 第 7 行那个再打包 skill 宣传了一项上游完全没有的能力（第 6 行 0 命中），并给出了看似可执行的命令。**若照它执行，会去装一个不存在的东西，或误装第 8/9 行那两个名字相近但能力不同的包。** 这与本项目反复强调的"调用底层函数不等于调用产品"（D50）、"未验证不得报为已验证"是同一条纪律在外部依赖上的版本。
+2. **名字相近的包能力可能完全相反。** `douyin-mcp-server` 是**上传**、`douyin-mcp` 是**付费转发壳**，二者都不提供解析/转录。**装前必须读 description 与 deps，不能只看包名。**
+3. **`license: MIT` 不等于"实现是开源的"。** 第 9 行是 MIT，但 MIT 覆盖的只是那个转发壳，**真正的实现在私有托管服务后面**。许可证只说明可复制的部分，不说明能力从哪来。
+4. **反爬与鉴权是两种不同的墙。** 第 3 行的 `captcha`/`verify` 是客户端指纹校验，**登录不解决**；把它误判为"需要登录"会导致去做一件既无效又有风险的事（索要凭据）。**先判断墙的性质，再决定要不要翻。**
+
+**明确拒绝（含从 `SKILL.md` 读到但绝不执行的内容）**
+
+- `agent-reach configure --from-browser chrome` —— 自动从本地浏览器提取 cookie（即上游 `cookie_extract.py`；上游为它专门配了 `test_cookie_security.py` 与 `test_cookie_extract_perms.py` 两个测试，正说明其敏感度）
+- `agent-reach install --env=auto` —— 会顺带安装 Node.js、mcporter、xreach、gh CLI、yt-dlp、feedparser 全套，**其中包含上述 cookie 提取器**
+- 小红书 `publish_content` / `publish_with_video` —— 让 agent **直接对外发帖**，该文档全文无任何审批门槛，与本项目"移除边界须是可审计的显式决定"根本冲突
+- `Camoufox — stealth Firefox, bypasses WeChat anti-bot` —— 反爬规避
+- `curl -s "https://r.jina.ai/URL"` / `s.jina.ai` —— 把任意目标 URL 交由**第三方代理**读取，内容会经过第三方
+- 其 "Workspace Rules" 要求写 `/tmp/` 与 `~/.agent-reach/` —— **与本项目守卫冲突**：本项目 fixture 规则恰恰相反（必须落在 `process.cwd()` 下，因为 `tmpdir()` 位于 `AppData\Local` 会触发 `UnsafeAgentHomeError`），且 **Windows 上没有 `/tmp/`**
+
+**本轮唯一实际安装物**：`mcporter`（经 `npx --yes`，落在 npm 缓存 `AppData\Local\npm-cache\_npx\`）。**用 `--config` 指向自建隔离配置**，因其帮助明写 `auto-loads servers from ./config/mcporter.json and editor imports (Cursor, Claude, Codex, etc.)` —— 不隔离就会顺手加载并启动本机各编辑器里已配置的、未经审读的 MCP server。隔离后 `mcporter list` 输出 `No MCP servers configured`，**证实隔离生效**。**本项目源码与测试零改动。**
+
+**本轮踩到的坑（记入以免重犯）**：`Out-File -Encoding utf8` 在 Windows PowerShell 下写入 **BOM**，导致 mcporter 的 JSON 解析器崩在 `offset 0: InvalidSymbol`。**必须用 `[System.IO.File]::WriteAllText` 配 `UTF8Encoding($false)`** —— 与本项目既有记录一致。另：`raw.githubusercontent.com` 本会话极不稳定（四次尝试三次失败/超时），而 `api.github.com` 稳定；**故外部取证一律走 api.github.com 的 contents 端点**（`Accept: application/vnd.github.raw+json` 可直接拿到明文，无需解 base64）。
+
+**仍可行的办法（须由操作员执行，我无法代做）**：把要点口述给我（无需逐字稿，几条论点即可）；或用手机系统级实时字幕（Android 无障碍"实时字幕" / iOS 16+ "实时字幕"）把口播转成文字后截图或复制；或在抖音 App 内查看该视频是否自带 CC 字幕并截图。**任一方式到手后，须另起一条记录并据此修订 D53。**
+
+### 三个视频文案：记忆分层 / 长任务五问 / 多轮执行端脱节（D55，2026-09-29，取证完成，尚未写代码）
+
+**⚠️ 更正（操作员质疑后核实，本条两处措辞有误，原文保留以存证）**
+
+操作员质疑两点：① 拒绝清单第 2 条的理由（"零模型调用是本项目的取向"、"免费网关不可靠"）；② 受限清单里"架构决定"的"架构"到底指什么。**核实后：第一问成立，我的拒绝理由是错的；第二问也成立，那句话是含糊其辞。**
+
+**更正一：拒绝清单第 2 条的理由错了，且结论应从"拒绝"改为"改位置"。**
+
+- **"零模型调用是本项目的取向"为假。** [runtime.ts](../src/runtime.ts) 第 1064 行注释原文：*"The summary is produced by a dedicated model call that is given **no tools**"* —— **`/compact` 本身就是一次专门的模型调用**。准确表述应窄得多：**权限判定层（`decide()`）零模型调用**。我把一个局部事实写成了全局取向。
+- **"免费网关不可靠"不得作为独立理由。** HTTP 200 + 合法 JSON + 空 `tool_calls`（额度耗尽）是**某一个网关当前状态的观测**，且该网关目前 DOWN（`ECONNREFUSED 127.0.0.1:8787`）。**操作员指出：那是他本地的项目、上面也是大模型** —— 若其本地网关稳定，这条论据即失效。**把对某个部署的观测当成对"调模型"的原则性否定，是错的。**
+- **但"模型判定不能充当约束边界"仍有四条不依赖网关可靠性的独立理由**：① **被检查的模型与产生计划的模型是同一个** —— 让模型自查即视频二自己批判的"靠大模型自觉"；② **模型判定双向出错**（漏判违规＝不安全；幻觉出违规＝挡住正常活）；③ **调用失败时只有 fail-open（不安全）与 fail-closed（不可用）两个选项，没有第三个**；④ 每轮多一次往返。
+- **故正确结论不是"拒绝模型校验"，而是限定它的权力**：**规则能表达的约束由代码强制（gate，这是边界）；规则表达不了的可以用模型检查，但模型的判定只能"升级为要求审批"，不能直接放行、也不能静默通过。** 这样模型的不确定性被夹在 default-deny 里 —— **最坏结果是多问操作员一次，而不是替操作员做决定**，且承载于既有 `approve` 决策、不需新通道。**视频一坑④原文"简单场景可以用规则替代模型校验"本身即此混合方案，我此前误读成二选一。**
+
+**更正二：受限清单第 1 条"副作用回滚做不了"说过头了。**
+
+准确说是 **"未实现，且有明确代价"**：做法是写前存旧内容（backup-before-write），代价是磁盘占用与保留策略的决定。**且它不违反 ADR-0001** —— 那条 ADR 反对的是"给**已存盘的会话记录**再造副本"，而文件系统快照性质不同（**原文件会被覆盖，没有别的副本**）。**把"没做"写成"做不了"，会让下一轮误以为此处有硬约束而不去评估。**
+
+**（D56 再更正：本条仍偏轻。** 它不是"未实现"，而是**早有具名方向在队列里** —— `SWARM_LOOP.md:242`：*"影子快照/选择性还原（opencode 机制，D25；可部分弥补'无沙箱＝无回滚'，只作用于文件工具，与现有边界同域）"*。**二者区别是：前者只需排期，后者听起来像要重新设计。详见 D56。）**
+
+**更正三："架构决定"须具体命名为三条已记录的决定，不得使用抽象词。**
+
+| 决定 | 可核对的硬事实 | 它挡住什么 |
+|---|---|---|
+| **零生产依赖** | [package.json](../package.json) **没有 `dependencies` 字段**，只有 devDependencies（`@types/node`、`typescript`） | 无嵌入库、无本地分词器、无本地模型 → **语义相似度判定（任务切换检测）做不了** |
+| **不估算，只测量** | 字节预算 + provider 自报 `usage.inputTokens`；`countPromptTokens` 是可选宿主钩子且 **"No tokenizer is bundled"**，启发式（字符数除常数）**被刻意排除**（第 146–149 行） | → **"参数补全错误率""任务切换准确率"这类需判定的指标无法离线算出** |
+| **强制力在代码不在模型** | `decide()` default-deny；`genePrompt` 注释原文 *"the selected strategy is context, **never a rule the model is trusted to obey**"*（第 1039–1040 行） | → 模型判定不能当边界（见更正一） |
+
+**并且必须明写：这三条是"选择"，不是物理定律。** 每一条都可由操作员重新决定。**其中"零生产依赖"是承重的那条** —— 一旦允许装第三方包，语义检测、本地分词、本地嵌入全部打开，但同时引入供应链与原生模块风险（与本项目反复强调的"路径限制 ≠ 沙箱"属同一类顾虑：多一个依赖就多一个不受我们控制的执行面）。**这个决定权在操作员，不在实现者。**
+
+**方法论教训（本项目第五次同类）**：D49 夸大 git 严重性、D50 探针假象、D51 钉错层、D53 诊断错 + 凭空记缺口、**本次把局部事实写成全局取向 + 把"没做"写成"做不了" + 用"架构"这种抽象词代替可核对的决定**。**前两类的共同点是"凭印象断言"，本次的共同点是"措辞比事实更硬"** —— 后者更隐蔽，因为它读起来像是谨慎的结论，实际是把一个可重新决定的选择说成了不可逾越的限制。**判据：凡是写"做不了/不可能/原则上不"，必须能指出是哪一条已记录的决定在挡，并说明该决定是否可由操作员改变。**
+
+**来源**：操作员手工提供三份完整转写文案，即 D53/D54 中记录为"无法访问"的那两个视频，外加第三个（多轮 Agent 面试场景）。**D54 的"取不到"结论依然成立**（那是指我无法自行获取），本条来源是**操作员人工转述**，故不含任何我对视频内容的推测。
+
+**广告剔除**（操作员要求分辨）：视频二"我是小哲点赞收藏加关注""想系统学习 agent 开发的同学可以查看橱窗哦"；视频三"只要是我粉丝，留下六六六，打包带走""必考题库""如果你想转行 AI 产品……留下学习，直接拿走"。**视频一无广告。以上全部剔除，不影响技术内容。**
+
+**转写稿同音错字按技术语义还原**（不改动原意）：纸袋丢失→**指代丢失**；教练→**校验**；a 阵→**Agent**；任务回一机制→**任务回滚机制**；对奇关→**对齐关**；合规观→**合规关**；论完成率→**轮完成率**；信息不足化→信息不足时；反复跳重→反复重复。
+
+**判定分四类**：**已有且更强**（不采纳，因为我们的版本更硬）/ **采用** / **拒绝**（附理由）/ **受限**（本项目架构决定，须如实标注、不得含糊承诺）。
+
+#### 视频一：记忆分层 + 规划校验
+
+| 机制 | 判定 | 依据 |
+|---|---|---|
+| 约束与闲聊**分开持久化**存储 | **采用** | 本项目无此物。`config.json`（D51）只承载**权限规则**（tool/decision），放不下散文式约束 |
+| 每轮**独立调模型抽取**硬性约束 | **拒绝（改为半自动）** | ①每轮多一次模型调用，而免费网关已多次实测返回 HTTP 200 + 合法 JSON + **空 `tool_calls`**（额度耗尽），多一次调用多一个失败点；②**模型抽取的约束若自动获得强制力＝模型给自己定权限**，与 D26/D50/D51 的核心结论直接冲突。**故抽取只能产出"待操作员确认的建议"，确认后才入注册表** |
+| 记忆分层（短时 / 持久约束 / 摘要） | **部分已有** | 短时＝`past`；摘要＝`/compact`（**只覆盖 tool 消息**）；完整转录永久在会话日志（ADR-0001）。**缺持久约束层** |
+| 前置加载：约束**固定追加到系统提示词最前端** | **采用（且已有现成先例）** | 压缩摘要就是以 **`role:"system"` 注入在消息列表最前**（`runtime.ts:1046-1055`）；`genePrompt` 已并入系统提示（第 1041 行）。**故不需要新机制，沿用同一形状** |
+| 后置校验：生成计划/工具调用后**独立校验，违反即拦截重规划** | **已有且更强** | `decide()` 是 default-deny 的规则表，在**工具执行前**拦截，且是**代码判定而非模型判定**；`when` 谓词**"抛错则拒绝，绝不放行"**。视频要靠模型校验（会漏），我们不会 |
+| 优势"不被闲聊稀释、不被轮次淹没" | **采用为设计目标** | 见 D53 更正：**这正是本项目的真实失效模式**（位置稀释），而我原先误判为"被摘要删除" |
+| 优势"节省上下文窗口" | **采用（严重度更高）** | 本项目超 `maxContextBytes` 是**整轮拒绝**而非截断（`runtime.ts:114-117`），**故膨胀＝不可用，不是＝变贵** |
+| 优势"约束可增删可查询、用户随时修改取消" | **采用** | 注册表须支持增删改查与失效标记 |
+| 坑①抽取不准（需 Few-shot 优化 Prompt） | **拒绝其解法，采纳其问题** | 我们的解法更彻底：**不自动抽取即无不准确** —— 强制约束由操作员写，模型抽取只作建议 |
+| 坑②约束冲突（优先级、过期标记、旧约束自动失效） | **部分已有 + 采用缺口** | **已有且更强**：`RULE_TIERS` 五层，**高层永远压过低层，无论 priority**；`priority` 钳制 0..999 故**永远跨不过层**（D51 实测过：钉错层会让 `priority:999` 压过 read-only 的 `deny-writes`，**意外造出自我提权**）。**缺：过期标记与自动失效** —— 真实缺口，采用 |
+| 坑③记忆膨胀（动态筛选，只加载当前任务相关约束） | **采用（且必须）** | 规则表**本来就按 `tool` 索引**，天然即动态筛选；但散文约束注册表须自己实现"只加载相关"，否则撞字节上限即整轮失败。**筛选判定不可用模型**（又一次调用），用工具名/任务域匹配 |
+| 坑④校验开销（简单场景用规则替代模型） | **已做到极致** | 本项目**全部校验都是规则，零模型调用** |
+| 坑⑤隐性约束识别难，需业务规则库 | **已有对应物** | `tiers.ts` 的姿态（read-only / 中间档 / full-access）就是业务规则库；`denyAllWrites` 在 USER 层 priority 800 用 `tool:"*"` 兜底 |
+
+#### 视频二：长任务失控五问
+
+| 机制 | 判定 | 依据 |
+|---|---|---|
+| 三层能力：任务规划层 / 状态跟踪层 / 目标对齐层 | **状态跟踪层已有；规划层与对齐层无** | 状态跟踪：会话日志逐字（ADR-0001）+ `usage` 事件 + audit 事件流。**规划层与对齐层对应 `IMPLEMENTATION.md` 已记的"先 TaskSpec"** —— 本来就是队列下一项 |
+| 分层拆解 + 边界锁死（每层明确输入输出与完成标准，**交付物写死**） | **采用** | TaskSpec 的设计要求 |
+| 依赖校验（有前置条件的步骤不能提前执行） | **采用** | TaskSpec 需要 |
+| 动态重规划（工具失败/信息不足允许调整后续步骤） | **采用，但必须落审计** | 本项目原则：改变计划是可审计事件 |
+| **任务回滚机制**（回到上一稳定节点重试，而非推倒重来） | **受限采用（须区分两种回滚）** | **计划层回滚可做**（回到上一步重新规划）；**副作用回滚做不了** —— 本项目无快照/事务，文件写操作不可自动撤销。**这个区别必须写死，不能含糊承诺"支持回滚"** |
+| 目标锚定（持久化原始目标，每轮执行前对齐校验） | **采用（判定方式受限）** | 原始目标＝首条 user 消息，会话日志已有。**但"是否偏离目标"的判定：用模型则每轮多一次调用（不可靠），用规则则难以表达** —— 真实取舍点 |
+| 步骤校验（是否重复执行 / 超出边界 / 擅自新增需求） | **部分可做** | "是否重复执行"与视频三的执行缓存同源；D52 修正版 `obs_recall`（按 `callId` 分页读回）正是"结果沉淀 + 复用"的载体 |
+| **关键节点自省**（不是每轮，而是子任务完成/工具失败/结果异常时触发） | **采用** | "不是每轮而是关键节点"直接呼应坑④，与本项目零额外模型调用的取向一致 |
+| 进度熔断（最大步骤数 / 最大工具调用次数 / 最大执行时长） | **已有且更强** | 见 D53 更正错误二：三类全有（`maxSteps`→`StepLimitError`、`maxToolCallsPerStep`/`PerRun`→`ToolBudgetError`、`deadlineMs`），**另多令牌、上下文、写入三类预算** + `formatBudget` 渲染 |
+| 工具注册表 + 参数校验（非法参数直接拦截） | **已有且更强** | `ToolRegistry` **双向**强制缺席（注册了才存在、没注册就 unknown tool，**两个方向都测过**）；`write-tools.ts` 是"offered"与"allowed"的**单一真相来源**（因为真出过两者不一致、模型收到 unknown tool 的事故） |
+| 调用结果沉淀（结构化沉淀进工作记忆，相同需求直接复用） | **已有载体，缺复用判定** | 完整结果逐字在会话日志（ADR-0001），**不需要新存储**；D52 修正版提供取回。**缺的是"相同需求"的判定** |
+| 失败降级（重试→换替代工具→简化参数；非核心步骤允许跳过） | **受限采用** | **"换替代工具"若绕过规则表就是提权** —— `decide()` default-deny，降级只能在**已允许的工具集合内**进行且必须落审计；"跳过非核心步骤"须由 TaskSpec **显式标记**哪些非核心，**不能让模型自行决定跳过** |
+| **血泪坑：不能让 agent 自己判断要不要调用工具，要把"什么场景用什么工具"写进规则** | **完全认同，已用更强形式做到** | 规则表 + 姿态（tiers）就是"什么场景允许什么工具"，**不是模型自觉**。与视频二金句*"好的长任务 Agent 靠的不是大模型自觉，而是用机制把它框在正确轨迹里"*同源 |
+| 闭环验证三道关（目标对齐 / 过程合规 / 结果质量） | **过程合规关有真材料；另两关无** | audit 事件流带 `tool`/`decision`/`reason`/`rule`。**目标对齐关与结果质量关缺失** |
+| 任务复盘（跑偏/失败/超时沉淀成案例，反哺规则；"可观测、可度量、可迭代"） | **采用（注意区分）** | 我的开发环境有 `swarm_reflect`/`swarm_distill`（重复失败→蒸馏成 guard gene），**但那是开发环境的机制、不是产品的机制** —— 产品需要自己的复盘 |
+
+#### 视频三：多轮任务的执行端脱节（三个里最有价值）
+
+核心洞察：**"拼接历史对话根本解决不了执行端的问题"**、**"大模型懂了，执行端没懂"**。
+
+| 机制 | 判定 | 依据 |
+|---|---|---|
+| 核心洞察本身 | **对本项目完全成立** | 本项目工具参数**完全由模型当轮输出决定**，没有"结合任务状态补全"这一层。且超字节上限是整轮拒绝而非截断，**所以我们连"拼接历史"都比视频描述的更保守** |
+| 根源①指代丢失（"它""第二个""上次那个"→参数空/噪声） | **真实存在，未解决** | 同上 |
+| 根源②参数补全错误（搞错指代、漏关键约束） | **真实存在，未解决** | — |
+| 根源③上下文冲突（用户中途改条件，系统沿用旧状态） | **目前不会犯，但属"因为没有所以不会错"** | 本项目**无持久任务状态**，故无旧状态可沿用。**一旦引入 TaskSpec，此坑立刻出现** —— 必须提前设计，不能等踩 |
+| 根源④状态信息冗余 | 同视频一坑③ | — |
+| 根源⑤性能成本失控（延迟与 token 随轮次线性上涨） | **严重度高于视频描述** | 本项目**确实线性上涨**，且超限**直接整轮失败** —— 不是"成本飙升"而是**不可用**。故 D52 修正版（大结果分页）+ `/compact` 是**刚需而非优化** |
+| 状态管理层（任务域/关键实体/意图轨迹/已执行工具结果；**更新状态而非追加聊天文本**） | **采用（TaskSpec 核心）** | 本项目无。**"更新而非追加"这一句是关键设计约束** |
+| 工具调用层（调用前结合任务状态**补全为完整参数**；补全后做**可信度校验**，低则向用户澄清、不强行调用） | **采用（最值得）** | **"宁可多问一句，不要胡乱调用"与 `decide()` default-deny 同源**。本项目已有审批机制（`approve` 决策）**可承载"向用户澄清"，不需要新通道** |
+| 生成端上下文层（只放最近 2~3 轮 + 工具结果；更早的压缩成**任务事实摘要放到系统提示词**） | **部分已有 + 采用其位置选择** | `/compact` 摘要**已经是 `role:"system"` 且在最前**（`runtime.ts:1046-1055`）——**位置选择与视频一致，我们已做对**。**但触发是手动的**，且覆盖范围只含 tool 消息 |
+| 执行缓存层（同任务域 + 实体未变→复用上一轮结果；切换任务/实体变化才重新调用） | **采用（与 D52 修正版合流）** | 载体已有（会话日志 + `obs_recall`），**缺的是"同一任务域 / 实体未变"的判定** |
+| 任务切换检测（语义相似度判定新任务→清空旧状态） | **受限** | 需模型或嵌入；**本项目零生产依赖、无嵌入能力**，只能用规则或**显式命令**。**诚实标注为受限，不假装有语义检测** |
+| 用户否定（"不是这个，重新来"）→立刻回退上一轮任务状态 | **受限** | 同视频二"任务回滚"：计划层可回退，**副作用不可回滚** |
+| 最大轮次 + 超时**自动重置会话** | **前半已有；后半拒绝** | `maxSteps`/`deadlineMs` 已有。**"超时自动重置会话"须拒绝**：本项目会话日志是**审计载体**，自动清空会毁掉证据 —— **应终止而非重置** |
+| 监控指标（轮完成率/参数补全错误率/任务切换准确率/单轮工具调用成本） | **部分可算** | `usage` 事件（provider 自报 `inputTokens`）+ audit 流可算出一部分。**但"参数补全错误率""任务切换准确率"需要判定，本项目刻意不估算 token、也无嵌入，故无法离线计算，除非在执行时落审计** |
+
+#### 汇总
+
+**采用（按优先级）**
+
+1. **持久约束注册表 + 每轮前置注入**（视频一；即 D53 支柱 A）—— 用 `role:"system"` 注入在消息列表最前，沿用压缩摘要的现成形状；**注入文本是上下文不是保证，强制力在规则表**（`genePrompt` 注释已确立此态度）
+2. **工具调用前的参数补全 + 可信度校验，低则澄清不强行调用**（视频三）—— 承载于既有 `approve` 决策，不需新通道
+3. **任务状态层：更新而非追加**（视频三）—— TaskSpec 核心
+4. **执行缓存 / 结果复用的判定**（视频二 + 三合流）—— 载体已有（D52 修正版）
+5. **约束过期标记与自动失效**（视频一坑②）—— 真实缺口
+6. **关键节点自省而非每轮自省**（视频二）
+7. **目标对齐关与结果质量关的闭环验证**（视频二第五问）—— 过程合规关已有材料
+
+**拒绝（附理由）**
+
+1. **模型自动抽取的约束直接获得强制力** —— 等于模型给自己定权限，与 D26/D50/D51 冲突。**抽取只能产出待操作员确认的建议**
+2. **每轮独立调模型做约束校验** —— 本项目全部校验都是规则、零模型调用；且免费网关已实测不可靠
+3. **用 `len/4` 之类启发式估算 token** —— `runtime.ts:146-149` 明写刻意排除，理由是"两个方向都可能错的估算会把诚实的『尚未测量』换成看起来很自信的数字"
+4. **"失败降级可换替代工具"不受限** —— 绕过规则表即提权；只能在已允许集合内且落审计
+5. **"非核心步骤允许直接跳过"由模型自行判断** —— 须由 TaskSpec 显式标记
+6. **超时自动重置会话** —— 会话日志是审计载体，自动清空毁证据；**应终止而非重置**
+7. **语义相似度做任务切换检测** —— 零依赖、无嵌入，只能用规则或显式命令
+
+**受限（架构决定，须如实标注）**
+
+1. **副作用回滚做不了** —— 无快照/事务；只有计划层回滚
+2. **目标对齐判定无廉价方案** —— 模型判定要多一次调用，规则判定难表达"偏离"
+3. **任务切换检测无语义能力** —— 只能规则 / 显式命令
+4. **部分监控指标无法离线计算** —— 除非执行时落审计
+
+**未验证**：TaskSpec 的具体形状（尚未设计）；持久约束注册表的存储位置与格式（**须复用 D50 的按位置封死结论，不可被 agent 自写**）；"可信度校验"的判定依据（规则还是模型，待定）；约束过期标记的触发条件；支柱 A 注入点与 `covers` 的相互作用。
+
+### 三条具名决定：各自削弱什么、增强什么、该不该重议（D56，2026-09-29，无代码）
+
+**⚠️ 更正（D57 取证后）：本条对 ① 的判定过重，两处断言有误，原文保留以存证**
+
+操作员批准就"要不要放开 ①"取证后（见 **D57**），核实结果推翻了本条两处断言：
+
+**错误一："① 堵住 ② 的逃生口"——不成立。** 实读 [cli.ts](../src/cli.ts) 第 180–204 行发现 **`PERSONAL_AGENT_TOKENIZER` 是已完整实现并接线到四处的机制**（帮助文本 `:59`、构造 `:189-204`、传入运行时 `:243-244`→`:394`、进预检 `preflight.ts:319`、进预算行 `runtime.ts:372-373`），它是一个**外部命令钩子**（`spawnSync` 读 stdin 的 prompt JSON、stdout 打印整数），**与 `package.json` 无关**。**故精确 token 预判今天就能获得，零依赖、零代码改动。** 我把它写成"被 ① 堵住"，是因为**只读了 `runtime.ts` 的选项声明与 D08 的决策行，没有去读 `cli.ts` 里的实现** —— 又一次"凭印象断言"。
+
+**错误二："会话历史无法按内容索引"——不成立。** 本机 Node **v24.19.0** 实测 `require("node:sqlite")` **直接可加载**（导出 `DatabaseSync, StatementSync, Session, constants, backup`，建表 / 插入中文 / 条件查询 / 排序全部成功），而 `engines` 为 `node >= 22.6`、`node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖，同样零依赖**。
+
+**因此本条对 ① 的判定应从"值得重议"降级为"已重议、结论是不放开"**，理由不是原则而是交易：**D56 列的五项"被 ① 挡住的能力"里，两项已有零依赖解法（其中一项已实现）、一项当前队列不需要，只有嵌入与 pty 真的被挡住 —— 而那两项恰好都是中间路也救不了的**（`onnxruntime-node@1.30.0` 解包 **287.12 MB** + `postinstall="node ./script/install"`；`node-pty@1.1.0` 解包 **61.38 MB** + deps 含 `node-addon-api` + `install="node scripts/prebuild.js || node-gyp rebuild"`）。
+
+**仍然成立的部分**（未被推翻）：① 增强可核验性与供应链安全；pty 缺失导致真实终端观感永久未验证（`VALIDATION.md:218` / `LIVE_INTEGRATION.md:72`）；"不是做不到而是交易不好"的判例措辞（`:655`）；② 拒绝的是**估算**而非**测量**；③ 削弱的不是能力而是**自主性**，且不该重议（第二自报通道铁律 `STATUS.md:101`）。
+
+**方法论教训（本项目第六次同类，形态与第五次相同）**：D49 夸大 git 严重性、D50 探针假象、D51 钉错层、D53 诊断错 + 凭空记缺口、D55 措辞比事实更硬、**本次 D56 凭选项声明与决策行断言"逃生口被堵住"而未读实现**。**D55 立的新判据本可拦住它** —— 我写了"做不了"却没有指出是哪一条已记录的决定在挡，**因为并没有那样的决定，是我自己想象的**。**故判据须加一条：凡断言某能力"被 X 挡住"，必须指出 X 的具体位置（file:line 或依赖事实），不得指向一条抽象原则。**
+
+**触发**：操作员追问 D55 更正三列出的三条决定 —— **"我想知道的是增强还是削弱 agent 能力？如果是增强有什么不做的理由，如果是削弱，削弱了什么？"**
+
+**这个问题本身纠正了一个措辞习惯**：把三条笼统称作"安全取舍"是错的，**它们性质完全不同** —— 一条削弱能力、一条几乎不削弱、一条削弱的不是能力而是自主性。**下面每条的"削弱/增强"都必须有出处，凡无出处的一律不写**，因为本轮最大的风险正是"把取舍说得比证据更整齐"。
+
+**本项目已有准确的判例措辞**（[:655](#) D26）：*"不采用 Windows 受限令牌方案的理由**不是做不到，而是交易不好**"*。**三条都应套用这个句式：不是"做不到"，是"交易如何"。**
+
+#### ① 零生产依赖 —— **削弱能力，增强可核验性；是一笔交易，不是白赚**
+
+**削弱了什么（逐条有出处）**
+
+| 削弱项 | 出处 / 事实 |
+|---|---|
+| **真实终端行为永久无法验证** | `VALIDATION.md:218`、`LIVE_INTEGRATION.md:72` 原文：*"Node 无内置 pty，本项目也不为此引入第三方依赖；因此终端行为只能由注入式 IO 覆盖，真实观感留给操作者"* ⇒ **"Ctrl+C 取消观感、密钥输入隐藏观感"属未验证** |
+| **语义相似度判定做不了** | 无嵌入库 ⇒ 视频三的"任务切换检测"只能用规则或显式命令（D55 受限第 3 条） |
+| **发送前无法预测 token 溢出** | 无本地分词器 ⇒ 详见 ②，**这是 ① 堵住 ② 逃生口的地方** |
+| **读不了二进制文档** | 无 docx/pdf/xlsx 解析库 |
+| **会话历史无法按内容索引查询** | 无 SQLite 之类；日志是 append-only JSONL ⇒ "找出上次类似失败"做不到（视频二"任务复盘"因此受限） |
+
+**增强了什么（同样具体）**
+
+| 增强项 | 为什么对本项目尤其要紧 |
+|---|---|
+| **没有 `node_modules` 就没有 postinstall 脚本** | 无 typosquatting、无传递依赖被投毒。**本项目明确无沙箱**，agent 宿主进程权限＝用户权限，故供应链投毒直接等于本机任意代码执行 |
+| **整个产品是可读完的源码** | 每个行为都能指到某一行我们写的代码。**本项目五次自我更正全部靠"实读源码"抓出来**（D49/D50/D51/D53/D55），这个能力的前提就是代码量与依赖量都在人能读完的范围 |
+| **无原生模块 / 平台风险** | 不会有 Windows 预编译失败、Node ABI 不匹配 |
+
+**"不放开"的理由是逐案的成本收益，不是教条** —— 项目内已有三处判例：`:100` *"本项目至今零生产依赖，为一个可绕开的问题引入需编译的原生依赖不划算"*；`:262` 拒绝把 SoL-Pi 作为依赖 import（*"引入即同时打破两条既有不变量"*）；`:312` 拒绝 `typebox`。
+
+**且它不必是全有全无。中间路**：允许**纯 JS、无 install 脚本、版本钉死、vendored 进仓库**的依赖 —— 拿到分词器/嵌入，而不引入 `npm install` 执行任意代码的风险。**关键认识：真正的风险不是"有依赖"，而是"`npm install` 会执行任意代码"。** 把这两件事分开，中间路就存在。
+
+**判定：值得重议，且是唯一值得单独重议的一条。** 放开它立刻买到三样与当前队列直接相关的东西：**(a) 真分词器 → 溢出从"整轮失败"变成"及时压缩"**（D55 已核实：超 `maxContextBytes` 是整轮拒绝而非截断，而压缩只能覆盖 tool 消息 ⇒ **对话密集的会话最终会走到不可用**，这正是采用清单第 1 项被列为刚需的原因）；**(b) 嵌入 → 任务切换检测**；**(c) pty → 关掉"真实终端观感永久未验证"这笔挂账**。
+
+#### ② 不估算只测量 —— **几乎不削弱，反而防住一类对本项目特别严重的错误**
+
+**削弱了什么**：**发送前无法预测 token 溢出**。`maxContextTokens` 由 provider 自报的 `usage.inputTokens` 强制，故 `runtime.ts:124-127` 自己诚实写明两个后果：**一轮的首次调用尚无测量**（只受字节上限约束）、**只能晚一轮叫停**。
+
+**防住了什么**：`runtime.ts:146-149` 刻意排除启发式（字符数除常数）的理由原文 —— *"an estimate that is wrong in either direction would silently replace the honest 'not measured yet' state with a confident-looking number"*。**而本项目内容以中文为主**：UTF-8 下一个汉字 3 字节，`chars/4` 类估算对 CJK **系统性偏离** ⇒ **同一个字节上限对中文与英文同时"过松"和"过紧"**。这不是假想风险，是本项目实际内容形状下的必然。
+
+**关键区分：本项目拒绝的是"估算"，不是"测量"。** 逃生口**已经实现**：`countPromptTokens` 是宿主注入钩子，另有环境变量 `PERSONAL_AGENT_TOKENIZER`；**D08（`:624`）已写明退出条件原文："决定随发行版绑定某个分词器依赖时"**。
+
+**⇒ ② 的解法就是 ①。两条不独立，① 是承重的那条**（印证 D55 更正三的判断）。**故 ② 不必单独重议。**
+
+#### ③ 强制力在代码不在模型 —— **削弱的不是能力也不是表达力，是自主性**
+
+**削弱了什么**
+
+| 削弱项 | 出处 |
+|---|---|
+| **agent 的自主性 —— 会多问操作员** | 规则表达不了的模糊约束，最终落到"问你"而非"它自己判断"。D55 更正一已确立：**模型判定并未被禁用，只是判决不能"放行"、只能"升级为要求审批"** |
+| **配置有一处真实的表达力缺口** | D51 已如实记录：`config.json` **无法表达"只放行 `git status`"** 这类按参数内容的规则，因为 `Rule.when` 是函数，从 JSON 造函数只有 `eval`/`new Function`，**等于配置文件即代码执行面** |
+
+**增强了什么**：**闸门是确定性的、可测试的、不能被说服**。模型判定会被提示注入劝走、会漂移、无法穷尽单测；代码判定可以**变异测试** —— 本项目这个 span 做了 3 次（agent-home 写入测试、配置层号、审计守卫），**每次都临时移除保护、确认测试变红**，证明测试非空转。
+
+**为什么不该反过来（让模型当闸门）**：项目里有一条更根本的铁律 —— `STATUS.md:101`（D26）**"第二自报通道"**定义：*"另一个模型说这轮成功/批准"和"干活的模型自报成功"**结构上是同一个东西**，都不得采信；系统可信来源只有机械事实"*，且它是 D14/D15/D19 的共同依据（D19 尤其：参考实现里评审者准确率是拿"最终是否真的整合成功"回头校准的，而**本项目尚无验证执行器**，故模型评审者会是**"一个永远无法知道准不准的裁判"**）。**让模型当约束闸门＝开第二自报通道。**
+
+**判定：不该重议。** 但**其自主性代价应被明说**，因为它会随采用清单第 1、2 项落地而变大（更多约束 → 更多"升级为审批"）。
+
+#### 汇总
+
+| | 削弱什么 | 增强什么 | 该不该重议 |
+|---|---|---|---|
+| **① 零生产依赖** | **能力**（pty / 嵌入 / 分词 / 文档解析 / 历史索引） | 可核验性 + 供应链 | **值得**，且可走中间路（纯 JS、无 install 脚本、钉版本、vendored） |
+| **② 不估算只测量** | 溢出预测（只能晚一轮叫停） | 防住"看起来很自信的错数字"，对中文内容尤其要紧 | **不必单独重议** —— 解法就是 ①，D08 已写明退出条件 |
+| **③ 强制力在代码** | **自主性**（多问操作员）+ 配置无法按参数内容匹配 | 闸门确定性、可变异测试、不可被说服 | **不该** —— 反过来即违反"第二自报通道"铁律 |
+
+**一句话回答操作员的问题**：**三条里只有 ① 是真正拿能力换东西的**，而且换到的是**可核验性与供应链安全**；**② 几乎没换掉什么**（它拒绝的是猜测，不是测量，逃生口已实现）；**③ 换掉的不是能力而是自主性**（agent 会多问你，但不会悄悄多做）。**若要放开，只放开 ①，且走中间路。**
+
+**顺带更正上一轮（D55 更正二仍偏轻）**：我曾把副作用回滚记为"未实现，且有明确代价"。**核实后发现它早有具名方向**：`SWARM_LOOP.md:242` 原文 *"不依赖 M3、且仍有价值的方向：④**影子快照/选择性还原**（opencode 机制，D25；**可部分弥补'无沙箱＝无回滚'**，只作用于文件工具，与现有边界同域）"*。**故应记为"已有具名机制在队列里、尚未实现"，而不是"未实现"** —— 二者的区别是：前者只需排期，后者听起来像要重新设计。**这本身又是一次"措辞比事实更硬"**（本项目第五次同类错误的同一形态，见 D55 更正块的新判据）。
+
+**未验证**：中间路（vendored 纯 JS 依赖）的实际可行性与体积代价；pty 引入后真实终端观感能否被自动化验证（**可能仍只能人工观察**）；嵌入模型的本地体积与首次加载延迟；`PERSONAL_AGENT_TOKENIZER` 的注入形状是否足以承载一个真分词器（**尚未实测**）。**以上任一若被操作员批准重议，须另起一轮取证，不得凭本条直接动手。**
+
+### 要不要放开"零生产依赖"：取证结论是**不放开**（D57，2026-09-29，实测，无代码）
+
+**触发**：操作员批准就 D56 汇总里"若要放开只放开 ①"做取证。**结论与 D56 的预判相反**：
+
+> **不放开。理由不是"依赖危险"，而是"要买的东西大部分已经免费有了，剩下买不到的中间路也买不到"。**
+
+**这是本轮最重要的发现形态：取证**关掉**了一个问题，而不是打开它。**
+
+#### 一、D56 列的五项"被 ① 挡住的能力"，逐项核实
+
+| D56 的声称 | 取证结果 | 硬证据 |
+|---|---|---|
+| 发送前无法预测 token 溢出 | **不成立** —— **零依赖、零改动，今天就能用** | [cli.ts](../src/cli.ts) 第 180–204 行 `tokenizerCounter`（详见下节） |
+| 会话历史无法按内容索引查询 | **不成立** —— Node 内置 `node:sqlite` 即可 | 本机 Node **v24.19.0** 实测：`require("node:sqlite")` 可加载，导出 `DatabaseSync, StatementSync, Session, constants, backup`；建表 / 插入中文 / 条件查询 / 排序**全部成功**。`package.json` 的 `engines` 为 `node >= 22.6`，而 `node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖** |
+| 语义相似度做不了（任务切换检测） | **成立**，但有零依赖替代 | 真要语义嵌入须 `@huggingface/transformers@4.3.0`（Apache-2.0，自身 9.43 MB，无安装钩子），**但其 deps 含 `sharp`（原生图像库）与 `onnxruntime-node`**；`onnxruntime-node@1.30.0` **解包 287.12 MB、`postinstall="node ./script/install"`、`os` 限定 win32/darwin/linux**，另需运行时下载模型文件 |
+| 真实终端观感无法验证（pty） | **成立，且中间路走不通** | `node-pty@1.1.0`（MIT）**解包 61.38 MB**，deps 含 **`node-addon-api`（原生插件）**，**三个安装钩子**：`install="node scripts/prebuild.js \|\| node-gyp rebuild"`、`postinstall="node scripts/post-install.js"`、`prepare="npm run build"` ⇒ **需 node-gyp 编译兜底，且安装即执行代码** |
+| 读不了二进制文档 | 成立，但**当前队列不需要** | `inspect_file`（D41/D44）已覆盖 `file_type`/`headers`/`hex_dump`/`hash`/`strings`/`certutil_dump`，真机实测读出过 PE32+ / AMD64 / 字节数 / Node 版本 / Authenticode 签名者 |
+
+**⇒ 五项里两项已有零依赖解法（其中一项已实现）、一项当前不需要，只有嵌入与 pty 真的被挡住 —— 而那两项恰好都是**中间路也救不了**的（都要原生模块）。**
+
+#### 二、`PERSONAL_AGENT_TOKENIZER` 是已建成的机制，不是预留钩子（更正 D56）
+
+D56 曾断言"② 的逃生口被 ① 堵着"。**实读源码后：错。** 该机制**已完整实现并接线到四处**：
+
+| 位置 | 事实 |
+|---|---|
+| `cli.ts:59` | 帮助文本已写明用法：*"精确预判（可选，不内置分词器）：`PERSONAL_AGENT_TOKENIZER='<命令>'`，读 stdin 的 prompt JSON，向 stdout 打印单个非负整数"* |
+| `cli.ts:189-204` | `tokenizerCounter(env)` 返回 `(messages)=>number`；`spawnSync(command,{shell:true,input:JSON.stringify(messages),encoding:"utf8",timeout,windowsHide:true})` |
+| 同上，三处硬报错 | `result.error` → 抛；`status!==0` → 抛（带 stderr 前 200 字）；输出不匹配 `/^\d+$/` → 抛（带实际输出前 60 字）。**注释原文**：*"a command that fails, times out, or prints a non-count is a hard error: falling back to a guess would turn 'I could not measure' into 'I measured', **which is the one outcome worse than having no tokenizer at all**"* |
+| `cli.ts:192-195` | 超时默认 **5000ms**，可由 `PERSONAL_AGENT_TOKENIZER_TIMEOUT_MS` 配置；非正安全整数即 `UsageError` |
+| `cli.ts:243-244` → `:394` | 构造后传入 `AgentRuntime` 的 `countPromptTokens` |
+| `preflight.ts:319` | **进预检** —— 操作员能在跑之前发现分词器命令不可用 |
+| `runtime.ts:989-992` | 每次 prompt 构建调用，并**再校验一次**返回值必须是非负整数 |
+| `runtime.ts:341,372-373,863` | `predictedTokens` 进 `RunBudget`，**进预算行渲染**（`counted = predictedTokens ?? measured`，basis 标 `(本机)`），并进 `usage` 事件 |
+
+**故：精确预判今天即可获得，`package.json` 一个字节都不用改。** 代价是**每次 prompt 构建一次阻塞 `spawnSync`**（默认最多 5 秒）。相对一次模型调用（秒级）可接受，但**须如实记为代价**。
+
+**未验证**：本条全部为**源码实读**，**尚未真机跑过一个真的分词器命令**（本机无 python/tiktoken；且免费网关仍 DOWN）。**故"今天就能用"是就接线完整性而言，不是就已端到端实测而言。** 若要采用，第一步是拿一个真命令跑通并观察预算行是否出现 `(本机)`。
+
+#### 三、中间路（vendored 纯 JS）唯一真能买到的东西，已被免费方案覆盖
+
+纯 JS 分词器**确实符合**中间路条件（纯 JS、无原生、消费者安装不执行钩子）：
+
+| 包 | 版本 | 许可 | 解包体积 | deps | 安装钩子 |
+|---|---|---|---|---|---|
+| `gpt-tokenizer` | 4.0.0 | MIT | **25.95 MB** | **0** | `prepare="husky"`（dev 钩子，**消费者安装不执行**） |
+| `js-tiktoken` | 1.0.21 | MIT | **21.39 MB** | 1（`base64-js`，纯 JS） | **无** |
+
+**但体积是决定性的**：21–26 MB 全是 BPE 词表数据。**为省掉一次 `spawnSync` 而往仓库 vendored 21–26 MB 不可读的数据文件，交易明显不好** —— 而且第二节已证明外部命令钩子免费做到了同一件事，还顺带把"分词器版本随发行版绑定"这个问题推给了操作员（D08 的退出条件原文正是 *"决定随发行版绑定某个分词器依赖时"*，**即这个决定本来就该由操作员在有真实需要时做**）。
+
+**（数据以 2026-09-29 npm registry 实查为准；体积为 registry 报的 `dist.unpackedSize`。）**
+
+#### 四、零依赖替代方案（本轮真正的产出）
+
+| 需求 | 零依赖做法 | 代价 |
+|---|---|---|
+| **精确 token 预判** | `PERSONAL_AGENT_TOKENIZER` 指向操作员自备命令（已实现） | 每次 prompt 构建一次阻塞 `spawnSync` |
+| **历史按内容索引** | `node:sqlite`（Node 内置，本机实测可用） | 需决定索引与会话日志的关系：**索引是派生物，日志仍是唯一真相来源**（ADR-0001 不容违背）；索引损坏须可重建而非报错 |
+| **任务切换检测** | ① 词法相似度（词面重叠/Jaccard）；② 显式命令（操作员说"新任务"）；③ **升级为审批**（拿不准就问） | **词法≠语义**，须如实标注为词法；③ 最符合 default-deny，但会多问 |
+| **大结果不重发** | D52 修正版 `obs_recall`（从会话日志按 `callId` 分页读回） | 无新增依赖、无新增文件 |
+| **真实终端观感** | **只能人工观察** —— `LIVE_INTEGRATION.md` 现有做法（runbook + 操作员实跑） | 无法自动化；引入 `node-pty` 才能自动化，代价见第一节 |
+
+#### 五、附带核实的一处安全观察（结论：不是洞，但必须记）
+
+`cli.ts:197` 是**全项目唯一**用 `shell:true` 执行**可配置字符串**的地方，而本项目别处刻意避开 shell —— `inspect_file`（D41）用 `spawn` + `shell:false` + argv 数组，使 `&&`/`|`/`;`/`>`/`$()` **不是被过滤而是写不出来**。
+
+**评估：不构成提权。** 该值来自 **CLI 自己读的 `process.env`，不经过模型**；`toolEnvironment` 白名单限制的是**工具**能看到的环境变量，与此无关；**能改这个环境变量的人本来就能改整个进程**（他同样能改 `PATH`）。
+
+**但须记录，因为它是"结构性安全"叙事里的一个例外点**：本项目多处宣称"不靠检测靠结构"，而这一处确实是"靠来源可信"。**若将来有任何路径能让模型影响进程环境（例如某个工具被允许写环境变量），这一处就会从例外变成洞。** 故记为**待守的不变量**：`PERSONAL_AGENT_TOKENIZER` 必须始终只来自 CLI 启动时的环境，**永不来自工具参数、配置文件或会话状态**。
+
+#### 六、结论与建议
+
+1. **不放开 ①（零生产依赖）。** 理由不是原则，是交易：要买的五项里两项已免费、一项不需要，剩两项（嵌入 287 MB 原生 + postinstall、pty 61 MB 原生 + node-gyp）**中间路也买不到**。
+2. **D56 的"值得重议"应降级为"已重议、结论是不放开"**，且**"① 堵住 ② 逃生口"是错的**（见第二节）。
+3. **若将来真要重议，触发条件应写死**（沿用 D08 的体例）：**当且仅当出现一个既不能由外部命令钩子、也不能由 Node 内置模块满足的能力需求时**。目前不存在这样的需求。
+4. **本轮真正可落地的三件事都不需要放开 ①**：精确预判（接线已完成，只差一个真命令）、历史索引（`node:sqlite`）、任务切换检测（词法/显式/升级为审批）。**其中只有历史索引涉及新代码，且须先决定它与 ADR-0001 的关系。**
+
+**未验证**：`PERSONAL_AGENT_TOKENIZER` 端到端真机跑通（无可用分词器命令，网关亦 DOWN）；`node:sqlite` 在 `engines` floor（22.6）上是否打 ExperimentalWarning 或需 flag（本机只有 v24.19.0）；`node:sqlite` 写入 agent home 是否与 D50 的按位置封死相容（**索引文件须落在 agent home 内，而 agent home 对文件工具封死 —— 但封死的是"工具"，运行时自己写不受限，此点须实测确认而非推断**）；词法相似度的实际准确率（无数据）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
