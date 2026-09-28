@@ -32,6 +32,9 @@ import {
 } from "./inspection-tools.ts";
 import { runShellCommand, shellFor } from "./shell-tool.ts";
 import { FOREGROUND_GRACE_MS, findJob, killJob, listJobs, readJobOutput, startBackgroundJob } from "./background-jobs.ts";
+// Type-only, so the registry gains no runtime dependency on the session store.
+import type { SessionStore } from "./session-store.ts";
+import { parseTaskStateArguments } from "./task-state.ts";
 
 export interface ToolResult {
   content: string;
@@ -713,6 +716,100 @@ export function createJobKillTool(): Tool {
       // but the process may take a moment to exit, and claiming it is gone would
       // be a claim this call cannot observe.
       return { content: `asked background job ${id} to stop; its output remains readable with job_output` };
+    },
+  };
+}
+
+/**
+ * Let the model record where the task got to, so a long conversation carries
+ * current state instead of re-deriving it from a growing transcript.
+ *
+ * Takes the store and session id by closure rather than from {@link ToolContext},
+ * which carries no session identity: this is the one tool whose target is the
+ * session log itself.
+ *
+ * Three things it deliberately cannot do, each stated in the description because
+ * the model acts on the description:
+ *
+ * - **No `done` parameter.** Completion is computed from journal evidence
+ *   (`assessTaskState`), never reported by the writer — the writer saying "this
+ *   step is finished" and the worker saying "this round succeeded" are the same
+ *   claim from the same mouth (D14/D15/D19).
+ * - **No lowering a criterion.** `appendTaskState` refuses it, so a step's claim
+ *   can only stay or get stronger. The subtle attack this closes is not claiming
+ *   success but moving the bar, which looks like "updating the plan".
+ * - **No deciding a `command` criterion.** Nothing in this runtime runs shells, so
+ *   "the tests pass" stays `unverifiable` forever rather than becoming complete.
+ *
+ * It validates nothing itself: every refusal comes from the store, so the tool and
+ * the runtime cannot give different answers about the same write.
+ */
+export function createUpdateTaskStateTool(store: SessionStore, sessionId: string): Tool {
+  return {
+    name: "update_task_state",
+    description:
+      "Record the task's current state: prose progress plus one acceptance criterion per step. " +
+      "The latest state is re-injected into every later prompt, so it survives a long conversation " +
+      "instead of being diluted by it. Send the FULL current list of steps each time, not a delta. " +
+      "This tool has no 'done' parameter: completion is computed by the system from journal evidence, " +
+      "never reported by you. A criterion already recorded cannot be lowered, swapped or removed — " +
+      "such a call is refused and audited; steps can only be appended, and prose can be rewritten freely. " +
+      "A 'command' criterion (for example running tests) can never be decided in this runtime, so it " +
+      "stays unverifiable rather than becoming complete. Claim kinds: files-written {paths}, " +
+      "no-write, tool-used {tool, times}, command {command}.",
+    parameters: {
+      type: "object",
+      properties: {
+        state: {
+          type: "string",
+          description: "Prose progress: what is done, what is next, what is blocking. Freely rewritable.",
+        },
+        steps: {
+          type: "array",
+          description:
+            "Every step of the task in order. Previously recorded steps must stay at the same " +
+            "position with the same or a stronger criterion.",
+          items: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "What the step is." },
+              claim: {
+                type: "object",
+                description:
+                  "The acceptance criterion as an observable fact. Omit it only while the step " +
+                  "genuinely has no criterion yet — such a step is reported as unknown, not as progress.",
+              },
+            },
+            required: ["text"],
+          },
+        },
+      },
+      required: ["state", "steps"],
+    },
+    readOnly: false,
+    async execute(args, context) {
+      // Recording state changes what every later prompt tells the model, which is
+      // the same class of consequence as any other write, so it asks on the same
+      // terms: `job_kill` is the precedent for a write with no file path.
+      const denial = await approveExact("update_task_state", args, "Record the current task state?", context);
+      if (denial) return denied("update_task_state", denial, context);
+      const parsed = parseTaskStateArguments(args);
+      if (typeof parsed === "string") return fail("update_task_state", parsed);
+      try {
+        await store.appendTaskState(sessionId, parsed);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // Only refusals are audited. An accepted write is itself a record in the
+        // log, so auditing it too would keep two accounts of one fact — the shape
+        // ADR-0001 exists to prevent. A refusal leaves no other trace, and "who
+        // tried to lower the bar, and when" is exactly what AuditEvent is for.
+        await store.appendAudit(sessionId, { tool: "update_task_state", decision: "denied", reason });
+        return fail("update_task_state", reason);
+      }
+      return {
+        content:
+          "recorded; completion is computed by the system from journal evidence, so this tool reports no step as done",
+      };
     },
   };
 }

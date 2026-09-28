@@ -29,6 +29,12 @@ const WRITE_TOOL_LINE_ARGUMENT: Readonly<Record<string, string | null>> = {
   delete_file: null,
   rename_file: null,
   batch_files: null,
+  // Null like `run_command` and `job_kill`: it writes no file, so there is no
+  // content whose lines could be counted, and charging lines would misreport the
+  // budget's meaning (lines of code written). It still consumes an anonymous file
+  // slot through `checkWrite`'s null-path branch, which is the honest charge —
+  // one write happened this round, and it changed what the model is told next.
+  update_task_state: null,
 };
 
 export function isWriteTool(tool: string): boolean {

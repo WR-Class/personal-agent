@@ -10,7 +10,7 @@ import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
 import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createJobKillTool, createJobOutputTool, createReadFileTool, createRenameFileTool, createRunCommandTool } from "./tools.ts";
+import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createJobKillTool, createJobOutputTool, createReadFileTool, createRenameFileTool, createRunCommandTool, createUpdateTaskStateTool } from "./tools.ts";
 import { mintGene } from "./gene.ts";
 import { shutdownJobs } from "./background-jobs.ts";
 import type { Gene } from "./gene.ts";
@@ -391,8 +391,16 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       edit_file:createEditFileTool,patch_file:createPatchFileTool,
       create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
       batch_files:createBatchFilesTool} as const;
-    const tierTools=tier.tools.map(name=>allTools[name as keyof typeof allTools]());
-    const createRuntime=(sessionId:string)=>new AgentRuntime({adapter,store,sessionId,
+    const createRuntime=(sessionId:string)=>{
+      // update_task_state needs the store and this session's id, which the other
+      // factories take no arguments for, so the registry is built per session
+      // rather than once. Building it once outside would either capture a stale
+      // session id — letting one session write another's task state — or need a
+      // mutable holder, which is the same hazard with more steps.
+      const tierTools=tier.tools.map(name=>name==="update_task_state"
+        ? createUpdateTaskStateTool(store,sessionId)
+        : allTools[name as keyof typeof allTools]());
+      return new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
       tools:new ToolRegistry(tierTools,tier.tools),rules,maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
@@ -411,6 +419,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
         else io!.write(`[工具 ${event.name}：${event.isError?"失败/拒绝":"完成"}]\n`);
       },
     });
+    };
     if(interactive)return await runInteractive({io:io!,store,workspace:paths.workspaceRoot,
       model:`${adapter.id} / ${adapter.defaultModel}`,sessionId:options.sessionExplicit?options.session:undefined,createRuntime,
       budgetLimits:`步骤 ${options.maxSteps} · 每步工具 ${options.maxToolCallsPerStep} · 整轮工具 ${options.maxToolCallsPerRun} · prompt ${options.maxContextBytes} 字节 · 令牌 ${options.maxContextTokens}${contextWindows?` · 按模型窗口 ${Object.entries(contextWindows).map(([m,v])=>`${m}=${v}`).join(", ")}`:""} · 挂钟 ${options.deadlineMs}ms`});

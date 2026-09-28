@@ -129,7 +129,7 @@ export function mintGene(draft: GeneDraft): MintedGene {
  * checked for the fields their kind needs, so a malformed claim is refused at
  * mint rather than silently comparing as "met" later.
  */
-function parseValidation(entries: unknown): GeneValidation[] {
+export function parseValidation(entries: unknown): GeneValidation[] {
   if (!Array.isArray(entries) || entries.length === 0) {
     throw new GeneValidationError("validation must be a non-empty array");
   }

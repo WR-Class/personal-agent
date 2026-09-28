@@ -11,6 +11,7 @@ import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
 import { readTrustedRoots } from "./trusted-roots.ts";
 import { formatConstraintsForPrompt, loadConstraints } from "./constraints.ts";
+import { formatTaskStateForPrompt } from "./task-state.ts";
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
@@ -1047,9 +1048,36 @@ export class AgentRuntime {
     // product's own safety text. The anti-dilution property comes from the system
     // message being first in the conversation, not from its internal order.
     const constraints = formatConstraintsForPrompt(await loadConstraints(this.home));
-    const systemText = [this.systemPrompt, this.genePrompt, constraints].filter((part) => part !== undefined && part !== "").join("\n\n");
+    // Task state rides last: of the four blocks it carries the least authority —
+    // `systemPrompt` is the product's, `genePrompt` is the library's, `constraints`
+    // is the operator's, and this one is the task's own record of where it got to.
+    // One pass over the log yields both "latest wins" marks; reading them
+    // separately would read the whole session file twice per model call.
+    const marks = await this.store.latestMarks(this.sessionId);
+    const recorded = marks.taskState;
+    const taskState = recorded === undefined ? undefined : formatTaskStateForPrompt(recorded.state, recorded.steps);
+    // Both blocks are re-sent on every call, so together they are pure per-turn
+    // overhead. Each is individually capped at write time, but two individually
+    // legal blocks can still add up to more than a small `maxContextBytes` leaves
+    // room for — and that failure would arrive as a whole-turn refusal, since
+    // exceeding `maxContextBytes` refuses rather than truncates. One quarter of the
+    // budget is the ceiling: at the default 512 KiB that is 131072 bytes, which two
+    // maximum-size blocks (about 66000) never reach, so the default configuration is
+    // never tripped by this check. It bites only when an operator lowers
+    // `maxContextBytes`, which is exactly when the sum needs checking. One eighth
+    // would be wrong: 65536 at the default collides with two maximum-size blocks.
+    const injectedBytes = Buffer.byteLength(constraints ?? "", "utf8") + Buffer.byteLength(taskState ?? "", "utf8");
+    const injectedCap = Math.floor(this.maxContextBytes / 4);
+    if (injectedBytes > injectedCap) {
+      throw new Error(
+        `注入块合计 ${injectedBytes} 字节（长期约束 ${Buffer.byteLength(constraints ?? "", "utf8")} + 任务状态 ` +
+          `${Buffer.byteLength(taskState ?? "", "utf8")}），超过 maxContextBytes 的四分之一即 ${injectedCap} 字节；` +
+          `请缩短其中之一，或调高 maxContextBytes。不会截断。`,
+      );
+    }
+    const systemText = [this.systemPrompt, this.genePrompt, constraints, taskState].filter((part) => part !== undefined && part !== "").join("\n\n");
     const system: ChatMessage[] = systemText === "" ? [] : [{ role: "system", content: systemText }];
-    const compaction = await this.store.compaction(this.sessionId);
+    const compaction = marks.compaction;
     if (compaction && compaction.covers > 0) {
       const covered = Math.min(compaction.covers, past.length);
       const summary: ChatMessage = {

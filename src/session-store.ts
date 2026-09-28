@@ -4,6 +4,11 @@ import { dirname, join } from "node:path";
 import { lstatSync } from "node:fs";
 import { assertSafeStateDirectory, canonicalPath, isWithin } from "./security-config.ts";
 import type { ChatMessage, ChatUsage, ToolCall } from "./types.ts";
+// Type-only: the claim vocabulary is shared with genes (D60 established it names
+// observable facts, not gene-specific ones), and a type import is erased at
+// runtime, so the log gains no runtime dependency on the gene module.
+import type { GeneValidation } from "./gene.ts";
+import { assertNotWeakened, formatTaskStateForPrompt, MAX_TASK_STATE_BYTES, type TaskStateInput, type TaskStateStep } from "./task-state.ts";
 
 /**
  * Session event log, versioned and append-only.
@@ -129,6 +134,28 @@ export interface SummaryEvent {
 }
 
 /**
+ * The task's persistent state: prose progress plus one acceptance criterion per
+ * step. Marked `ignorable` so a reader that predates this kind skips it — it then
+ * builds a prompt with no state block, which is *longer than intended, but not
+ * wrong*, the same degradation `SummaryEvent` accepts.
+ *
+ * There is deliberately no `done` field. Completion is computed by
+ * {@link assessTaskState} from the claims against journal evidence, never stored,
+ * because a step the writer marked finished is the writer reporting its own
+ * success (D14/D15/D19). `atMessage` is the message count observed when this was
+ * written — the same device as `covers`, so the boundary stays an observed fact.
+ */
+export interface TaskStateEvent {
+  v: number;
+  kind: "task-state";
+  ignorable: true;
+  at: string;
+  atMessage: number;
+  state: string;
+  steps: readonly TaskStateStep[];
+}
+
+/**
  * A recorded permission decision: something was denied, an approval expired, or a
  * boundary was widened by configuration. Ignorable so older readers skip it.
  *
@@ -155,6 +182,7 @@ export type SessionEvent =
   | ToolCallEvent
   | ToolResultEvent
   | SummaryEvent
+  | TaskStateEvent
   | AuditEvent;
 
 /** Raised when a line cannot be read as a session event; carries its position. */
@@ -364,6 +392,42 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
         at: requireString(record, "at", "summary"),
         covers,
         summary: requireString(record, "summary", "summary"),
+      };
+    }
+    case "task-state": {
+      const atMessage = record.atMessage;
+      if (typeof atMessage !== "number" || !Number.isSafeInteger(atMessage) || atMessage < 0) {
+        throw new Error("task-state.atMessage must be a non-negative integer");
+      }
+      const rawSteps = record.steps;
+      if (!Array.isArray(rawSteps)) throw new Error("task-state.steps must be an array");
+      // Rebuilt field by field, so `claim` must be read here or it would vanish on
+      // the way back in — the trap the `audit` case below warns about. Only the
+      // shape is checked: a claim with an unknown kind falls through to
+      // `checkClaim`'s default and is honestly reported `unverifiable`, which is
+      // safer than guessing what it meant.
+      const steps: TaskStateStep[] = rawSteps.map((entry, index) => {
+        if (entry === null || typeof entry !== "object") throw new Error(`task-state.steps[${index}] must be an object`);
+        const step = entry as { text?: unknown; claim?: unknown };
+        if (typeof step.text !== "string") throw new Error(`task-state.steps[${index}].text must be a string`);
+        if (step.claim === undefined) return { text: step.text };
+        if (step.claim === null || typeof step.claim !== "object") {
+          throw new Error(`task-state.steps[${index}].claim must be an object or absent`);
+        }
+        const kind = (step.claim as { kind?: unknown }).kind;
+        if (typeof kind !== "string" || kind === "") {
+          throw new Error(`task-state.steps[${index}].claim.kind must be a non-empty string`);
+        }
+        return { text: step.text, claim: step.claim as GeneValidation };
+      });
+      return {
+        v: CURRENT_EVENT_VERSION,
+        kind,
+        ignorable: true,
+        at: requireString(record, "at", "task-state"),
+        atMessage,
+        state: requireString(record, "state", "task-state"),
+        steps,
       };
     }
     case "audit": {
@@ -621,6 +685,99 @@ export class SessionStore {
     };
     await this.append(sessionId, event);
     return event;
+  }
+
+  /**
+   * Record the task's current state, replacing the previous one for prompt
+   * purposes while leaving every earlier version in the log.
+   *
+   * Two refusals are inherited from {@link appendSummary} because they answer the
+   * same question. A pending tool batch means part of this round is still
+   * unresolved, and writing "this step is finished" over an unanswered call is
+   * recording an open question as a closed one. And `atMessage` is read off the
+   * history rather than supplied by the caller, so the boundary stays an observed
+   * fact.
+   *
+   * The third refusal is this event's own: {@link assertNotWeakened}. Steps may be
+   * appended to and prose may be rewritten freely, but an acceptance criterion
+   * once recorded cannot be lowered, swapped or dropped — that is the one edit
+   * that would let a writer pass by moving the bar instead of reaching it.
+   */
+  async appendTaskState(sessionId: string, input: TaskStateInput): Promise<TaskStateEvent> {
+    if (input.state.trim() === "") throw new Error("task-state.state must not be empty");
+    // Sized as rendered, because that is what will ride in every later prompt.
+    // Refused here rather than at injection time: an injection-time refusal would
+    // make every subsequent buildPrompt throw, so one oversized write would deny
+    // service to the rest of the session. Reported with the actual size, never
+    // truncated — a silently shortened criterion is a criterion the writer did not
+    // agree to.
+    const renderedBytes = Buffer.byteLength(formatTaskStateForPrompt(input.state, input.steps) ?? "", "utf8");
+    if (renderedBytes > MAX_TASK_STATE_BYTES) {
+      throw new Error(`任务状态渲染后为 ${renderedBytes} 字节，超过上限 ${MAX_TASK_STATE_BYTES} 字节；请缩短进度或步骤，不会截断`);
+    }
+    // No pending-tool refusal here, and the reason is worth stating because the
+    // obvious move is to copy the one `appendSummary` makes. That refusal protects
+    // a summary, which *replaces* what the model sees: summarizing an unanswered
+    // call freezes "an answer-shaped summary of a question that was never resolved"
+    // into the prompt. A task-state record replaces nothing — every message still
+    // replays, and the pending result still arrives and is still shown — so the
+    // harm that guard exists to prevent does not exist here.
+    //
+    // Copying it would have been fatal rather than merely wrong: this is written by
+    // a tool, so the call doing the writing is itself pending at that moment, and
+    // the guard would refuse every write the tool ever attempted. Found by an
+    // end-to-end test; no unit test of the store alone could have caught it.
+    const previous = await this.taskState(sessionId);
+    assertNotWeakened(previous?.steps, input.steps);
+    const event: TaskStateEvent = {
+      v: CURRENT_EVENT_VERSION,
+      kind: "task-state",
+      ignorable: true,
+      at: new Date().toISOString(),
+      atMessage: (await this.history(sessionId)).length,
+      state: input.state,
+      steps: [...input.steps],
+    };
+    await this.append(sessionId, event);
+    return event;
+  }
+
+  /**
+   * The most recent task state, or undefined when none was recorded.
+   *
+   * Latest wins, as in {@link compaction}. Unlike a summary there is no `covers`
+   * ordering to justify it: monotonicity does, because a later state was refused
+   * unless it required at least as much as the earlier one.
+   */
+  async taskState(sessionId: string): Promise<TaskStateEvent | undefined> {
+    const report = await this.inspect(sessionId);
+    let latest: TaskStateEvent | undefined;
+    for (const event of report.events) {
+      if (event.kind === "task-state") latest = event;
+    }
+    return latest;
+  }
+
+  /**
+   * Both "latest wins" marks in one pass.
+   *
+   * `buildPrompt` needs the compaction boundary and the task state on every model
+   * call, and each of {@link compaction} and {@link taskState} reads the whole log
+   * to answer. Calling both would read it twice per call, which on a long session
+   * is the dominant cost of building a prompt. One pass, same answers.
+   */
+  async latestMarks(sessionId: string): Promise<{ compaction?: SummaryEvent; taskState?: TaskStateEvent }> {
+    const report = await this.inspect(sessionId);
+    let compaction: SummaryEvent | undefined;
+    let taskState: TaskStateEvent | undefined;
+    for (const event of report.events) {
+      if (event.kind === "summary") compaction = event;
+      else if (event.kind === "task-state") taskState = event;
+    }
+    return {
+      ...(compaction === undefined ? {} : { compaction }),
+      ...(taskState === undefined ? {} : { taskState }),
+    };
   }
 
   /** Record one denied or expired approval without changing the conversation. */

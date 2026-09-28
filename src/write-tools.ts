@@ -46,6 +46,11 @@ export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file", 
 export const WRITE_TOOLS: readonly string[] = [
   "run_command",
   "job_kill",
+  // It writes no file, but it changes what every later prompt tells the model, so
+  // it is a write in the only sense this list cares about. Leaving it out would
+  // hand a read-only posture a way to edit its own instructions — and the tier and
+  // rule tables both derive from this list, so the two cannot drift apart.
+  "update_task_state",
   "edit_file",
   "patch_file",
   "create_file",
