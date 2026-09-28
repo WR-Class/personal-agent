@@ -1630,6 +1630,97 @@ db 文件大小 = 12288 字节
 
 **⇒ 可执行的纠正**：**任何"不做 X"的结论，必须附上读过 X 的证据；读不到就写"未读，不下结论"。** 本轮第五节是这条规则第一次被正确执行的样子（读了 `:39` 才知道 overlay 自己就是条件性的）。
 
+### 三个探针、一处我对 D69 的自我更正，以及"声明合并不免费"（D70，2026-09-30，**取证轮，无代码**）
+
+**触发**：操作员批准 *"行，按D69走吧"*。D69 留了两件未做：三份未读文档、一条采用前置未测（*"`node --experimental-strip-types` 直跑 TS，声明合并在此模式下的可用性未验证"*）。
+
+**本轮读到的**：`docs_development.md` **全文 167 行**。
+**⚠️ 如实标注未读**：`dsh-upstream-AGENTS.reference.md`（16.5 KB）、`blog-cordis-tencent.html`（204 KB）；`subsystems/*`、`cookbook/*`、`.agents/notes/*`、`scripts/*` 在 `_dsh_ref` 内不存在，本地不可达。**⇒ 本节关于"DSH 运行时侧如何注册"的结论只依据 `docs_architecture.md:111-113` 与本项目自己的探针，未经 DSH 源码验证。**
+
+#### 一、三个探针的实测输出（临时文件写在仓库外 `D:\DSHXM\d70probe`，跑完即删；D50 的教训）
+
+环境：**node v24.19.0**，**tsc Version 5.9.3**（⚠️ `package.json` 声明 `typescript ^5.6.3`，实装 5.9.3，在 caret 范围内）。
+
+**(a) 类型侧：`tsc --noEmit` 接受跨模块 interface 增广 —— 退出码 0。**
+基座 `base.ts` 有封闭的 `interface SessionEventMap { readonly taskState: … }` 与一个照 `migrateEvent` 形状的运行时 switch；`aug.ts` 写 `declare module "./base.ts" { interface SessionEventMap { readonly summary: … } }` 与 `declare global { interface ProbeGlobal … }`，并取 `const k: keyof SessionEventMap = "summary"`。**命令**：`tsc --noEmit --strict --target es2022 --module preserve --moduleResolution bundler --allowImportingTsExtensions aug.ts` ⇒ **退出码 0，无输出**。
+
+**(b) ⚠️ 运行时侧：strip-types 接受 `declare module` 与 `declare global` —— 我的风险假设被证伪。**
+```
+node --experimental-strip-types aug.ts   → 退出码 0
+node aug.ts（24.x 默认剥离，无旗标）      → 退出码 0
+```
+**⇒ 我在 plan-ready 里把 `declare` 块列为"参数属性同一类的合理嫌疑对象"，错了。** 判别规则因此清楚了：**type-stripping 只在"需要生成代码"的构造上失败**（参数属性要搬进构造函数体、`enum` 要生成对象、`namespace` 要生成 IIFE），**而 `declare` 块什么都不生成，所以被干净剥离**。**这不是运气，是可推的规则 —— 但只有测过才知道。**
+
+**(c) ⚠️ 运行时开放注册表：不依赖任何类型层机制，且可逆、拒重复。**
+```
+probeC registered={"covers":3} unknownKind=undefined afterDispose=undefined duplicateRejected=true
+```
+即：注册后 `migrateOpen("summary", …)` 返回处理器结果；未注册种类返回 `undefined`；**dispose 之后再查返回 `undefined`（注册可逆）**；**同一种类注册两次抛错**。
+
+#### 二、⚠️ 对 D69 的自我更正：我把类型侧与运行时侧当成了一件事
+
+**D69 原文**：*"`:143` 配 Cordis 观念 4 的 TypeScript declaration merging ⇒ 事件种类由插件声明扩展，核心不需要为每个新种类加一个 `case`"*。
+
+**这句错在后半。** **声明合并是纯类型层机制**：运行时没有任何东西被合并，事件种类在运行时就是字符串。**而 `migrateEvent` 的 8-case switch 是运行时构造 —— 光有声明合并打不开它。** 探针 (a) 与 (c) 分别验证了两侧，**两者是两套独立机制，缺一不可**：
+
+| 侧 | 机制 | 探针 | DSH 的对应 |
+|---|---|---|---|
+| **类型** | 跨模块 interface 增广 | (a) 通过 | `:111` *"extend `SessionEventMap`"* |
+| **运行时** | 种类 → 处理器注册表（可逆、拒重复） | (c) 通过 | `:111` *"**and render from the log**"*、`:113` *"**registered** units fold committed events incrementally"* |
+
+**⇒ DSH 的 `:111` 那句话本来就是两半，我在 D69 里只引了前半就下了结论。** 这与本轮的方法论教训是同一件事的两个方向：**采用时也不能只读半句。**
+
+#### 三、⚠️ 声明合并不免费：`:56` 记录了一个我绝对猜不到的代价
+
+> *"Host and Client stay two aggregate programs because **both sides declaration-merge the cordis `Context` interface under the same keys with different services; one program seeing both merges reports a collision**. The collision exists only inside a `ts.Program` — module resolution never triggers it…"*
+
+**DSH 为此付出的代价**（`:56-62`）：仓库拆成 **Host / Client 两个聚合程序**（`tsconfig.host.json` / `tsconfig.client.json`），只有三个共享叶包（`host/webserver`、`compaction/compaction`、`typert/registry`）被两侧同时引用；**外加三条纪律**：`tsconfig.base.json` 永不获得 `include`/`files`；**任何构建全仓 `ts.Program` 的脚本必须显式播一个聚合、绝不播根 solution**（否则展平两侧会撞 `Context` 合并）；**新包只注册进一个聚合**；并且有一个 `constraints` 门走可达的 Project Reference 图逐个检查。
+
+**⇒ 对本项目的判断**：本项目是**单 `tsconfig`、单 program、`tsc --noEmit`**，所以"两侧不同服务撞同一个 key"这个具体故障**当前不可达**。但这条证据改变了取舍：**运行时注册表（探针 c）能单独达成真正的目标（打开 `migrateEvent`），且零类型程序风险；声明合并只解决类型侧的便利，却带来一个成熟产品要用两个聚合程序去容纳的故障模式。**
+**⇒ 采用顺序因此定为：先做运行时注册表（必需），声明合并列为可选、且只在类型侧确实成为负担时才加。**
+
+#### 四、⚠️ `:11` 顺手结掉了 D68 的阻塞项
+
+> *"Node.js supports **22.19+ and 24+**. CI covers **22.19, 24, and 26**"*（`:117` 再次出现 *"the Node **22.19, 24, and 26** compatibility matrix"*）
+
+**对照**：**DSH floor = 22.19**；**SoL-Pi `engines: node >=22.19.0`**（其 `package.json` 实读）；**本项目 `engines: node >=22.6`**。
+**⇒ 两个独立成熟产品都选 22.19，本项目是离群值**，而 D68 已证 22.6 落在 `--experimental-sqlite` 必需旗标带（22.5.0–22.12.x）内。**⇒ D68 的三个选项里，选项 (i)"抬高 `engines`"从"最干净"升级为"有外部佐证"，且目标值应是 `>=22.19.0` 而非 D68 说的 `>=22.13.0`。** `AUDIT.md` A15 早已把 floor 列为需收窄项。**⚠️ 本轮不改 `package.json`（无代码轮），只记录。**
+
+#### 五、⚠️ `:159-167` 是本项目反复犯的病的现成解药：`ts type-equiv` 门
+
+**DSH 的做法**：文档里粘贴与源码等价的类型声明，围栏标成 ` ```ts type-equiv `，并登记进 `scripts/type-equiv.manifest.json`（记 `doc` / `symbol` / `source`）；`verify-type-equiv` **用 TypeScript parser 从源码抽出该符号的声明与附着的 JSDoc，断言文档块两者都匹配**；类可用 ` ```ts public-api ` 只保留公开成员。***"When you change a documented declaration or its JSDoc, **the gate fails until you update the paste**."***
+
+**⇒ 这正是本项目的手工日常**：每一轮我都在写脚本机械回查引文（D69 的 24 条、本轮的探针），而**文档过期仍然是反复出现的缺陷** —— `README.md:3` 说"仅只读、不执行 shell"、`SWARM_LOOP.md` §8 说 src 下无 shell 模块且基线记 365（现 629）、D 索引缺 D10。**⇒ 把手工回查变成一个门，是 ponytail 阶梯第 2 级的正解（这个模式已经在本仓库里以手工脚本的形式存在）。**
+
+#### 六、另外两条可直接采用的小机制
+
+- **`:149-157` 三级 TODO 标记**：`FIXME`（**应当阻塞新发行**）／`TODO`（有资源就尽快）／`XXX`（**某天也许修，最低优先级、无承诺**），*"Pick the tag that matches the urgency so anyone scanning the code can tell a release blocker from a someday-maybe."* **⇒ 本项目的"未做/未验"清单有一长串但没有紧急度分级**，正好用它。
+- **`:101` 真机套件自跳过**：*"The real-API e2e suites **self-skip** when `DEEPSEEK_API_KEY` is not set."* **⇒ 本项目 `test:live` 与 629 基线里那 1 项 skip 是同一形状**，这条确认了它不是缺陷而是成熟产品的常规做法。
+
+#### 七、采用 / 拒绝清单（按 D69 第七节的新规则：任何"不做 X"必须附读过 X 的证据）
+
+**采用（本轮新增）**：
+1. **打开 `migrateEvent`：运行时"种类→处理器"注册表**，可逆（返 disposer）、拒重复注册。**探针 (c) 已验证形状可行。**
+2. **三级 TODO 标记**（`FIXME`/`TODO`/`XXX`）用于给既有"未做/未验"清单分级。
+3. **引文/声明回查门**：把每轮手工写的机械回查固化成一个可跑的检查（`type-equiv` 的缩小版：只查"文档里引用的源码文本仍然存在"）。
+4. **`engines` 抬到 `>=22.19.0`**（D68 选项 (i)，现有两个产品的外部佐证）。**⚠️ 待操作者确认后另开一轮改，本轮无代码。**
+
+**降级（不是拒绝）**：
+5. **TypeScript 声明合并** —— **可用**（探针 (a)(b) 均通过，含 `declare global`），但 `:56` 证明它带来一个 DSH 要用两个聚合程序容纳的碰撞故障模式，而**它只解决类型侧便利、不解决运行时开放性**。**⇒ 列为可选，等类型侧确实成为负担时再加。**
+
+**仍然拒绝（读过之后拒绝）**：
+6. **loader/overlay 三层**（profile/bundle/patch、`!!js` 表达式）—— D69 第五节已记，`:39` 原文自己是条件句。
+7. **Host/Client 双聚合 tsconfig** —— 服务于浏览器客户端与 Node 宿主并存；**本项目没有客户端**，单 program 无此需求。**⚠️ 依据是 `:46-62` 全文实读，不是推断。**
+8. **pnpm + corepack + lefthook + 双语配对合并驱动**（`:12`、`:24`、`:105-115`）—— 服务于多人贡献与双语文档；**本项目零生产依赖、单人、单语文档**。**⚠️ 但 `:111` 的 pre-commit 检查里有两项与本项目相关且便宜：staged diff 的空白错误检查、以及"改了被文档记录的声明就必须更新粘贴"（即第 3 条）。**
+
+**未读，不下结论**：`dsh-upstream-AGENTS.reference.md`、`blog-cordis-tencent.html`（204 KB）。**⇒ 关于"DSH 的插件在运行时究竟如何被 mount/unmount"本节没有证据，只有 `:113` 的 registered units 与本项目探针 (c) 的同构性。**
+
+#### 八、方法论（本轮的两条，方向相反）
+
+**D69 记下的是"拒绝之前要先读"。本轮补上对称的另一半：⚠️ "采用之前也要读完那一句"。** `:111` 那句 *"extend `SessionEventMap` **and render from the log**"* 我在 D69 里只引了前半，于是把类型侧机制当成了运行时侧的解药。**半句引用产生的错误结论，和不读产生的错误结论，代价是一样的。**
+
+**⇒ 可执行的纠正（补充 D69 第七节）**：**引用一条机制作为某个问题的解药时，必须引完整句，并说明它解决的是哪一侧（类型/运行时/存储/UI）。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
