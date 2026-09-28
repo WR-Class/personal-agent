@@ -1780,6 +1780,91 @@ D70 从 `docs_development.md:56` 读到：DSH 把仓库拆成 **Host/Client 两�
 - **`external` 集合没有消费者**：`inspect()` 会返回它，但 `history()`/`buildPrompt`/压缩都不读它。这是有意的（核心不该解释它不认识的），但**"谁来读 external"是插件系统那一轮的问题，本轮不预设答案**。
 - **声明合并仍未采用**（D70 已降级为可选）：类型侧封闭就是这个决定的直接后果，两者是一致的。
 
+### D72 "谁来读 external"：答案是 DSH 已出厂的 Projection seam，而判据不是"谁消费它"（2026-09-30，**决策轮，无代码**）
+
+**触发**：操作员问 *"怎么定？"* —— 指 D71 第六节留下的前置问题：`inspect()` 已返回 `external` 集合但**没有消费者**，而这件事不答，`task-state` 就不能搬出核心。
+
+#### 一、⚠️ 先纠正我自己正要写下的错误答案
+
+准备本轮时，我的推理一度走向这个结论：**"`task-state` 有核心消费者（`taskState()`、`latestMarks()`、prompt 注入），所以它就是核心功能；搬出去会造出一个假接缝 —— 有 provider 也有 consumer，但 consumer 必须依赖那个特定 provider，那只是加了一层间接。"**
+
+**读完 `docs_architecture.md:113` 的完整段之后，这句话被它最后一句直接反证**：
+
+> *"**The agent loop registers shared `turnBoundary` state for its readers**"*
+
+**DSH 的核心（agent loop）自己也往投影注册表里注册状态、给自己的读者读。** 再配 `:117`：
+
+> *"A package **may combine roles**, but one role alone is not a seam"*
+
+**⇒ "核心消费它"根本不构成"它必须是核心"的理由**，DSH 自己就是核心同时充当 provider 与 consumer。**这是 D70 那条教训（"采用之前也要读完那一句"）在 24 小时内第二次生效**：D71 那次是"拒绝之前要先读"救了 Cordis，这次是"读完最后一句"阻止我用一个半段推理去否决一条已出厂的设计。**如果本轮没读 `:113` 全段就动笔，D72 会是一条错误决定，而且它会以"我推理过了"的姿态出现。**
+
+#### 二、判据：不凭"谁消费它"，凭三角色能否齐备
+
+`:117` 的定义是完整的判据：
+
+> *"A **seam** is a swappable capability with three roles: a **Service Definition** declaring the interface, a **Service Provider** implementing it, and a **Consumer** using it, commonly a model-facing tool. A package may combine roles, but **one role alone is not a seam; adding a capability means designing all three**."*
+
+**⇒ 判据改为**：**一个事件种类该不该走"注册表 + 投影"，取决于能否为它设计齐三个角色，而不取决于核心是否读它。**
+- **只有 provider、没有真实 consumer** ⇒ 不是接缝，是没人用的扩展点（**这正是 D71 交付的注册表当前的状态**，如实说）。
+- **只有 consumer、没有 provider** ⇒ 空依赖。
+- **三角色齐备但 provider 唯一且不可替换** ⇒ **仍然是接缝**，因为 `:119` 说明价值不在"替换很可能发生"：*"Seams are why **one provider swap changes the whole product**"* —— 价值在于**依赖被写成接口而不是写成 import**。这与 `ARCHITECTURE.md` §3.4 量出的病灶（`cli.ts` out-degree 23、`runtime.ts` 16，全部按名字硬 import）是同一件事的两面。
+
+#### 三、答案：采用 Projection seam，三角色照 `:113` 落
+
+`:113` 的完整契约（**逐句引，因为每一句都对应本项目要做的一个决定**）：
+
+> *"**Projection seam.** `dsh-session-projection` owns `ctx.sessionProjections`: **registered units fold committed events incrementally**, **host consumers read one typed state with `stateOf()`**, and carriers batch cropped client views with `snapshot()`. **A host reader either requires this service during activation or fails explicitly when the registry or required key is absent.** Contributors may retain `ctx.inject(['sessionProjections'], ...)` registration **without silently defaulting a missing host value**."*
+
+| 角色（`:117`） | 本项目的形状 |
+|---|---|
+| **Definition** | 一个投影单元 = `{ key, initial, fold(state, event) → state }`，**增量**折叠已提交事件（不是每次全量重扫） |
+| **Provider** | `task-state` 单元（第一个真实 provider）；未来插件注册自己的单元 |
+| **Consumer** | `runtime.ts:1080` 的 `buildPrompt` → `latestMarks`、`runtime.ts:846` 的轮末 `taskState()`、以及 **⚠️ `session-store.ts:850` 的 `appendTaskState` 自己**，全部改读 `stateOf(key)` |
+
+**`stateOf` 在本项目当前不存在**（`grep` 全 src 零命中），所以它是待引入的名字，不是既有符号。
+
+#### 四、⚠️ 真正的代价（写进决定，不留给实现时才发现）
+
+**(1) `case "task-state"` 的逐字段严格校验必须跟着搬。** 它在 `session-store.ts:511`。**若只搬"读取"而不搬"校验"，解析就丢了** —— 外部事件的 `payload` 是 `unknown`，投影的 `fold` 收到的就是未校验的原始对象。**⇒ `TaskStateEvent` 的严格重建必须成为 provider 的一部分，而不是留在核心的 switch 里。**
+
+**(2) ⚠️ 必须保住"损坏行按行号拒绝"这个既有行为。** `inspect()` 的 `problems` 机制把坏行连行号一起报出来（`session-store.ts` 读取循环里的 `catch` → `problems.push({line, detail, preview})`）。**一条畸形的 `task-state` 行今天的结果是"读时报错、指出第几行"；搬出去之后，如果 `fold` 只是跳过它，结果会退化成"投影静默回到初始值"** —— **那是把一个可诊断的失败换成一个不可诊断的失败，方向是错的。** ⇒ **provider 的 `fold` 必须能把解析失败上报成一条 problem，而不是吞掉。**
+
+**(3) ⚠️ 本轮 `grep` 查出的第四个消费者，是写路径。** `session-store.ts:850`：`appendTaskState` 在写入前 `const previous = await this.taskState(sessionId);` 做**单调性检查**（D61 的 `assertNotWeakened`）。**这是写路径依赖，比读路径严格得多**：读路径上一次 `stateOf` 失败最多让本轮注入少一块，**写路径上一次失败会让"把验收标准调低"这个攻击重新可行** —— 因为单调性检查是挡住它的唯一机制（D61：*"隐蔽的攻击不是自报完成，而是把标准挪低"*）。**⇒ 若 `task-state` 搬进投影，`appendTaskState` 必须能在 `stateOf` 缺失时拒绝写入，而不是当作"没有前一份状态"从而放行任何 claim。**
+
+**(4) `latestMarks` 的"一趟读两样"优化会被拆散。** `session-store.ts:884` 的注释写明它的存在理由：*"`buildPrompt` needs the compaction boundary and the task state on every model call, and each of `compaction` and `taskState` reads the whole log… Calling both would read it twice per call, which on a long session is the dominant cost of building a prompt. One pass, same answers."* **⇒ 投影的"增量折叠"恰好是这个优化的正确形态（不必每轮全量重扫），但迁移期间不能先把优化删掉再补回来。**
+
+#### 五、⚠️ 失败语义照抄 `:113`，而且它与 D60 那个陷阱是同一味药
+
+`:113` 两处强调同一件事：*"**fails explicitly** when the registry or required key is absent"*、*"**without silently defaulting** a missing host value"*。
+
+**这不是风格偏好。** D60 记录的失败形态正是：**功能"看起来在工作"**（有状态、有注入、有 claim），**却永远判不出任何东西**，因为求值被挡在 `applied ?` 之后、而基因库是空的。**⇒ `stateOf("taskState")` 在键缺失时必须显式失败**；若返回一个默认空状态，同一个坑会以更隐蔽的形式重现（状态永远为空，而所有测试都通过）。
+
+#### 六、决定与实施次序
+
+**决定**：**采用 Projection seam 作为 `external` 的消费方式**，并把 `task-state` 作为它的**第一个真实 provider**。**⇒ D71 那个"存在但未被使用"的注册表因此获得第一个调用方，两件事合成一条链。**
+
+**次序（每步都可独立验证，不做大爆炸迁移）**：
+1. **先只做 Definition + `stateOf` 的显式失败语义**，并让**既有的 `taskState()` 成为它的第一个 consumer**（provider 暂时就是核心自己的一个单元）。**这一步不改存储、不改校验位置**，只把"读取"变成"经注册表读取"。
+2. **再把 `case "task-state"` 的逐字段校验搬进 provider**，同时接上 `problems` 上报（第四节 (2)）。**这一步之后核心 switch 少一个 case。**
+3. **最后处理写路径**（第四节 (3)）：`appendTaskState` 的单调性检查改走 `stateOf`，且**缺失即拒绝写入**。
+4. **`latestMarks` 的一趟优化在 2 之后重做**（第四节 (4)），用增量折叠替代"每轮全量重扫两遍"。
+
+**⚠️ 每一步都要有变异验证**，尤其第 3 步：**把"缺失即拒绝"改成"缺失即放行"，必须有一条测试变红** —— 那条测试就是 D61 单调性的证明。
+
+#### 七、本轮不做的事（附依据）
+
+- **不改代码**：操作员问的是"怎么定"，答案先落档；且第四节查出写路径依赖之后，实现次序必须按 1→4 走，不适合在决策轮里顺手改。
+- **不预设插件如何加载注册**：属插件系统那一轮（D71 第六节已声明不预设）。
+- **`snapshot()` / carriers 不采用**：`:113` 里它是"batch cropped client views"，服务于 DSH 的多客户端（web/headless/acp）；**本项目没有客户端 ⇒ 读到了、确认不适用，不是没读就跳过。**
+- **loader/overlay 仍然拒绝**：依据 D69 第五节（`:39` 原文自己是条件句 *"Use overlays when the environment selects plugins"*）与 D70 第七节第 6 条。
+- **声明合并仍然不采用**（D70 降级为可选）：**⇒ 类型侧继续封闭**，投影单元的 `fold` 收到的事件类型是 `ExternalSessionEvent`（`payload: unknown`），**由 provider 自己解析**。这与 D71 的取舍一致，不是新增的矛盾。
+
+#### 八、验证
+
+- **外部引文**：`:111`、`:113`（全段）、`:117`、`:119` 逐句空白压平精确回查 `_dsh_ref/docs_architecture.md`。**本轮已完整读过 `:111-124`。**
+- **本项目侧断言全部 `grep` 实读核对**：`case "task-state"` = `session-store.ts:511`；`taskState()` 的消费者 = `runtime.ts:846` 与 `session-store.ts:850`；`latestMarks` 的消费者 = `runtime.ts:1080`（在 `buildPrompt`，`:1063`）内；`buildPrompt` 的调用点 = `runtime.ts:744` 与 `:771`；**`stateOf` 全 src 零命中**（确认是待引入的名字）。
+- **⚠️ 未读，不下结论**：`session-projection-mandatory-seam.md`（`:113` 末尾链接的那份 decision note）**在 `_dsh_ref` 内不存在、本地不可达** ⇒ **DSH 那个"mandatory"到底强制了什么，本轮没有证据，只有 `:113` 正文。** 同理 `capability-seams.md`、`subsystems/*`。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
