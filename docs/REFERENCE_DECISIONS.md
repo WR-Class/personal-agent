@@ -609,6 +609,11 @@ this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRo
 
 **错误二："会话历史无法按内容索引"——不成立。** 本机 Node **v24.19.0** 实测 `require("node:sqlite")` **直接可加载**（导出 `DatabaseSync, StatementSync, Session, constants, backup`，建表 / 插入中文 / 条件查询 / 排序全部成功），而 `engines` 为 `node >= 22.6`、`node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖，同样零依赖**。
 
+> **⚠️ 更正（D68，2026-09-30）：上面这句"floor 已覆盖"不成立，原文按规矩保留不改写。**
+> Node 官方 `doc/api/sqlite.md` 的 YAML 头记录：模块 `added: v22.5.0`，但 **`version: [v23.4.0, v22.13.0]`（PR 55890）的说明是 "SQLite is no longer behind `--experimental-sqlite` but still experimental."** ⇒ **22.5.0 至 22.12.x 需要 `--experimental-sqlite` 启动标志**，而声明的下限 **22.6 正落在该区间内**。"内置"与"免标志可用"是两件事，此处把它们当成了一件。
+> **需说清的是：本文档同段的"未验证"清单当时就正确记下了这一条**（*"`node:sqlite` 在 `engines` floor（22.6）上是否打 ExperimentalWarning 或需 flag（本机只有 v24.19.0）"*）⇒ **错的是结论段的措辞，不是取证清单。**
+> **实际暴露面比这句话听起来窄**：所有真被测过的版本都在 22.13.0 之上（`VALIDATION.md` 的便携包 **22.23.3**、CI 的 **22.x/24.x**、本机 **v24.19.0**），而 **22.6 下限本身从未被任何测试覆盖**（`VALIDATION.md` 与 `README.md` 均已如实记录）。修法见 D68 第一节的三选一，最干净的是把 `engines` 抬到 `>=22.13.0` —— `AUDIT.md` 的 A15 早已把该下限列为"仍需收窄"。详见 D68。
+
 **因此本条对 ① 的判定应从"值得重议"降级为"已重议、结论是不放开"**，理由不是原则而是交易：**D56 列的五项"被 ① 挡住的能力"里，两项已有零依赖解法（其中一项已实现）、一项当前队列不需要，只有嵌入与 pty 真的被挡住 —— 而那两项恰好都是中间路也救不了的**（`onnxruntime-node@1.30.0` 解包 **287.12 MB** + `postinstall="node ./script/install"`；`node-pty@1.1.0` 解包 **61.38 MB** + deps 含 `node-addon-api` + `install="node scripts/prebuild.js || node-gyp rebuild"`）。
 
 **仍然成立的部分**（未被推翻）：① 增强可核验性与供应链安全；pty 缺失导致真实终端观感永久未验证（`VALIDATION.md:218` / `LIVE_INTEGRATION.md:72`）；"不是做不到而是交易不好"的判例措辞（`:655`）；② 拒绝的是**估算**而非**测量**；③ 削弱的不是能力而是**自主性**，且不该重议（第二自报通道铁律 `STATUS.md:101`）。
@@ -699,7 +704,7 @@ this.protectedRoots = Object.freeze([...paths.protectedRoots, this.home, storeRo
 | D56 的声称 | 取证结果 | 硬证据 |
 |---|---|---|
 | 发送前无法预测 token 溢出 | **不成立** —— **零依赖、零改动，今天就能用** | [cli.ts](../src/cli.ts) 第 180–204 行 `tokenizerCounter`（详见下节） |
-| 会话历史无法按内容索引查询 | **不成立** —— Node 内置 `node:sqlite` 即可 | 本机 Node **v24.19.0** 实测：`require("node:sqlite")` 可加载，导出 `DatabaseSync, StatementSync, Session, constants, backup`；建表 / 插入中文 / 条件查询 / 排序**全部成功**。`package.json` 的 `engines` 为 `node >= 22.6`，而 `node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖** |
+| 会话历史无法按内容索引查询 | **不成立** —— Node 内置 `node:sqlite` 即可 | 本机 Node **v24.19.0** 实测：`require("node:sqlite")` 可加载，导出 `DatabaseSync, StatementSync, Session, constants, backup`；建表 / 插入中文 / 条件查询 / 排序**全部成功**。`package.json` 的 `engines` 为 `node >= 22.6`，而 `node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖** **⚠️ 更正（D68）：此项不成立 —— 22.5.0 至 22.12.x 需要 `--experimental-sqlite` 启动标志（Node 官方 `doc/api/sqlite.md` 的 `changes` 记录，PR 55890 在 v22.13.0/v23.4.0 去掉该标志），而声明下限 22.6 正在该区间内；"内置"不等于"免标志可用"。原文按规矩保留。实际暴露面窄：被测过的 22.23.3 / CI 22.x / 24.x / 本机 v24.19.0 全在 22.13.0 之上，22.6 下限本身从未被测。详见 D68 第一、二节** |
 | 语义相似度做不了（任务切换检测） | **成立**，但有零依赖替代 | 真要语义嵌入须 `@huggingface/transformers@4.3.0`（Apache-2.0，自身 9.43 MB，无安装钩子），**但其 deps 含 `sharp`（原生图像库）与 `onnxruntime-node`**；`onnxruntime-node@1.30.0` **解包 287.12 MB、`postinstall="node ./script/install"`、`os` 限定 win32/darwin/linux**，另需运行时下载模型文件 |
 | 真实终端观感无法验证（pty） | **成立，且中间路走不通** | `node-pty@1.1.0`（MIT）**解包 61.38 MB**，deps 含 **`node-addon-api`（原生插件）**，**三个安装钩子**：`install="node scripts/prebuild.js \|\| node-gyp rebuild"`、`postinstall="node scripts/post-install.js"`、`prepare="npm run build"` ⇒ **需 node-gyp 编译兜底，且安装即执行代码** |
 | 读不了二进制文档 | 成立，但**当前队列不需要** | `inspect_file`（D41/D44）已覆盖 `file_type`/`headers`/`hex_dump`/`hash`/`strings`/`certutil_dump`，真机实测读出过 PE32+ / AMD64 / 字节数 / Node 版本 / Authenticode 签名者 |
@@ -1407,6 +1412,120 @@ CREATE INDEX idx_agent_job_items_status ON agent_job_items(job_id, status, row_i
 **概括的样本**：**"有任务状态的产品都带数据库"由 4 个产品支撑**（codex 深读、opencode 读到 todo 表、goose/crush 只有依赖命中），**比上一轮的 2 个强，但仍不是全样本**；且 `claude-code`/`assistant-code` 无源码，**它们的机制完全未知**。
 
 **未验**：`node:sqlite` 在本项目 Node 下限（22.6）下的可用性；`node:sqlite` 写入 agent home 与 D50 按位置拒绝的兼容性；**step id 的生成与保持方案**（名次 1 的关键难点，本轮只指出它必须存在，没有设计它）。
+
+### `node:sqlite` 的两项前置：一项被推翻、一项通过，附对 D57 的更正（D68，2026-09-30，**验证轮，无代码**）
+
+**验的是 D67 排名里名次 2 挂着的两项前置。** 结论：**前置一（下限可用性）不通过，但缺口比想象窄且修法便宜；前置二（D50 兼容性）通过，而且附带得到一个 desirable 性质。** 另**撞见一处 D57 的既有断言必须更正**，以及**一条 D50 与 ADR-0001 都没覆盖的新风险**。
+
+**⚠️ 本轮不改产品代码。**
+
+#### 一、前置一：`node:sqlite` 在 `engines: node >=22.6` 下限处**不能免标志使用**
+
+**来源**：Node 官方文档 `doc/api/sqlite.md`（`raw.githubusercontent.com/nodejs/node/main`）。**⚠️ `web_fetch` 本轮失败（`TypeError: fetch failed`），是用 `curl.exe` 取回的，单一来源，未与 nodejs.org 官网或 CHANGELOG 交叉核对。**
+
+其 YAML 头原文：
+
+```
+added: v22.5.0
+changes:
+  - version: [v25.7.0, v24.15.0]   pr-url: …/pull/61262
+    description: SQLite is now a release candidate.
+  - version: [v23.4.0, v22.13.0]   pr-url: …/pull/55890
+    description: SQLite is no longer behind `--experimental-sqlite` but still experimental.
+> Stability: 1.2 - Release candidate.
+```
+
+正文另有一句：**"This module is only available under the `node:` scheme."**
+
+⇒ **模块自 v22.5.0 起内置，但直到 v22.13.0（22.x 线）之前都需要 `--experimental-sqlite` 启动标志。本项目 `package.json` 的 `"engines": { "node": ">=22.6" }` 正落在"内置但需要标志"的区间（22.6 – 22.12.x）。**
+
+**⚠️ 这条的严重性在于：启动标志无法由进程自己在运行中打开。** 真机确认 `process.allowedNodeEnvironmentFlags.has("--experimental-sqlite")` 在 v24.19.0 上仍为 `true`（标志仍被识别，只是不再必需），但**"识别"不等于"能在运行中启用"** —— 它是启动期标志。
+
+**⇒ 名次 2 在下限处不是免费的，必须三选一：**
+
+| 选项 | 代价 | 评价 |
+|---|---|---|
+| **(i) 把 `engines` 抬到 `>=22.13.0`** | 排除 22.6–22.12.x 的用户 | **最干净，而且这批用户从来没被测过**（见下）。`AUDIT.md:25` 的 **A15 早已把 `engines>=22.6` 列为"仍需收窄"的未决项**，所以这不是为 sqlite 新开的口子，是补上一个已登记的欠账 |
+| **(ii) 要求操作员用 `--experimental-sqlite` 启动** | 把负担推给人，忘了就崩；且与"零配置可用"的取向冲突 | **不可取** |
+| **(iii) 运行时探测 + 降级** | 探测只能在 `import` 失败时才知道，等于 try/catch 一个 builtin；**降级路径需要另一套存储 ⇒ 两套存储实现并存** | **代价最大，且违反"一个问题一个答案"** |
+
+**⚠️ 但实际暴露面比"下限不满足"听起来窄得多**，因为**所有真被测过的版本都在 22.13.0 之上**：
+
+- `VALIDATION.md:210`：*"**Node 22.23.3 便携包实测通过**（官方 zip，SHA256 与 nodejs.org 的 SHASUMS256 一致…）"*，且同格明写 *"**只测了运行器给出的 22.x/24.x 与本机 22.23.3**（不是 22.6 下限本身）"*
+- `README.md:52`：*"CI 在 `.github/workflows/ci.yml`：Windows 运行器 + Node `22.x`/`24.x`… **测的是这些具体版本，不是 `engines` 下限 22.6 本身**"*
+- 本机 **v24.19.0**
+
+⇒ **`engines` 的下限 22.6 是一条从未被任何测试覆盖过的声明**（这一点 `VALIDATION.md` 与 `README.md` 都已如实记录）。**所以"抬高下限"不会让任何被测过的配置失效。**
+
+#### 二、⚠️ 对 D57 的更正（标记式更正块，不改写原文）
+
+**原文（`REFERENCE_DECISIONS.md` D57 段，两处）**：*"本机 Node **v24.19.0** 实测 `require("node:sqlite")` **直接可加载**…而 `engines` 为 `node >= 22.6`、`node:sqlite` 自 22.5 起内置 ⇒ **floor 已覆盖，同样零依赖**。"*
+
+**更正**：**"自 22.5 起内置"是对的，"floor 已覆盖"是不成立的** —— 因为 **22.5.0 至 22.12.x 需要 `--experimental-sqlite`**，而声明的下限 22.6 在该区间内。**"内置"与"免标志可用"是两件事，D57 把它们当成了一件事。**
+
+**⚠️ 需要说清楚的是：同一份文档的"未验证"清单当时就正确地记下了这一条** —— *"**未验证**：…`node:sqlite` 在 `engines` floor（22.6）上**是否打 ExperimentalWarning 或需 flag**（本机只有 v24.19.0）"*。**⇒ 错的是结论段的措辞（把未验的事说成已覆盖），不是取证清单。** 这与 D55 立的判据同源：**凡断言某能力"可用/被挡住"，必须指出具体依据；此处的依据只支持"本机 v24.19.0 可用"，不支持"floor 已覆盖"。**
+
+**这是本项目第七次自我更正，形态与前几次相同：由一台机器的实测结果推广到一条声明的范围。**
+
+#### 三、前置二：与 D50"按位置拒绝"**兼容**，且附带一个好性质
+
+- **拒绝的实现位置**：`security-config.ts` 的 `assertReadablePath`（`:141-153`，注释 *"Deny before read and after canonicalization. Error never includes file contents."*）。它按 `protectedRoots()` 与 `sensitivePathName` 拒绝。
+- **`sensitivePathName`（`:136-138`）的正则里含 `.personal-agent` 与 `.dsh`** —— 正是 agent home 的默认目录名（`cli.ts` 的 `home: env.PERSONAL_AGENT_HOME ?? resolve(".personal-agent")`）。其注释自陈边界：*"A name list is a hint, not a boundary… It is still worth applying uniformly, including inside an added readable root, so that widening the readable area cannot make protection weaker than it is in the workspace."*
+- **⇒ 这个拒绝发生在"文件工具的路径闸门"上，不是文件系统属性、也不是进程属性。**
+- **而产品自身的存储从不经过它**：`cli.ts:256` 是 `const store=new SessionStore({root:paths.agentHome});` —— **会话日志本来就写在 agent home 里**。`cli.ts:65` 的注释也是这么说的：*"agent home 按位置对**文件工具**封死"*。
+- **⇒ `node:sqlite` 写入 agent home 与 `SessionStore` 写 JSONL 属于同一类（产品内部存储），D50 不拦它。**
+- **⚠️ 附带得到一个 desirable 性质**：因为 `sensitivePathName` 命中 `.personal-agent`，**模型永远无法通过工具直接读写那个 DB，正如它读不到 JSONL 日志**。⇒ **DB 天然落在"产品内部、模型不可达"这一侧**，不需要额外设防。
+
+#### 四、⚠️ 新风险：数据库会把"不可改写历史"从结构性质降级为纪律
+
+这是本轮发现的一条 **D50 与 ADR-0001 目前都没有覆盖**的风险：
+
+- **append-only JSONL 让"产品无法改写自己的历史"成为存储形状提供的结构性质**。`cycle-store.ts` 头注：*"the log is the fact and the state is a fold over it, **a truncated tail (a crash mid-append) is dropped rather than guessed at**"*；ADR-0001 §4.2 还专门**删除**了 `appendToolCall`/`appendToolResult` 两个写入器以减少写入点。
+- **数据库引入 `UPDATE`/`DELETE`，把这条保证降级成"代码要自觉"**。对照证据：codex 的 `goals.rs` 里有**六处 `UPDATE thread_goals`** 与 `ON CONFLICT … DO UPDATE`；**本项目若照做，"日志不可改写"就不再由存储形状提供，而要由代码评审提供。**
+- **⇒ 因此有一条规则应当写进 `SAFETY.md`**：**若采用 SQLite，只允许 `INSERT`（含 `ON CONFLICT DO NOTHING`）与 `SELECT`，不允许 `UPDATE`/`DELETE`** —— 这样能拿到键控查询与主键去重，**同时保住 append-only 的结构性质**。代价是拿不到 D67 证据 2 那种"原子条件更新"（那需要 `UPDATE`），**而那恰好是名次 5 升到名次 1 之上的前提** ⇒ **这是一个真实的取舍，不是可以两全的。**
+- **边车文件**：真机探测显示**默认 journal 模式下、干净关库后目录里只有 `probe.db` 一个文件，没有 `-wal`/`-shm`**。**⇒ 边车问题只在启用 WAL 时出现**，而按上一条规则本项目不需要 WAL。
+
+#### 五、真机探测原始输出（D45：真机验证才是可信单位）
+
+探测脚本写在项目外的临时路径（`D:\DSHXM\sqlprobe.cjs`），用完即删，**未留在仓库里**。建了一张与 D67 名次 1 同构的表（`PRIMARY KEY (task_id, step_id, run_id)`）：
+
+```
+node 版本 = v24.19.0
+--experimental-sqlite 仍在本版本的允许标志里吗 = true
+require('node:sqlite') 成功（本机无需标志）
+写 3 行、读回 = [{"step_id":"s2","run_id":"r5","outcome":"met"},{"step_id":"s3","run_id":"r5","outcome":"unmet"},{"step_id":"s2","run_id":"r6","outcome":"met"}]
+折叠出「截至 r6 各步最新判定」= {"s2":"met","s3":"unmet"}
+原子条件更新的 changes = 1
+关库后目录内实际文件 = probe.db
+db 文件大小 = 12288 字节
+临时目录已删除
+```
+
+**⚠️ 对这份输出必须如实说明两点，不能让它们比实际更强**：
+
+1. **`changes = 1` 不是"守卫不满足时为 0"的证明。** 探测语句是 `UPDATE … SET outcome='met' WHERE step_id='s3' AND outcome='unmet'`，而 `s3` 当时**正是** `unmet` ⇒ **守卫是满足的，返回 1 是正确的**。**它证明的是"比较与写入在同一条语句里完成"，没有证明"守卫不满足时不改任何行"（那需要再跑一次反例，本轮没跑）。** 探测脚本里那句标签文字（"守卫不满足时应为 0"）是**我写错的**，在此更正。
+2. **"折叠出各步最新判定"演示的是名次 1 的形状**（不可变分项事实 + 读时折叠），**不是名次 2 独有的能力** —— 名次 1 在 JSONL 下同样能做，只是折叠发生在 JS 里而不是 SQL 里。
+
+#### 六、对 D67 排名表的修正
+
+**按既有规矩，历史文档不改写，修正记在这里。**
+
+| D67 名次 | D68 之后的状态 |
+|---|---|
+| **1（步骤稳定 id + 每轮不可变分项判定 + 读时折叠）** | **不变，且被真机探测印证可行**（第五节的表结构与折叠）。**仍是唯一必须新增概念的方案，且不依赖存储后端** |
+| **2（采用 `node:sqlite`）** | **⚠️ 从"两项前置未验"改为"一项通过、一项不通过"**：D50 兼容性**通过**（第三节）；下限可用性**不通过**（第一节），**须先把 `engines` 抬到 `>=22.13.0`（选项 i）才谈得上采用**。另外第四节的"只许 INSERT/SELECT"规则会让它**拿不到原子条件更新**，即**名次 2 的主要吸引力（证据 2）与保住 append-only 性质不可兼得** |
+| **5（JSONL 里的可变快照）** | **⚠️ D67 说"若先做了名次 2，本方案会升到名次 1 之上"—— 这句话要加条件**：只有在**允许 `UPDATE`**（即放弃 append-only 的结构保证）时才成立 |
+| 3、4、死 | 不变 |
+
+**⇒ 综合两轮取证，当前最小充分改动是 D67 的名次 1，且它不需要等任何存储决定。** 名次 2 变成一件**独立的事**（要不要引入第二个事实存储 + 要不要抬高 Node 下限 + 要不要放弃 append-only 的结构保证），**不应与名次 1 捆在一起做**。
+
+#### 七、如实记录的局限
+
+**未验**：**没有真的安装 Node 22.6–22.12.x 去实测标志要求** —— "下限处需要标志"是由官方 YAML 的 `changes` 记录推出的，**不是实测**；`UPDATE` 守卫不满足时 `changes = 0` 的反例未跑；**抬高 `engines` 是否会影响别的承诺未查全**（只确认了 `AUDIT.md:25` A15 已把它列为待收窄、以及 CI 与便携包实测版本都在 22.13.0 之上）；`node:sqlite` 在**非 Windows** 上的行为未验；**SQLite 文件损坏时的可重建性未验**（D57 曾提出"索引损坏须可重建而非报错"，本轮没有测）。
+
+**未读**：goose / crush 的存储细节（D67 遗留）；opencode 的 v2 session core；LangGraph checkpointer；Temporal event history；宿主 dsh（本环境读不到）。
+
+**单一来源**：Node 版本事实只来自 `doc/api/sqlite.md` 一份文件（`web_fetch` 失败，改用 `curl.exe`），**未交叉核对**。
 
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
