@@ -131,6 +131,48 @@ ctx.on?.('agent/pre-step', handler, { prepend:true }) // 订阅事件
 
 **`openai-adapter.ts` / `echo-adapter.ts` 是可互换的模型适配器** ⇒ **本项目已经有一条真的接缝，只是只有这一条。** 它证明接缝层不是空想：**照它的形状把 `ctx` 与三类事件补出来，其余 26 个模块就有了可移入的位置。**
 
+### 3.4 ⚠️ 实测：地基形状是对的，错的是扩展方向（2026-09-30，脚本建 import 图，36 个文件全覆盖）
+
+**上面 §3.1/§3.2 的划分是判断，不是测量。以下是对 `src/` 全部 36 个文件解析 `from "./x.ts"` 的实测结果。**
+
+**① 零循环依赖。** 36 个文件的内部 import 图**无环**。这一条决定性地回答了"是否在错误的地基上建造"：**纠缠的地基拆不成插件，无环的可以。**
+
+**② ⚠️ `ModelAdapter` 不是"接近接缝"，它就是一条教科书式正确的接缝。** 实测三项：
+
+| 探针 | 结果 |
+|---|---|
+| `types.ts` 导出 | `Role, ToolCall, ChatMessage, JsonSchema, ToolDefinition, ChatRequest, ChatUsage, ChatResponse, **ModelAdapter**` ⇒ **接口与词汇表同在核心** |
+| `runtime.ts` 是否直接 import 具体适配器 | **`openai-adapter` = false，`echo-adapter` = false** ⇒ **循环只依赖接口** |
+| 谁挑具体实现 | **`cli.ts`**（组合根）：`if(options.echo) adapter=createEchoAdapter()` |
+
+**⇒ 这正是 DSH `llm/llm` 的形状：循环依赖接口，组合根挑实现。** `ToolRegistry` 是第二条真接缝（`constructor(available?)` + `has()` + `definitions()` + `execute()`，缺席在两个方向一致强制）。
+
+**③ ⚠️ §3.2 有三个模块被我分类错了，此处更正（原文按规矩保留）。** `gene.ts`、`cycle.ts`、`task-state.ts` 被列为"应当移到接缝后面"，但**实测它们的内部被依赖度是 8 / 6 / 5，且依赖方包含核心模块**：
+
+```
+session-store.ts -> session-lease.ts, security-config.ts, types.ts, gene.ts, task-state.ts
+file-policy.ts   -> gene.ts, rule-table.ts, write-tools.ts
+tools.ts         -> … session-store.ts, task-state.ts
+```
+
+**⇒ 会话日志与策略层已经认识两个"本该是插件"的东西。这不是"移过去很便宜"，是词汇表泄漏进了核心。** 修法就是 `ModelAdapter` 已经用的那个：**共享词汇（类型）进 `types.ts`，行为留在外面。**
+
+**④ 一个真正封闭的扩展点。** `session-store.ts` 的 `migrateEvent` 是 **8 个 case 的 switch** ⇒ **新增事件种类必须改核心**。DSH 的 session events 是开放的（插件可追加种类），这一处不是。**这是"特权核心"最具体的一个实例，也是任务状态这类功能每加一个都要碰核心的原因。**
+
+**⑤ 真正的病灶：组合根与循环按名字硬 import。**
+
+| 文件 | out-degree | 含义 |
+|---|---|---|
+| `cli.ts` | **23** | 几乎 import 全部模块（组合根本应如此，但它同时也是唯一挑实现的地方） |
+| `runtime.ts` | **16** | `constraints`/`task-state`/`taskspec`/`write-budget`/`validation`/`gene-store`/`cycle-store`/`cycle` **全部按名字直接 import** |
+| `tools.ts` | **12** | 含 `inspection-tools`/`shell-tool`/`background-jobs`/`task-state` |
+
+**⇒ DSH 那句 "There is no privileged core to patch" 在本项目不成立：要让任何东西成为插件，都得先改 `runtime.ts`。这就是"特权核心"。**
+
+**⑥ 结论（对"是否在错误的地基上建造"的回答）**：**不是。** 无环 + 两条已存在且正确的接缝 = **地基形状是对的**。**错的是扩展方向** —— 核心按名字硬 import，所以新增能力必须改核心。**那是一个窄得多、也便宜得多的问题：把 `ModelAdapter` 已被证明的模式推广出去，而不是发明新框架。**
+
+**⑦ ⚠️ 因此 §5 的第一条"接缝的具体签名尚未设计"已被本轮测量推翻**：签名已经存在（`ModelAdapter`），并且已经在一个地方被正确使用。**再设计一套新接口就是重造代码库里已有的东西。**
+
 ---
 
 ## 4. 与既有决定的一致性
@@ -146,6 +188,7 @@ ctx.on?.('agent/pre-step', handler, { prepend:true }) // 订阅事件
 ## 5. ⚠️ 本文档不决定的事（如实记录）
 
 - **接缝的具体签名**（`provide`/`get`/`on` 的类型、事件负载形状、卸载语义）**尚未设计** —— 本文档只定形状与划分，不定 API。
+  **⚠️ 本条已被 §3.4 的实测部分推翻（2026-09-30）：`ModelAdapter` 的签名已经存在且已被正确使用（接口在 `types.ts`，`runtime.ts` 不 import 任何具体适配器，`cli.ts` 挑实现）。⇒ 待设计的不是"签名"，而是"把这个已被证明的模式推广到哪几处"。** 仍未设计的只剩 `on(event, …)` 的事件负载形状与卸载语义 —— 而这两项**在没有第二个消费者之前属于推测需求**。
 - **插件的分发格式**（是否要 bundle/profile/patch 三层，还是只要"一个目录一个插件"）**尚未决定**。DSH 的三层是为多 profile 分发设计的，本项目是否需要**未评估**。
 - **迁移顺序**（26 个模块先移哪个）**尚未决定**。候选判据：先移已经有缝的（模型适配器），再移最独立的（`inspection-tools.ts`、`shell-tool.ts`），最后移最纠缠的（`runtime.ts`、`tools.ts`）。
 - **零生产依赖是否仍能维持** —— 接缝层本身应当能用标准库实现，但**未验证**。
