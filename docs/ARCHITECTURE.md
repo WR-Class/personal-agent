@@ -189,6 +189,13 @@ tools.ts         -> … session-store.ts, task-state.ts
 
 - **接缝的具体签名**（`provide`/`get`/`on` 的类型、事件负载形状、卸载语义）**尚未设计** —— 本文档只定形状与划分，不定 API。
   **⚠️ 本条已被 §3.4 的实测部分推翻（2026-09-30）：`ModelAdapter` 的签名已经存在且已被正确使用（接口在 `types.ts`，`runtime.ts` 不 import 任何具体适配器，`cli.ts` 挑实现）。⇒ 待设计的不是"签名"，而是"把这个已被证明的模式推广到哪几处"。** 仍未设计的只剩 `on(event, …)` 的事件负载形状与卸载语义 —— 而这两项**在没有第二个消费者之前属于推测需求**。
+  **⚠️⚠️ 上一行末尾那句"属于推测需求"也已被推翻（D69，同日，见 [REFERENCE_DECISIONS.md](REFERENCE_DECISIONS.md) 的 D69）。写出它时我没有读过 `docs_cordis-primer.md`（45 行）与 `docs_architecture.md:91-150`，是用没读过的东西否决了它。** Cordis 早已给出答案：**事件负载形状** = TypeScript 声明合并 + `@mode` 标签；**卸载语义** = `ctx.effect()` 返回 disposer，*"If teardown order matters, keep the related work in one effect so disposal unwinds in the intended sequence"*；**加载顺序** = `inject` 声明服务需求，*"load order is expressed through service requirements rather than manual boot sequencing"*。**⇒ 这三项不是待设计，是待采用。**
+- **⚠️ 本节其余各条的状态（D69 补读后）**：
+  - **"插件的分发格式"** —— **可以确定地拒绝 loader/overlay 三层**，而且这次是读过之后拒绝：`docs_cordis-primer.md:39` 原文自己就是条件句 *"**Use overlays when the environment selects plugins.**"*，profile/bundle/patch 服务于多 profile 分发（`web`/`headless`/`sdk`/`acp`），本项目一个 profile 都没有。**不做它与源一致。**
+  - **"迁移顺序"** —— **`:117` 给出了判据**：*"A seam is a swappable capability with three roles: a Service Definition… a Service Provider… and a Consumer… **one role alone is not a seam; adding a capability means designing all three**"* ⇒ **每处迁移必须同时设计三角色**，我上一轮"推广 `ModelAdapter` 到 tools"的说法按此不完整。
+  - **"任务状态的存储归属"** —— **`:113` 的 Projection seam 已给出答案形状**：*"registered units fold committed events incrementally, host consumers read one typed state with `stateOf()`"*，且 *"A host reader either requires this service during activation or **fails explicitly** when the registry or required key is absent"*（**不静默默认**）⇒ **D67 名次 1 的"读时折叠"是 DSH 已出厂的接缝**，三轮研究重新发明了它。
+  - **⚠️ `node:sqlite` 应当再降**：`:109` 证明 DSH 自己就是 **JSONL + zstd + 版本化 generation + 相邻单步迁移**，且 *"committed generation paths are never renamed, replaced, or deleted"* —— **一个成熟产品在同样问题上没有选 SQLite**，且与 D68 的 INSERT-only 规则同向。
+- **⚠️ 新增未决项（D69）**：`migrateEvent` 的 8-case 封闭 switch **可以**照 `:143`（*"Add durable session state → extend `SessionEventMap`"*）+ 声明合并改成开放扩展点。**但本项目是 `node --experimental-strip-types` 直跑 TS，声明合并在此模式下的可用性未验证** —— 这是采用前必须先测的一条。
 - **插件的分发格式**（是否要 bundle/profile/patch 三层，还是只要"一个目录一个插件"）**尚未决定**。DSH 的三层是为多 profile 分发设计的，本项目是否需要**未评估**。
 - **迁移顺序**（26 个模块先移哪个）**尚未决定**。候选判据：先移已经有缝的（模型适配器），再移最独立的（`inspection-tools.ts`、`shell-tool.ts`），最后移最纠缠的（`runtime.ts`、`tools.ts`）。
 - **零生产依赖是否仍能维持** —— 接缝层本身应当能用标准库实现，但**未验证**。

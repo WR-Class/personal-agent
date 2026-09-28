@@ -1527,6 +1527,109 @@ db 文件大小 = 12288 字节
 
 **单一来源**：Node 版本事实只来自 `doc/api/sqlite.md` 一份文件（`web_fetch` 失败，改用 `curl.exe`），**未交叉核对**。
 
+### Cordis 是什么、DSH 把新行为放在哪里，以及"我用没读过的东西否决了它"（D69，2026-09-30，**取证轮，无代码**）
+
+**触发**：操作员质问 *"DSH不就是现成的例子吗？他是如何设计的？为什么又不参考成熟产品？"*
+
+**⚠️ 质问成立，先认错**：上一轮（`ARCHITECTURE.md` §5 的建议）我断言 *"不该建一套 Cordis"*、*"事件负载形状与卸载语义在没有第二个消费者之前属于推测需求"*。**而当时 `D:\DSHXM\ZYZNT\_dsh_ref\docs_cordis-primer.md`（45 行）我根本没读，`docs_architecture.md` 我只读了 1–90 行、全文 150 行。我用没读过的东西否决了它。**
+
+**本轮补读**：`docs_cordis-primer.md` **全文 45 行**；`docs_architecture.md:91-150`（**补齐此前跳过的 60 行**）。
+**⚠️ 如实标注未读**：`docs_development.md`（16.9 KB）、`dsh-upstream-AGENTS.reference.md`（16.5 KB）、`blog-cordis-tencent.html`（**204 KB**）；架构文档里引用的 `subsystems/*.md`、`cookbook/*`、`agent-lifecycle.md`、`tool-execution-pipeline.md`、`capability-seams.md` **在 `_dsh_ref` 内不存在，本地不可达**。
+
+#### 一、Cordis 的五个观念（`docs_cordis-primer.md:9-13`，逐字）
+
+| # | 观念 | 原文 |
+|---|---|---|
+| 1 | **插件是实现 Service 的对象** | *"A plugin is a object that implements Service. It can be a function with optional `inject` and `apply(ctx)` fields, or a `Service` subclass whose lifecycle Cordis mounts into the current context."* |
+| 2 | **context 是服务的仓库** | *"A service claims a stable `ctx.<key>` such as `ctx.tools`, `ctx.llm`, or `ctx.sessions` from a context; **other plugins find services via key instead of importing a concrete implementation**."* |
+| 3 | **用 `inject` 声明服务依赖** | *"A plugin that names required services **waits until those services exist**, so **load order is expressed through service requirements rather than manual boot sequencing**."* |
+| 4 | **类型化事件用于通信** | *"Services declare event names through **TypeScript declaration merging**, then dispatch them as `emit`, `waterfall`, `parallel`, `serial`, or `bail` depending on whether listeners observe, wrap, fan out, run in order, or stop at the first bail value."* |
+| 5 | **注册是可逆的效果** | *"Prompt sections, tool schemas, adapters, providers, and listeners are installed through `ctx.effect()` or `ctx.on()` so reload and teardown unwind them predictably."* |
+
+**⚠️ 观念 2 与 3 正是上一轮实测病灶的解药**：实测 `runtime.ts` out-degree **16**，`constraints`/`task-state`/`taskspec`/`write-budget`/`validation`/`gene-store`/`cycle-store`/`cycle` **全部按名字硬 import**；`cli.ts` out-degree **23**。**"按 key 找服务而不是 import 具体实现" + "加载顺序由服务需求推导"** 就是针对这个形状的。
+
+#### 二、五种 dispatch mode 是事件的公开契约（`:19-27`）
+
+| Mode | Awaited? | 顺序 | 有返回值? |
+|---|---|---|---|
+| `emit` | No | 注册序，观察 | No |
+| `waterfall` | No | 注册序，观察 | **Yes** |
+| `parallel` | Yes | 全部并行 | No |
+| `serial` | Yes | 注册序 | Yes |
+| `bail` | No | 注册序，**直到有人 bail** | Yes |
+
+**`:27`**：*"The dispatch mode is part of the event's **public contract**. New harness events document it with an **`@mode` tag** so the generated catalog can check declarations against dispatch sites."*
+
+**`:31-35` waterfall 语义**：*"`ctx.waterfall` is **around-middleware**. A listener receives `(...args, next)`. Call `next()` to delegate the possibly wrapped result to the next service; **return without `next()` to short-circuit**."*，且 *"For **single-decision** events, **short-circuiting is the design**. A policy listener can return without `next()` when it owns the decision, while a listener that only annotates or observes must delegate."*
+
+**⚠️ 这条直接对上本项目的 `decide()`**：本项目策略是默认拒绝、零模型调用；**Cordis 的形状是"拥有该决定的策略 listener 不调 `next()`"** —— 同一条语义，一个用函数返回值表达，一个用中间件短路表达。
+
+#### 三、⚠️ 我跳过的 60 行里有整个参考集最有用的一张表（`docs_architecture.md:123-148`「Where new behavior goes」）
+
+**`:125`**：*"New behavior attaches to a documented extension point. **Changing the loop itself updates this map.**"*
+
+| 目标 | 机制 |
+|---|---|
+| Add a model provider | register its adapter on `ctx.llm` |
+| **Add a model-facing capability** | **register on `ctx.tools`; its schema joins prompt assembly** |
+| Give one session a different capability set | compose an agent preset; a service row there needs an `isolate` realm |
+| Add shell execution | register a `ctx.shell` backend; the local one spawns through `ctx.subprocess` |
+| Add persistent terminal execution | register a `ctx.terminals` backend plus `dsh-tool-terminal` |
+| Add a human command | register on `ctx.commands`; it dispatches without a model turn |
+| **Add background work** | **register on `ctx.jobs`; `job_*` tools collect or stop it** |
+| Add filesystem access or policy | register a `ctx.fs` provider or listen to `fs/*` events |
+| Confine spawned processes | use a `ctx.sandbox` backend; consumers wrap argv before spawning |
+| **Intercept a request, tool, or turn** | use its `agent/*` or `tools/*` event; `agent/turn-stopping` stops a turn |
+| **Add model-facing context** | **call `agent.inject()`; it lands in the next admitted request** |
+| **⚠️ Add durable session state** | **extend `SessionEventMap`; render and replay from the log** |
+| Store sessions in a new backend | implement `SessionPersistence`（`create`/`open`/`stat`/`list`/`export`） |
+| Manage a same-session objective | use `ctx.goals`; continue through `agent/*` |
+| Scope a registration to one agent | use that agent's `agent.ctx` |
+
+**⇒ 本项目已建的东西在这张表里几乎每一行都有对应位置**：`run_command`→`ctx.shell`、`background-jobs.ts`→`ctx.jobs`、约束注入与任务状态注入→`agent.inject()`、`task-state` 事件种类→`SessionEventMap`、能力档→agent preset。**⚠️ 这张表本身就是"一切皆插件"的可执行版本 —— 它不是理念，是"想做 X 就注册到 Y"的对照表。**
+
+#### 四、⚠️ 三条直接命中本项目未决问题的发现
+
+**(1) `migrateEvent` 的 8-case switch 不是 append-only JSONL 的必然属性。** `:143` 说新增持久会话状态的办法是 **extend `SessionEventMap`**，配 Cordis 观念 4 的 **TypeScript declaration merging** ⇒ **事件种类由插件声明扩展，核心不需要为每个新种类加一个 `case`。** 本项目实测 `session-store.ts` 的 `migrateEvent` 是 8 个 case 的封闭 switch，**这是设计选择造成的，不是存储选择造成的**。
+
+**(2) ⚠️ D67 的名次 1 是 DSH 已出厂的接缝。** `:113`「Projection seam」：*"`dsh-session-projection` owns `ctx.sessionProjections`: **registered units fold committed events incrementally, host consumers read one typed state with `stateOf()`**, and carriers batch cropped client views with `snapshot()`. **A host reader either requires this service during activation or fails explicitly when the registry or required key is absent.** Contributors may retain `ctx.inject(['sessionProjections'], ...)` registration **without silently defaulting a missing host value**."*
+⇒ **"注册的单元增量折叠已提交事件、宿主用 `stateOf()` 读一份类型化状态"就是 D67 名次 1 的"读时折叠"**，而"缺失时显式失败、不静默默认"正是本项目 D60 那个陷阱（*"照抄基因门会让每个步骤在基因库为空时永久停在 `unverifiable`，功能看起来在工作却永远判不出任何东西"*）的同一处方。**⇒ D66/D67/D68 三轮研究重新发明了一个已出厂的设计，而我当时没读它。**
+
+**(3) ⚠️ `:111` 是 ADR-0001 的强化版，可直接采用。** *"**Model-visible means logged.** Anything that reaches a model request must be reconstructable from the log, and **a runtime invariant asserts it**. This is why a new model-visible input requires a new session event: extend `SessionEventMap` and render from the log."*
+⇒ 本项目 ADR-0001 说的是同一原则（会话日志是唯一事实源），**但只写在文档里；DSH 把它做成运行时断言的不变量**。这是一条**可机械验证**的升级路径。
+
+**(4) `:101` 顺带回答了一个本项目悬着的问题。** *"`agent/pre-step` **decides what the model sees**. Listeners may **rewrite the claimed messages or reject them outright**; **a rejected or empty first claim still closes a durable turn that spent no step, so the log records the attempt.**"*，且 *"A listener that rebuilds a downstream enter decision must **spread it** (`{ ...decision, messages }`) so the declaration survives."*
+⇒ **① 这正是操作员要的 TaskSpec 落点**（*"大模型实际读取…是机器语言或者说提示词"*）；**② 被拒绝的轮次仍然落一条持久 turn，日志记下这次尝试** —— 本项目此前未定；**③ 重写下游决定时必须展开原对象，否则声明丢失** —— 一个具体的实现陷阱。
+
+**(5) `:117` seam 的三角色定义。** *"A **seam** is a swappable capability with three roles: a **Service Definition** declaring the interface, a **Service Provider** implementing it, and a **Consumer** using it, commonly a model-facing tool. A package may combine roles, but **one role alone is not a seam; adding a capability means designing all three**."*
+⇒ **⚠️ 我上一轮"把 `ModelAdapter` 推广到 tools 就够"的建议按此定义不完整**：必须同时设计三者。（`ModelAdapter` 本身三角色齐全：`types.ts` 定义 + `openai-adapter`/`echo-adapter` 两个 provider + `runtime.ts` 消费 —— 实测 `runtime.ts` 对两个具体适配器 import 均为 `false`。）
+⇒ **`:119`**：*"Seams are why **one provider swap changes the whole product**. Filesystem and subprocess providers share one execution world, so pointing them at a remote sandbox moves Bash, PTY, and LSP with them, **with no provider forks**."*
+
+**(6) `:97` 逐事件指定 mode。** *"`agent/pre-step`, `agent/request`, `llm/stream`, and the three `tools/*` events are **waterfalls**, whose listeners **must call `next()`** to delegate; `agent/turn-stopping` is **serial** and has no `next()`."*
+
+**(7) ⚠️ `:109` 是 D67/D68 存储排序的直接外部证据。** *"JSONL v0 uses `session.jsonl[.zstd]`, v1 and later use lowercase `session.vN.jsonl[.zstd]`, and **committed generation paths are never renamed, replaced, or deleted**. The JSONL provider owns physical framing, compression, generation selection, and exclusive publication, while **each adjacent migration package owns exactly one `vN -> vN+1` step**."*
+⇒ **DSH 自己就是 JSONL + zstd + 版本化 generation + 相邻单步迁移**，且**已提交的 generation 路径永不重命名/替换/删除**。**这与 D68 的"只许 INSERT/SELECT"规则同向**（都是"产品无法改写自己的历史"），**并且是一个成熟产品在同样问题上没有选 SQLite 的实例** —— D67 名次 2 因此应当再降。
+
+#### 五、拒绝（只有一条，且这次是读过之后才拒绝）
+
+**Loader/overlay 层**：`@deepseek-ai/cordis-plugin-include` 把 `!!js` 解析成表达式节点，loader 对 `config`（在声明的注入激活后、对该插件 context 插值）与 `disabled`（每次 mount 决策、对 loader context 插值）求值（`:39`）。**profile/bundle/patch 三层组合**（`docs_architecture.md:17-37`）服务于**多 profile 分发**（`web`/`headless`/`sdk`/`sdk-minimal`/`acp`），本项目一个 profile 都没有。
+**⚠️ 而 `:39` 原文本身就是条件句：*"**Use overlays when the environment selects plugins.**"* ⇒ 不做它与源一致，不是拒绝它。** 这是本轮与上一轮的关键区别：**上一轮我没读就拒绝，这一轮读了才知道它自己就是可选的。**
+
+#### 六、⚠️ 对上一轮建议的两处更正
+
+1. **"事件负载形状与卸载语义属于推测需求（YAGNI）"—— 错。** Cordis 已给出答案：**负载形状** = TypeScript 声明合并 + `@mode` 标签（`:12`、`:27`）；**卸载语义** = `ctx.effect()` 返回 disposer，*"Every registration should have a disposer… **If teardown order matters, keep the related work in one effect so disposal unwinds in the intended sequence**"*（`:45`）；**加载顺序** = `inject` 声明服务需求、顺序由需求推导（`:11`）。**这三样不是推测需求，是已被解决的设计问题，就放在我没读的本地文件里。**
+2. **"把 `ModelAdapter` 推广到 tools 就够"—— 不完整**（`:117` 三角色）。
+
+**仍然成立的部分**：上一轮的实测（零循环依赖、`ModelAdapter` 是完整正确的接缝、`ToolRegistry` 是第二条真接缝、`migrateEvent` 是封闭扩展点、病灶在 import 方向）**没有被推翻，反而被 `:117`/`:143` 佐证**。
+
+#### 七、方法论教训（本轮最贵的一条）
+
+**项目既有纪律是 *"断言产品行为之前，先读到那条行为"*。本轮证明它必须扩展为：*"断言一个外部设计不需要之前，先读到那个设计。"***
+
+**这与 D56/D57 同类** —— 操作员两次挑战我的拒绝、两次都是他对（*"那就算增强"*、*"受限的是因为什么？"*）。**本轮是第三次，而且这次他连材料都替我指了出来**（*"DSH不就是现成的例子吗"*）。**共同形状是：我在"拒绝"上花的阅读远少于在"采用"上花的阅读** —— 拒绝看起来更省事，于是更容易在证据不足时发生。
+
+**⇒ 可执行的纠正**：**任何"不做 X"的结论，必须附上读过 X 的证据；读不到就写"未读，不下结论"。** 本轮第五节是这条规则第一次被正确执行的样子（读了 `:39` 才知道 overlay 自己就是条件性的）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
