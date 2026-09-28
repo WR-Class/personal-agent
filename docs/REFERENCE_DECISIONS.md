@@ -1186,6 +1186,32 @@ D59 已指出模型不得自报 `done`。**但读完 claim 机制后发现更隐
 
 **未做 / 未验**：**跨轮累积未定案**（见决定二）；`enforceTaskSpec` 的死代码未处理（独立小决定）；**`validation`/`evaluation` 在 CLI 上不可见**（见上）；`taskAssessment` 与 `compactedMessages` 同时出现时的呈现未测；只有 `--echo` 真机跑过，**没有真模型跑过它**。
 
+### 让机械判定在终端上可见：一个渲染器，而不是两个（D65，2026-09-30，有代码）
+
+**要修的缺陷不是"少一个功能"，而是"一个已有的结论没人看得见"**：`SendResult.evaluation` 每轮都算、cycle 日志每轮都存，**而两个 CLI 入口都不打印它**。于是"只信机械事实"这套取向**只在日志里成立，在操作员真正看的地方不成立** —— 与 D58 在 `enforceTaskSpec` 上发现的是同一个形状（已建成、测试里承重、 reaching nobody）。
+
+**本轮读了什么（符号+引文为主定位符）**
+
+| 来源 | 读到的承重事实 |
+|---|---|
+| `cycle.ts` `CycleEvaluation` | `{ status, failureClass, evidence, reviewer: "mechanical" }`；`EvaluationStatus` 注释 *"How the round ended, from mechanical evidence only — never a self-report"*；`FailureClass` 注释 *"What went wrong, coarsely enough to be honest about the cause"*；`evidence` 注释 *"The facts this verdict was read off, verbatim"*；**`reviewer` 注释 *"Who judged. Mechanical until a reviewer exists that is not the worker."*** |
+| `cycle.ts` `evaluateRun` | `evidence = [\`steps=${…}\`, \`toolCalls=${…}\`, \`toolErrors=${…}\`]`；`failureClass !== null` 时 `status = (failureClass === "model" && steps === 0) ? "blocked" : "failed"`；否则 `status = toolErrors === 0 ? "success" : "partial"` ⇒ **纯机械、不看基因**，与 D60 要求 `assessTaskState` 也不看基因一致 |
+| **⚠️ `validation.ts` `validationEvidence`** | **它已经把每条 claim 渲染成 `validation:${outcome}=${describeClaim(claim)} (${detail})`，而轮末已经把它并进了 `evaluation.evidence`** ⇒ **这是本轮最省事的一处发现：不需要为 `validation` 做第二个渲染器** |
+| `runtime.ts` `formatBudget` | 已打印 `步骤 N/M · 工具 N/M`，且内置两条诚实规则（未测量就写未测量、超上限就写超多少）⇒ **`evidence` 里的 `steps=` 与 `toolCalls=` 是重复信息，而 `toolErrors=` 不是**（预算行报调用数、不报失败数） |
+
+**六条决定**
+
+1. **一个渲染器，渲染 `evaluation`；不给 `validation` 单独做。** 因为 claim 结论**已经在 `evidence` 里**（见上表第三行）。**单独渲染 `validation` 会是同一事实的第二份呈现，而两份会漂移** —— ADR-0001 的形状在显示端的版本。
+2. **过滤掉预算行已经说过的证据，并把规则写明。** 只丢弃 `/^(steps|toolCalls)=/`。**理由不是省字符：把操作员刚读过的数字再念一遍是噪音，而噪音正是真正的告警被忽略的方式。** `toolErrors=` 保留。
+3. **无条件打印，不加 `--verbose` 开关。** 与 `formatBudget` 一致（它也总是打印、也那么长）。**一个默认隐藏的结论等于没有结论 —— 那正是本轮要修的缺陷本身，不能用同一个形状去修它。**
+4. **`reviewer` 必须打印。** 它是"谁判的"，而该字段的注释明说自己存在的理由是 *"Mechanical until a reviewer exists that is not the worker"*。**将来若真引入非 mechanical 的判定者，这一行是唯一能让人看出区别的地方** —— 少了它，那次变更会在终端上完全隐形。
+5. **证据行数设上限，超出则报出被省略的条数，不静默截断。** `evidence` 长度 = 3 + 基因 claim 数，而 **claim 数没有上限**（基因的 `validation` 是数组）。照 `formatBudget` 的诚实规则照办。**测试刻意不硬编码那个上限常量**，而是数出实际显示的行数再断言省略数 —— **否则调高上限会让这条测试变成假绿**。
+6. **顺序：预算 → 本轮判定 → 跨轮任务判定。** 顺序即语义（本轮消耗了什么 → 系统对本轮的结论 → 任务跨轮的进度）。**⚠️ 任务判定必须排最后**：它是三者中唯一**跨轮**的、且自带"仅对本轮证据"限定，**紧邻预算行会让读者把两种范围混在一起**。**两个入口必须同序** —— 否则操作员学会一个、被另一个误导。
+
+**验证**：`tsc --noEmit` 干净；`format-evaluation.test.ts` **9/9**；全量 **629 项 / 628 通过 / 0 失败 / 1 跳过** = 基线 620/618/1/1 **+9**。**⚠️ 那 1 项已知漂移（`background-jobs` 的 kill 测试）本轮没有复现，是 8 轮以来第一次全绿** —— **但它是并行负载下的间歇性时序问题，一次通过不等于修好了，仍记为未修**。**变异验证三处全部变红** —— A 删掉 `判定者 mechanical` → **3 红**；B 去掉证据过滤 → **3 红**；C 删掉省略计数 → **1 红**；还原后 **9/9**。**真机（`PERSONAL_AGENT_HOME` 指向临时目录，不碰真实数据）**：无任务状态的一轮打印 `[本轮判定 success · 判定者 mechanical]` + 缩进 `toolErrors=0`（**`steps=`/`toolCalls=` 确实被过滤掉了**）；有任务状态的一轮**三行顺序正确**，任务判定行紧随其后。
+
+**未做 / 未验**：**跨轮累积仍未定案**（任务状态剩下的唯一结构性缺口）；`enforceTaskSpec` 的死代码未处理；`validation` 的详细视图（逐条 claim 的展开）未做 —— **决定一让它当前不必要，但若将来 claim 数变多，"计数 + 展开"仍可能需要**；交互模式（`interactive.ts`）只做了同形接线，**没有真机跑过交互会话**；只有 `--echo` 真机跑过，没有真模型跑过。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
