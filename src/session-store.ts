@@ -175,6 +175,99 @@ export interface AuditEvent {
   rule?: string | null;
 }
 
+/**
+ * An event kind the core does not know, registered from outside.
+ *
+ * `ignorable: true` is forced by the type, not by convention, and the reason is
+ * this file's own contract: a reader that does not recognise a kind skips it,
+ * while an *unmarked* unknown kind is an error — because silently dropping an
+ * event we cannot interpret would change what the model is reconstructed as
+ * having seen. A kind the core cannot interpret must therefore be skippable by
+ * construction; otherwise it is not an external kind but a corrupt line.
+ *
+ * `payload` is opaque. The core stores it, replays it, and never reads it, so the
+ * whole event still lives in the log: ADR-0001's fact source and DSH's
+ * "model-visible means logged" both hold without the core understanding a word.
+ */
+export interface ExternalSessionEvent {
+  v: number;
+  kind: string;
+  ignorable: true;
+  at: string;
+  payload: unknown;
+}
+
+/** Parses one decoded line of a registered kind. Receives the raw record. */
+export type EventKindHandler = (
+  record: Record<string, unknown>,
+) => ExternalSessionEvent | null;
+
+/** The kinds the core itself parses. Registration refuses every one of them. */
+const BUILTIN_EVENT_KINDS: ReadonlySet<string> = new Set([
+  "session",
+  "message",
+  "usage",
+  "tool/call",
+  "tool/result",
+  "summary",
+  "task-state",
+  "audit",
+]);
+
+const externalEventKinds = new Map<string, { readonly token: symbol; readonly handler: EventKindHandler }>();
+
+/**
+ * Register a session event kind from outside the core.
+ *
+ * Returns a disposer, because a registration is an effect and effects unwind
+ * (Cordis idea 5). Ownership is a unique token, **not** the handler's identity:
+ * the same plugin reloaded registers the same function object, and a disposer that
+ * matched on identity would unregister the live registration behind it.
+ *
+ * Refusing builtin kinds is a safety property, not a convenience: registering
+ * `"message"` would let a caller reinterpret the conversation's fact source
+ * itself. That is D04's "模型/插件不得自行扩大授权" applied to the event log.
+ */
+export function registerEventKind(kind: string, handler: EventKindHandler): () => void {
+  if (typeof kind !== "string" || kind.trim() === "") {
+    throw new Error("kind must be a non-empty string");
+  }
+  if (BUILTIN_EVENT_KINDS.has(kind)) {
+    throw new Error(`cannot register builtin event kind: ${kind}`);
+  }
+  const existing = externalEventKinds.get(kind);
+  if (existing !== undefined) {
+    throw new Error(`event kind already registered: ${kind}`);
+  }
+  const token = Symbol(kind);
+  externalEventKinds.set(kind, { token, handler });
+  return () => {
+    const current = externalEventKinds.get(kind);
+    if (current !== undefined && current.token === token) externalEventKinds.delete(kind);
+  };
+}
+
+/** The externally registered kinds. What can be listed can be audited. */
+export function registeredEventKinds(): readonly string[] {
+  return [...externalEventKinds.keys()];
+}
+
+/**
+ * The kinds the core itself parses.
+ *
+ * ⚠️ `ExternalSessionEvent` is deliberately **not** a member. Adding it was tried
+ * and measured: because its `kind` is `string`, it overlaps every literal, so
+ * TypeScript can no longer exclude it at the eight sites that narrow on
+ * `event.kind === "…"`. Six are trivial, but one (`inspect`'s tool-batch audit)
+ * narrows disjunctively over `tool/call | tool/result` and then reads `callId`,
+ * `name` and `arguments` — rewriting that to a type predicate would put a safety
+ * check at risk to buy a type-level convenience.
+ *
+ * Separating the two collections instead is both smaller and more honest: the
+ * core's own projections genuinely have nothing to say about kinds they do not
+ * understand, and `SessionInspection.external` still surfaces them, so nothing is
+ * silently dropped.
+ */
 export type SessionEvent =
   | SessionHeaderEvent
   | MessageEvent
@@ -263,7 +356,7 @@ function parseToolCalls(value: unknown, where: string): ToolCall[] {
  * interrupted batch's recorded `tool/result` is the only evidence that a call
  * already produced a result, and recovery must not fabricate over it.
  */
-export function migrateEvent(raw: unknown): SessionEvent | null {
+export function migrateEvent(raw: unknown): SessionEvent | ExternalSessionEvent | null {
   const record = asRecord(raw);
   if (!record) throw new Error("event is not a JSON object");
 
@@ -282,6 +375,27 @@ export function migrateEvent(raw: unknown): SessionEvent | null {
   const legacyFields = () =>
     typeof record.callId === "string" && record.callId.trim() !== "" &&
     typeof record.name === "string" && record.name.trim() !== "";
+
+  // Externally registered kinds are consulted first; the builtin switch below is
+  // left untouched, so no existing kind's validation changes.
+  const registered = externalEventKinds.get(kind);
+  if (registered !== undefined) {
+    const parsed = registered.handler(record);
+    if (!parsed) {
+      throw new Error(`event kind handler returned nothing usable: ${kind}`);
+    }
+    // Normalise. The handler cannot claim a version this reader does not support,
+    // cannot rename the kind, and cannot make itself non-ignorable — the version
+    // gate above already ran, and `ignorable` is what lets an older reader skip a
+    // kind it has no way to interpret.
+    return {
+      v: CURRENT_EVENT_VERSION,
+      kind,
+      ignorable: true,
+      at: typeof parsed.at === "string" ? parsed.at : "",
+      payload: parsed.payload,
+    };
+  }
 
   switch (kind) {
     case "session": {
@@ -485,6 +599,12 @@ export interface SessionStoreOptions {
 export interface InspectionResult {
   events: SessionEvent[];
   eventLines: number[];
+  /**
+   * Events of kinds the core does not understand, with the line each came from.
+   * Kept out of `events` because `events` and `eventLines` are parallel arrays and
+   * the header check asserts `events[0]` is the session header.
+   */
+  external: { readonly line: number; readonly event: ExternalSessionEvent }[];
   /** Lines that could not be read; empty for a healthy session. */
   problems: SessionProblem[];
 }
@@ -815,11 +935,22 @@ export class SessionStore {
     try {
       text = await readFile(this.pathFor(sessionId), "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { events: [], eventLines: [], problems: [] };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { events: [], eventLines: [], external: [], problems: [] };
       throw error;
     }
     const events: SessionEvent[] = [];
     const eventLines: number[] = [];
+    /**
+     * Kinds the core does not understand, kept separate on purpose.
+     *
+     * `events` and `eventLines` are parallel arrays, and the header check below
+     * asserts that `events[0]` is the session header — so an external event must
+     * enter neither. Its line number is kept here because it is free at this point
+     * in the loop and impossible to recover later. Nothing is dropped: the whole
+     * event is still in the log and still surfaced, just not through a collection
+     * whose consumers cannot interpret it.
+     */
+    const external: { readonly line: number; readonly event: ExternalSessionEvent }[] = [];
     const problems: SessionProblem[] = [];
     if (!text.length) problems.push({line:1,detail:"existing session file is empty; manual inspection required",preview:""});
     const lines = text.split("\n");
@@ -829,7 +960,16 @@ export class SessionStore {
       const lineNumber = index + 1;
       try {
         const event = migrateEvent(JSON.parse(line));
-        if (event) { events.push(event); eventLines.push(lineNumber); }
+        if (event) {
+          // Routed by kind, not by type narrowing — which is exactly why
+          // `SessionEvent` can stay a closed union.
+          if (BUILTIN_EVENT_KINDS.has(event.kind)) {
+            events.push(event as SessionEvent);
+            eventLines.push(lineNumber);
+          } else {
+            external.push({ line: lineNumber, event: event as ExternalSessionEvent });
+          }
+        }
       } catch (error) {
         problems.push({
           line: lineNumber,
@@ -843,7 +983,7 @@ export class SessionStore {
     if (text.length && (headers.length!==1 || events[0]?.kind!=="session" || headers[0]?.id!==sessionId)) {
       problems.push({line:1,detail:"session header missing, duplicated or id mismatch",preview:""});
     }
-    return { events, eventLines, problems };
+    return { events, eventLines, external, problems };
   }
 
   /**
