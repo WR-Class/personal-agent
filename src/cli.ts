@@ -55,6 +55,12 @@ export const HELP = `Personal Agent — 交互式只读 Agent
                 形如 {"tier":"ask-before-writing","rules":[{"tool":"run_command","decision":"deny","reason":"…"}]}
                 规则里**不接受** tier 与 when 字段（前者会让配置压过所选档位，后者等于让配置文件执行代码）；
                 配置放宽了原本要问的事，会像 --tier full-access 一样写入会话审计。损坏的配置**报错**，不静默当空。
+      长期约束：<home>/constraints.json —— 操作员的常驻嘱咐，**每轮重新注入系统提示词**，不因对话变长而被淹没。
+                形如 {"version":1,"constraints":["永远用中文回复","不要改写 docs/ 里的历史批次记录"]}
+                条目就是字符串：删掉一行即撤销（不带 id/reason/expires）。用任意编辑器改，**下一轮即生效，不必重启**。
+                **它不能改权限**——出现 tool/decision/tier/rules/priority/when 一律报错并指向 config.json；
+                注入的文字自己声明"是上下文不是保证"。**只读 agent home，绝不读工作区**（克隆来的仓库无法夹带嘱咐）；
+                agent 也写不了它（agent home 按位置对文件工具封死）。合计超 32768 字节报错并给出实际大小，不静默截断。
       按模型窗口：PERSONAL_AGENT_CONTEXT_WINDOWS='{"<model>":<tokens>,"*":<tokens>}'
       精确预判（可选，不内置分词器）：PERSONAL_AGENT_TOKENIZER='<命令>'，读 stdin 的 prompt JSON，向 stdout 打印单个非负整数
       该命令失败/超时/输出非数字一律报错，不静默退回估算

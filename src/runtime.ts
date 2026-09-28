@@ -10,6 +10,7 @@ import { buildToolEnvironment, UnsafeAgentHomeError } from "./tool-environment.t
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
 import { readTrustedRoots } from "./trusted-roots.ts";
+import { formatConstraintsForPrompt, loadConstraints } from "./constraints.ts";
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
@@ -1038,7 +1039,15 @@ export class AgentRuntime {
     const past = await this.store.history(this.sessionId);
     // The applied gene rides in the system prompt: test-time evolution means
     // the selected strategy is context, never a rule the model is trusted to obey.
-    const systemText = [this.systemPrompt, this.genePrompt].filter((part) => part !== undefined && part !== "").join("\n\n");
+    // Standing operator constraints ride there for the same reason, and are
+    // re-read every call so an edit mid-conversation applies on the next turn —
+    // the defect being fixed is a constraint stated in turn 3 still sitting at
+    // position 3 in turn 300. They are appended *after* `systemPrompt` rather
+    // than ahead of it: operator text must not prime the model before the
+    // product's own safety text. The anti-dilution property comes from the system
+    // message being first in the conversation, not from its internal order.
+    const constraints = formatConstraintsForPrompt(await loadConstraints(this.home));
+    const systemText = [this.systemPrompt, this.genePrompt, constraints].filter((part) => part !== undefined && part !== "").join("\n\n");
     const system: ChatMessage[] = systemText === "" ? [] : [{ role: "system", content: systemText }];
     const compaction = await this.store.compaction(this.sessionId);
     if (compaction && compaction.covers > 0) {
