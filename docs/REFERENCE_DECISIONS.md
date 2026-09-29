@@ -2516,6 +2516,38 @@ without waiting, but growth that never stops is the failure this test exists to 
 
 **明确不做（本片）**：**插件加载机制**（需要先定清单格式；`Agent-Reach` 是主参考，`redmom`/`redmond` 只参考清单格式、绝不参考代码）；**不改 `ToolRegistry` 的公开形状**；**不把 12 个工厂的签名统一成 `(ctx)=>Tool`**（本轮用一个闭包包住了唯一需要参数的那个，统一签名会改 12 处而只换来 0 处收益，**等第二个需要会话状态的工具出现时再做** —— 那时才知道该传什么）；**不动 `ARCHITECTURE.md` §3.4⑤ 里对「组合根按名字硬 import」仍然成立的那一半**（`cli.ts` 确实按名字 import 12 个工厂）。
 
+### D91 — pi 的扩展清单与入口契约：实读取证；并更正 `agentreach-skill` 的记载（研究轮，零产品代码）
+
+**① ⚠️ 更正记载：`agentreach-skill` 不是插件清单的参考物。** 上一条（D90「明确不做」）写的 *"`Agent-Reach` 是主参考"* 不成立。实读 `D:\DSHXM\agentreach-skill` 全树 = **只有 3 个文件**：`SKILL.md`（10,333 B）、`skill-card.md`（2,550 B）、`_meta.json`（133 B）。**`_meta.json` 全文只有 `ownerId`/`slug`/`version`/`publishedAt`** = 发布元数据；**`SKILL.md:1-13` 的 frontmatter 只有 `name`/`description`/`version`** ⇒ **它是一份纯提示词技能，与本会话自己的技能目录（`office-docx`、`ponytail`）同一个形状**，即 Agent Skills 那套格式。**⇒ 记载里"Agent-Reach 是 skill/plugin 系统主参考、MIT、契约测试、安全测试"这四条具体描述全部不成立**：没有工具清单 schema、没有任何测试文件、没有见到 LICENSE。**⚠️ 但它对两件事确实有用，如实记下**：**(a)** frontmatter 的 `name`/`description`/`version` 是一个真实、通用的**技能**（不是工具）清单形状，可与 D84 的 `skills.json` 对照；**(b)** `SKILL.md:19-26` 有一条与本项目同构的规矩 —— *"**Never create files, clone repos, or write output in the agent workspace.** Use these directories instead"*，改用 `/tmp/` 与 `~/.agent-reach/tools/` ⇒ **与本项目的 agent home / 工作区分离同形状，可作旁证**。**⚠️ 这是第三次"记载的参考物里没有记载说的那样东西"**（D89 的引用漂移、D90 的 §3.4⑤、本轮）⇒ **同一句规矩第三次生效：写"某处有 X"之前，读到那一处。**
+
+**② ✅ 真正的参考物是 pi 自己，实读两处，逐字如下。**
+
+**清单 = `package.json` 里的一个命名空间字段，不是独立的清单文件**（`D:\DSHXM\SoL-Pi\SoL-Pi\package.json`，1,335 B，全文读过）：
+
+```json
+"pi": { "extensions": ["./src/sol-pi/index.ts"] }
+```
+
+配套逐字事实：`"keywords": ["pi-package", "pi-extension", "context-management"]`（**可发现性靠 keywords**）；**`peerDependencies` 指向宿主自己的四个包**（`@earendil-works/pi-agent-core`、`pi-ai`、`pi-coding-agent`、`pi-tui`，版本全为 `*`）**加 `typebox`**；**入口是 TypeScript 源文件路径**（`./src/sol-pi/index.ts`，**无构建步骤**）；`"engines": { "node": ">=22.19.0" }`（**⚠️ 与队列里"把本项目 engines 提到 `>=22.19.0`"那条是同一个数字，可作旁证**）；`"license": "MIT"`；`files` 白名单里含 **`sol-pi.example.json`（268 B 用户配置样例）与 `scripts/check-sol-pi-config.mjs`（3,999 B 的配置校验器）**、`SECURITY.md`、`THIRD_PARTY_NOTICES.md`、`docs/compatibility.md`、`docs/configuration.md`；`"scripts": { "test": "vitest run", "typecheck": "tsc --noEmit", "check": "npm run typecheck && npm test && npm pack --dry-run" }`。
+
+**入口契约（`src/sol-pi/index.ts`，42 行，全文读过）**：
+- `:6` `import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionFactory } from "@earendil-works/pi-coding-agent";` ⇒ **这三个类型就是接缝的 Service Definition，而且它们由宿主包提供、不由插件自己声明**。
+- `:40-42` **默认导出就是宿主调用的入口**：`export default function solPiExtension(pi: ExtensionAPI): void { createSolPiExtension()(pi); }`。
+- `:27-38` `ExtensionFactory` 是 `(pi) => { … }`，**而真正的注册被推迟到 `pi.on("session_start", (_event, ctx) => …)` 里，并用一个 `initialized` 布尔做幂等守卫**（`:31-36`：`if (initialized) return; initialized = true;`）。
+- **`ExtensionContext` 携带 `ctx.cwd` 与 `ctx.isProjectTrusted()`** ⇒ **⚠️ 信任状态是宿主放进插件上下文里的，不是插件自己去查的。**
+- `:28` **配置在事件回调里惰性加载**：`loadSolPiConfig(ctx.cwd, getAgentDir(), ctx.isProjectTrusted())` ⇒ **工作区 + agent home + 信任，三要素**。
+- `:13-23` **每个能力由一个配置开关门控**：`if (config.actionFusion) registerActionFusion(pi);`、`if (config.observationPack) …`、`if (config.evidencePreservingReducer) …`、`if (config.onlineContextCompact) …` ⇒ **⚠️ 这正是本项目"per-skill enable flag"那条被推迟的东西，在 pi 里是默认形状而不是可选功能。**
+
+**③ ⚠️ 三处独立印证本项目已有的决定（是旁证，不是采纳理由）。** **(a) agent home 与工作区必须分开**：`loadSolPiConfig(ctx.cwd, getAgentDir(), …)` 与本项目 `constraints.ts`/`skill-catalogue.ts` 只读 agent home、绝不读工作区同构；**(b) 信任由宿主给出**：与本项目 `trusted-roots.ts`/`--trust-root` 同构；**(c) 每个能力一个开关**：与本项目档位（tier）按名字给工具同构。
+
+**④ ⇒ 对本项目的设计结论（⚠️ 待操作者裁定，本轮不实现）。** **清单应当是 `package.json` 里的一个命名空间字段**（形如 `"personalAgent": { "tools": [ … ] }`）**而不是另立一种清单文件格式**，理由三条：**(a)** pi 就是这么做的，而 pi 是操作者第 ④ 点亲自点名的形状（*"就像积木一样…其实就像 pi 一样"*）；**(b)** 复用 npm 已有的解析、版本、`files` 白名单与 `peerDependencies` 语义 ⇒ **零新解析器**（ponytail 阶梯第 3 级：既有生态优先于自造）；**(c)** `peerDependencies` 天然表达"我编译时对着哪个宿主 API"，**而这正是 D88 之后的 `types.ts` 能提供的东西** ⇒ 两轮的工作在这里接上了。**⚠️ 但有一条 pi 的做法本项目不能照搬，这是本轮最重要的一个否定结论**：pi 的入口是**宿主直接 import 一个 TypeScript 源文件路径**，宿主与插件同进程、同信任域；**本项目若照搬，就等于让磁盘上的代码进入产品进程**，与 `constraints.ts` 那条安全论证（*"Re-reading a file the agent cannot write is what keeps this safe"* —— 安全性建立在"agent 写不到那个目录"之上）**直接冲突**：一个能写 `package.json` 的 agent 就能让自己的代码被加载。**⇒ 必须先定"插件代码从哪来、谁批准加载"，这是操作者的裁定项，不是我能替他决定的。**
+
+**⑤ 明确不做（本轮）**：**零产品代码**（按项目自己的规矩：进入新阶段前，本文档必须先记下读过什么、采用/拒绝什么机制，否则不改代码）；不设计清单 schema 的具体字段；不实现加载器；不改 `engines`（那需要操作者签字，因为它改的是发布契约）。
+
+**⑥ ⚠️ 未读、如实记**：`src/sol-pi/config.ts`（4,228 B，即 `loadSolPiConfig` 的实现与 `SolPiConfig` 的字段）、四个能力的实现（`extensions/action-fusion/`、`evidence-preserving-reducer/`、`observation-pack/`、`online-context-compact/`）、`docs/configuration.md`（5,722 B）、`docs/compatibility.md`（8,741 B）、`scripts/check-sol-pi-config.mjs`（3,999 B）、`sol-pi.example.json`（268 B）、`scripts/check-pi-compat.mjs`（1,028 B）、`.pi/settings.json`（32 B）。**⚠️ DSH 自己的插件机制本轮未找到**：checkout `D:\DeepSeekHarness\resources\app.asar\dsh\` 里**没有任何路径含 "plugin"**（深度 3 递归），**但按 D75 的教训这还不能下"读不到"的结论** —— 需要查非标准位置（`packages/` 下各包、cordis 的 service 注册、`client-plugin` 之类命名），**下一轮先做这件事再谈"像 dsh 一样"**。
+
+**⑦ ⚠️ 本轮的蜂群纪律未能执行，如实记**：调查按 D90 的纠正全部放在开周期之前做完（读不被写闸门拦），**但准备开 `research` 周期时 `swarm_cycle` 返回 `unknown tool`，蜂群工具集在会话中途被卸载**（同一会话内 D88/D89/D90 三个周期都调用成功）。**⇒ 本轮没有 PDRI 记录、没有基因绑定、没有边界账本，`blame` 归 `external`（工具集不可用，与本轮工作质量无关）。按协议，拒绝是有约束力的、不得绕行，故未尝试任何替代途径开周期。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
