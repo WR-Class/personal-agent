@@ -1998,6 +1998,62 @@ D70 从 `docs_development.md:56` 读到：DSH 把仓库拆成 **Host/Client 两�
 - **变异 A**（行号归并改成"先 events 再 external"）⇒ `folds in line order` 变红 ✅（**补测试之后**）；**变异 B**（`stateOf` 回到只折叠 `events`，即缺陷本身）⇒ 2 条变红 ✅；**变异 C**（去掉 `"atMessage" in event` 收窄）⇒ **`tsc` 直接编译失败**，这本身就是它被钉住的证明。
 - **源码字节还原 = true**；还原后 19/19。
 
+### D75 解包 DSH 的 `app.asar`，读到真实的 `dsh-session-projection` 源码；甲/乙 的答案是"两条都不是"（2026-09-30，**研究轮，无产品代码**）
+
+**⚠️ 本轮最重要的产出不是结论，是取证方式的变化**：`docs_architecture.md:113` 那份 `dsh-session-projection`、以及我一直标注"本地不存在、所以 DSH 的 mandatory 到底强制什么无从取证"的 `session-projection-mandatory-seam.md` / `capability-seams.md` / `subsystems/*` —— **它们的实现其实一直在 `D:\DeepSeekHarness\resources\app.asar`（117,445,671 B）里，只是从未解包。** 本轮用 40 行 node 直接读 asar 的 JSON 头（前 16 字节：`4 | 3367444 | 3367440 | 3367434`，数据区基址 = `8 + 3367444 = 3367452`），**零依赖解出**：`README.zh.md`(9,511 B)、`lib/index.js`(20,021 B)、`lib/types/index.js`(24,147 B)、`package.json`，以及同级 `dsh-session-projection-cache/README.zh.md`(10,410 B)。**⇒ 补一条取证纪律：说"某份源码读不到"之前，必须先确认它不在已安装产物的打包体里。** 这与 D69 那条"任何『不做 X』的结论必须附上读过 X 的证据"是同一形状的错误，只是这次错的不是判断而是**可达性认定**。
+
+#### 一、⚠️ 决定性证据：DSH 的事件从来没有 `type: string` 这种成员
+
+`README.zh.md:44-46` 的投影单元示例，**逐字**：
+
+```text
+apply: (state, event) => event.type === 'todo/upsert'
+  ? { items: event.data.items }
+  : state,
+```
+
+**⇒ 三点同时成立**：**(1)** `todo/upsert` 是**领域插件**贡献的种类，不是框架内置的；**(2)** 用 `event.type === 'todo/upsert'` 收窄**有效**；**(3)** 收窄之后 `event.data.items` **有类型**。
+
+**⚠️ 这直接解释了我 D71 那 8 处收窄失败的真正成因，而且说明那个代价不是必然的**：DSH 的每一个种类（含插件种类）都贡献一个**各自的字面量 `type`**，所以联合始终是**可判别的**，收窄一直有效。**我的 `ExternalSessionEvent` 是一个 `kind: string` 的兜底成员 —— 它与所有字面量重叠，这才让 TS 在 `event.kind === "…"` 处无法排除它。** **⇒ 8 处收窄失败是"我选了兜底成员"的代价，不是"打开联合"的代价。D71 把两者混为一谈了。**
+
+`lib/types/index.js` 文件头逐字印证类型表是可合并扩展的：*"the **merge-extensible** state and client-view type tables"*、*"Domain host plugins contribute pure folds and optional client views; the framework owns the subscription, the per-session watermark cache, and change notification"*、*"**Neither side knows the other (capability-seam three-way split)**"*。**⇒ 与 `docs_architecture.md:117` 的三角色说法一致，且这里是框架/领域/载体三分。**
+
+**⚠️ 但必须分清证据与推断**：上面 `merge-extensible` 说的是 **`SessionProjectionMap` / `SessionProjectionStateMap`**（投影状态与客户端视图的类型表），**不是 `SessionEventMap` 本身**。`SessionEventMap` 的开放性是从 `README.zh.md:44-46` 那个 `todo/upsert` 示例**推断**的，**本轮没有直接读到它的定义**（它应在 `dsh-session-persistence` 或同级包里）。**⇒ 记为待核实，不记为已证。**
+
+#### 二、⚠️ 所以甲/乙 的答案是"两条都不是"
+
+| | 我上一轮给的选项 | 实测后的判断 |
+|---|---|---|
+| **甲** | 让 `TaskStateEvent` 退出 `SessionEvent` 联合，**逐个修那 8 处收窄** | **⚠️ 前提错了。** 8 处收窄失败源于 `ExternalSessionEvent.kind: string` 这个兜底成员，不是源于"打开联合"。**若每个种类各自贡献一个字面量，收窄不会坏，那 8 处就不需要修。** 甲的真实内容是"**换掉兜底成员**"，不是"付 8 处的账单" |
+| **乙** | 承认核心自己消费的种类留在核心 switch，注册表+投影只给真正外部的种类 | **⚠️ 与 DSH 的做法相反。** `todo/upsert` 就是领域插件的种类，它既在事件类型表里、又被投影折叠 —— **DSH 没有"核心种类"与"外部种类"的两条通道**，只有一条 |
+
+**⇒ 第三条路线（丙）**：**取消 `ExternalSessionEvent` 这个 `kind: string` 的兜底成员，改为"每个注册进来的种类各自拥有一个字面量 `kind`"**。这样 `SessionEvent` 联合重新变成可判别的，**D71 那 8 处收窄不需要动**，`task-state` 也可以按 D72 第 ② 步搬出核心 switch。
+
+**⚠️ 丙的前提是声明合并，而 D70 已经把前提验证过了**：探针 (a) 实测 `tsc --noEmit --strict --target es2022 --module preserve --moduleResolution bundler --allowImportingTsExtensions` **接受跨模块 `declare module "./base.ts"` 的接口增广，退出码 0**；探针 (b) 实测 `node --experimental-strip-types` 与裸 `node`（24.x 默认剥离）**都接受 `declare module`/`declare global`，退出码 0**。**⇒ 运行时注册的种类要在类型上拥有字面量，只能靠声明合并；而这条路本项目已经量过是通的。**
+
+**⚠️ 这也修正了 D70 的一个措辞**：D70 把声明合并记为"可选"（*"运行时注册表必要，声明合并可选"*）。**本轮证据显示：对丙这条路线，声明合并不是可选的，它是让字面量存在的唯一途径。** D70 那句话在"只想要运行时开放性"的语境下是对的，在"想要类型侧也可判别"的语境下是错的 —— **这又是 D70 自己立的那条规则（引一句机制必须说清它解决哪一侧）在我自己文档上的一次应用。**
+
+#### 三、⚠️ 顺带读到的四处，其中两处说明我的设计缺了东西
+
+1. **`stateVersion`（我没有）**：`lib/index.js:79-92` —— `stateVersion` 必须是非负安全整数否则 throw；**同一个 key 以不同 `stateVersion` 再次注册会被拒绝**（*"already registered at stateVersion N; refusing to…"*）。缓存行携带 `ver`，`restore` 时 **`ver` 不匹配或声称越过存储末尾的行一律丢弃**（`:234`/`:262`/`:308`）。**⇒ 这是"折叠语义变了之后旧状态必须失效"的机制。我的 `SessionProjectionUnit` 没有版本字段，所以一旦某个 provider 改了 `fold` 的语义，读出来的旧状态会静默混用** —— 本项目目前只有内存态、没有持久检查点，所以**还不会出事**，但第 ④ 步做增量折叠/检查点时这是必须先补的。
+2. **整值事件规则（load-bearing，逐字）**：*"a state-carrying log event **MUST carry the complete post-change state, never a bare delta**"*（`lib/types/index.js` 文件头），`README.zh.md:54` 中文版同。**⇒ 这独立印证了 D67 排序第 1 名与本项目 `task-state` 的 latest-wins 设计**：DSH 把"绝不带裸增量"写成承重规则。**同时它进一步压低了 D67 第 2 名（`node:sqlite`）的优先级 —— DSH 有持久缓存包，但缓存的是投影检查点，不是把事件日志搬进 SQL。**
+3. **`Object.is` 引用闸门 + "无关事件必须返回同一个状态引用"**（`README.zh.md:54`、`lib/index.js:31`）：*"对与单元无关的事件必须返回同一个状态引用——引用不变意味着零下游工作"*。**⚠️ 我的 `fold` 已经符合**（非 `task-state` 事件原样返回 `state`），**但我没有把它写成契约**，也没有 `Object.is` 闸门 —— 本项目没有变更通知流，所以闸门暂无用，**但"无关事件返回同一引用"这条应该写进 `SessionProjectionUnit` 的契约注释**，否则第 ④ 步做增量折叠时会漏掉这个廉价优化。
+4. **⚠️ 一处真实的定位差异，必须记**：`README.zh.md:117` 逐字 *"模型体验：**无**——注册表只为已入日志的会话状态提供**面向客户端的读模型**，**不注册任何模型可见内容**"*、`:121` *"KV Cache 影响：无；投影从不组装或发送提供方请求"*。**⇒ DSH 的投影接缝是给客户端载体（UI）用的读模型，而本项目把 `task-state` 投影用于 prompt 注入，是模型可见的。** 这**不违反** `docs_architecture.md:111` 的 *"Model-visible means logged"*（`task-state` 确实入日志、确实可从日志重建），而且 `:113` 末句 *"The agent loop registers shared `turnBoundary` state for its readers"* 说明 DSH 的 agent loop 也往这个注册表注册状态。**但"DSH 用它做 UI 读模型"与"本项目用它做 prompt 注入"是两种用法，本项目是把它用在了原作者标注为"无模型体验"的位置上** —— **这是一处有意偏离，记在这里而不是藏起来**；它带来的额外要求是：**投影结果进入 prompt 就必须可重建、可审计**，而这正是 `:111` 那条待落地的运行时不变式要管的（仍在队列里）。
+
+#### 四、⚠️ 还读到一条与 D73 直接相关的限制
+
+`README.zh.md:131` 逐字：*"**单元表是进程级的，因此 key 是否存在不能当作逐会话的能力信号**——任何 agent preset 注册的 key 都会出现在每个会话的快照里；**客户端必须读值，不能把 key 缺席当作功能缺席**"*。
+
+**⇒ 这与 D73 第一节的"两种 absent"是同一件事的第三面**：D73 分的是"键没注册 ⇒ 抛错"与"键注册了但没事件 ⇒ 返回 `initial`"；**DSH 这条补的是"键注册了、但这个会话根本不用这个能力 ⇒ 仍然返回 `initial`，读方不得把它当成'功能不存在'"**。**本项目的模块作用域注册（每进程一次）正好落在这个形状上** ⇒ D73 的设计与之一致，**但 D73 没有把"不得把 `initial` 当成能力缺席"写成契约**，应该补进 `SessionProjectionUnit` 的注释。
+
+#### 五、决定与下一步
+
+**⚠️ 本轮是研究轮，不改产品代码，也不代替操作者在甲/乙/丙 之间裁定。** 但取证结果足以把选项从两个变成三个，并且**否掉了甲与乙各自的前提**：
+
+- **丙（本轮新提出，有 DSH 源码 + D70 探针双重支撑）**：取消 `ExternalSessionEvent` 的 `kind: string` 兜底成员，改为每个注册种类各自拥有字面量 `kind`，用声明合并让类型侧可判别。**⇒ D71 那 8 处不需要修，D72 第 ② 步可以照原样做。**
+- **⚠️ 丙的代价（必须先量，不能凭推断）**：`docs_development.md:56` 记的那条 *"Host and Client stay two aggregate programs because both sides declaration-merge the cordis `Context` interface under the same keys with different services; **one program seeing both merges reports a collision**"* —— 本项目只有一个程序，所以**大概率不撞**，但 D70 的探针只验了"能编译"，**没验过"两个不同模块对同一个 key 合并出不同形状时会怎样"**。**⇒ 丙落地前必须先做这个探针。**
+- **本轮未读、仍待取证**：`SessionEventMap` 的实际定义（在哪个包、是否真的 merge-extensible）、`lib/types/index.js` 全文、`dsh-session-projection-cache/README.zh.md`、`dsh-upstream-AGENTS.reference.md`(16,557 B)、`blog-cordis-tencent.html`(204,523 B)、`_evomap_ref/evolver-README.zh-CN.md`(28,939 B)。**⚠️ 以及一个新认识：`app.asar` 里还有 `subsystems/*`、`.agents/notes/*`、`capability-seams.md` 这些我一直以为"本地不存在"的文档 —— 下一轮应当先在 asar 里搜它们，而不是继续在 `_dsh_ref` 里找。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
