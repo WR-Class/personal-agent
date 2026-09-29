@@ -2054,6 +2054,97 @@ apply: (state, event) => event.type === 'todo/upsert'
 - **⚠️ 丙的代价（必须先量，不能凭推断）**：`docs_development.md:56` 记的那条 *"Host and Client stay two aggregate programs because both sides declaration-merge the cordis `Context` interface under the same keys with different services; **one program seeing both merges reports a collision**"* —— 本项目只有一个程序，所以**大概率不撞**，但 D70 的探针只验了"能编译"，**没验过"两个不同模块对同一个 key 合并出不同形状时会怎样"**。**⇒ 丙落地前必须先做这个探针。**
 - **本轮未读、仍待取证**：`SessionEventMap` 的实际定义（在哪个包、是否真的 merge-extensible）、`lib/types/index.js` 全文、`dsh-session-projection-cache/README.zh.md`、`dsh-upstream-AGENTS.reference.md`(16,557 B)、`blog-cordis-tencent.html`(204,523 B)、`_evomap_ref/evolver-README.zh-CN.md`(28,939 B)。**⚠️ 以及一个新认识：`app.asar` 里还有 `subsystems/*`、`.agents/notes/*`、`capability-seams.md` 这些我一直以为"本地不存在"的文档 —— 下一轮应当先在 asar 里搜它们，而不是继续在 `_dsh_ref` 里找。**
 
+### D76 声明合并冲突探针：**丙可行**，8 处收窄不需要修，但穷尽性惯用法在运行时是个陷阱（2026-09-30，**探针轮，零产品代码**）
+
+**探针位置**：`D:\DSHXM\d76probe\`（**仓库外**，D50 的教训：探针产物不入仓库），跑完已删。**只读 `app.asar` 与本项目文件，未修改任何外部参考项目或宿主数据。**
+
+**⚠️ 先纠正一处既有偏差**：本项目 `tsconfig.json` 实读为 `"module": "ESNext"`（另有 `moduleResolution: bundler`、`strict`、`noUncheckedIndexedAccess`、`verbatimModuleSyntax`、`allowImportingTsExtensions`、`rewriteRelativeImportExtensions`、`skipLibCheck`、`types: ["node"]`），**而 D70 探针 (a) 用的是 `--module preserve`** ⇒ **D70 那条"跨模块 `declare module "./base.ts"` 接口增广可编译"的结论不是在项目真实选项下得到的。本轮用复制过来的真实 tsconfig 重跑，结论仍然成立**（P1 ✅）⇒ **D70 的结论对，但它当时给的证据强度不够**。**⇒ 补一条纪律：探针的结论只在它所用的编译选项下成立，所以探针必须复制项目的真实 tsconfig，不能手搓一串 flag。**
+
+#### 一、⚠️ P2 是本轮的命门，它通过了 —— 而"通过"的表现是一个报错
+
+**被测形状**（丙的核心机制）：`SessionEvent` 不是手写联合，而是**从 map 派生的可判别联合**：
+
+```ts
+export interface SessionEventMap {
+  message: { readonly at: string; readonly content: string };
+  usage:   { readonly at: string; readonly inputTokens: number };
+}
+export type SessionEvent = {
+  readonly [K in keyof SessionEventMap]: { readonly kind: K } & SessionEventMap[K];
+}[keyof SessionEventMap];
+```
+
+两个"插件"模块各自 `declare module "./base.ts" { interface SessionEventMap { "plugin-a/marker": {…n: number} } }` / `{ "plugin-b/note": {…text: string} }`。消费方写：
+
+```ts
+if (event.kind === "plugin-a/marker") return String(event.n);   // 第 14 行
+if (event.kind === "plugin-b/note")   return event.text;        // 第 15 行
+…
+default: return assertNever(event);                             // 第 16 行，判别器
+```
+
+**实测结果（逐字）**：`tsc` 退出码 2，**唯一一条错误在第 16 行**：
+
+```
+consumer.ts(16,33): error TS2345: Argument of type
+'({ readonly kind: "plugin-a/marker"; } & { readonly at: string; readonly n: number; })
+| ({ readonly kind: "plugin-b/note"; } & { readonly at: string; readonly text: string; })'
+is not assignable to parameter of type 'never'.
+```
+
+**⚠️ 这条错误恰恰是 P2 通过的证明，必须这样读**：
+1. **两个插件种类真的进了派生联合** —— 它们的完整形状出现在错误的实参类型里；
+2. **第 14、15 行零报错** ⇒ **用插件贡献的字面量收窄有效，且收窄后 `event.n` / `event.text` 是有类型的**；
+3. **正因为它们进了联合，`default` 分支的 `event` 就不是 `never`，`assertNever` 才报错** —— 这就是判别器设计的作用：**它报错当且仅当增广生效。**
+
+**⚠️ 我对输出的第一反应是"有错误 ⇒ 失败"，那是错的**，而且错的原因是**探针设计缺陷**：我把判别器和被测代码放在同一个 program 里，于是"成功"表现为退出码 2。**⇒ 补一条探针纪律：判别器必须单独成一个 program（或单独一次编译），让退出码本身可以直接读作结论；否则每次都要靠人读错误文本来判断，而人会读错 —— 我这次就先读错了。**
+
+**⇒ P2 结论：映射类型派生的可判别联合 + 跨模块声明合并 + 按插件字面量收窄，三者在本项目真实编译选项下一起工作。** **D71 那 8 处收窄失败与"打开联合"无关，只与 `ExternalSessionEvent.kind: string` 这个兜底成员有关。丙成立。**
+
+#### 二、P1 / P3 / P4 的实测
+
+- **P1（基线，真实 tsconfig 重跑 D70 探针 (a)）**：✅ 增广本身可编译，无错误。
+- **P3（冲突本体，`:56` 那条）**：两个模块对**同一个 key `message`** 合并出不同形状 ⇒ **退出码 2，两处 `TS2717`，逐字**：
+  ```
+  coll-a.ts(3,5): error TS2717: Subsequent property declarations must have the same type.
+    Property 'message' must be of type '{ readonly at: string; readonly content: string; }',
+    but here has type '{ readonly at: string; readonly WRONG: true; }'.
+  ```
+  **⚠️ 这是本轮第二重要的结果，而且是最好的那种结果**：冲突是**编译期硬错误**，报错**点名了属性、点名了两侧的完整形状**，**不是静默的类型腐坏**。⇒ **对本项目（只有一个 `ts.Program`）而言，`:56` 描述的风险表现为"`npm run build`（即 `tsc --noEmit`）变红"，而不是"运行时读到错的东西"** —— 而本项目的 build 是每轮必跑的。**⇒ 丙不需要额外门禁也能被挡住；`:58-60` 那三条纪律 + 走 Project Reference 图的 `constraints` 门禁是 DSH 那种"两个聚合程序"场景的需要，本项目单程序场景下由 build 直接覆盖。**
+- **P4（运行时）**：`node --experimental-strip-types` 与**裸 `node`（本机 v24.19.0）都退出码 0**，输出 `runtime read=42` ⇒ **插件种类的 payload 在运行时可正确读取**。**这独立复现并扩展了 D70 探针 (b)**（那次只测了 `declare` 块本身，这次测了"映射类型派生 + 增广 + 消费 + 运行"整套）。
+- **⚠️ 附带发现：增广是 program 级的，不需要显式 `import`。** 变体 BARE（消费方不 `import` 那两个插件模块，只靠 `include` 把它们放进 program）**同样只有判别器那一条错误** ⇒ 类型侧的可见性由 **program 成员资格**决定，不由 import 图决定。**这与 `:56` 那句 *"The collision exists only inside a `ts.Program`"* 完全吻合，也从另一侧印证了它**：冲突与增广都只发生在 program 内部。**⚠️ 但运行时仍需显式加载插件模块才会执行注册** —— 类型侧与运行时侧的"可见"条件不同，这一条要写进丙的实现约定。
+
+#### 三、⚠️ P5：穷尽性惯用法在运行时是个陷阱（丙的一条硬约束）
+
+`P4` 的第二行输出：`runtime migrate threw: unexpected [object Object]`。
+
+**成因**：`default: return assertNever(event)` 在**编译期**是穷尽性检查（很好），但在**运行时**它就是 `throw new Error(...)`。**而运行时没有类型系统 —— 一个经 `registerEventKind` 注册进来的外部种类走到 `switch`，必然落进 `default`，于是必然抛错。**
+
+**⚠️ 这与 D71 已落地的设计直接冲突**：D71 的 `migrateEvent` 在版本闸门之后、8-case switch 之前**先查注册表**，`default` 分支是 `if (record.ignorable === true) return null; throw new Error(\`unknown event kind: ${kind}\`)` —— **它必须保留一个能路由到注册表的真实 `default`，不能用 `assertNever` 占位。**
+
+**⇒ 丙的一条硬约束（本轮新得出，没有它就会在实现时踩坑）**：**`migrateEvent` 的 switch 不得采用 `default: assertNever(event)` 这个穷尽性惯用法。** 丙让联合变开放之后，"穷尽"在类型上不再可达；**要保留穷尽性检查的价值，只能在内置种类那 8 个 case 上做（例如另设一个只覆盖内置种类的窄类型来检查），而不是在整个联合上做。** **⚠️ 这一条是运行探针才发现的：只跑 `tsc` 会以为 `assertNever` 是纯收益。**
+
+#### 四、决定与下一步
+
+**⚠️ 探针结论：丙可行，且它的代价比 D75 估的更低。**
+
+| 项 | D75 的估计 | D76 实测 |
+|---|---|---|
+| D71 那 8 处收窄 | 甲要付、丙不用付（**推断**） | **✅ 证实不用付**：只要没有 `kind: string` 兜底成员，收窄照常工作 |
+| `:56` 的合并冲突 | "大概率不撞，但没量过" | **✅ 量了**：撞了是 `TS2717` 编译期硬错误、点名属性与两侧形状，**不是静默腐坏**；本项目每轮跑 build ⇒ 不需要额外门禁 |
+| 声明合并的前提 | D70 说通（但用的是 `--module preserve`） | **✅ 用项目真实 tsconfig 重跑仍通**，且运行时（含裸 `node`）可执行 |
+| 穷尽性惯用法 | 未考虑 | **⚠️ 新发现的硬约束**：`default: assertNever` 会让外部种类在运行时抛错，**丙禁止在 `migrateEvent` 用它** |
+
+**⇒ 丙的落地顺序（下一轮起，本轮不动代码）**：
+1. **先做 P5 那条约束的落地设计**：`migrateEvent` 的 `default` 保持 D71 现状（路由注册表 + `ignorable` 判空 + 抛未知种类），**不引入 `assertNever`**；若要保留内置种类的穷尽性检查，另设一个只含 8 个内置种类的窄类型。
+2. **把 `ExternalSessionEvent` 的 `kind: string` 换成"每个注册种类各自一个字面量"**。**⚠️ 这一步需要声明合并**（`declare module` 增广 `SessionEventMap`），而 D70 已把声明合并记为"可选"、本轮证明**对丙它不是可选的而是唯一途径** ⇒ **D70 那处措辞要连带修订**（已在 D75 第二节记过，本轮是它的实证支撑）。
+3. **然后才做 D72 第 ② 步**（把 `case "task-state"` 的校验搬进 provider）—— 因为丙之后 `task-state` 移出 switch 不再导致 `TaskStateEvent` 退出联合，**D74 第四节那个"第 2 层硬阻塞"随之消失**。
+4. **⚠️ 丙会作废 D71 一条已记录的决定**（`ExternalSessionEvent` 的兜底形状，以及"不把开放成员加进联合"这个取舍）⇒ **这一步要等操作者明确同意丙之后再动，本轮不预做。**
+
+**⚠️ 本轮明确不做**：不改 `ExternalSessionEvent`、不动 `session-store.ts`、不实现丙 —— **探针结果出来之前动代码就是在赌；结果出来之后，作废一条已记录的决定仍需操作者裁定（对照 D74 第五节的处理方式）。**
+
+**仍未取证**：`SessionEventMap` 在 DSH 里的实际定义（在哪个包、是否真叫这个名字、是否也是映射类型派生）—— **本轮证明了"这种形状可行"，没有证明"DSH 就是这么写的"**；`lib/types/index.js` 全文；`app.asar` 里可能存在的 `subsystems/*`、`.agents/notes/*`（含 `README.zh.md:110` 点名的那份投影 RFC `2026-07-27-session-projection-and-command-log.zh.md`）、`capability-seams.md`；`dsh-upstream-AGENTS.reference.md`；`blog-cordis-tencent.html`；`_evomap_ref/evolver-README.zh-CN.md`。**⚠️ 下一轮若继续取证，应先在 `app.asar` 里搜这些路径 —— D75 已经证明它们大概率就在里面。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
