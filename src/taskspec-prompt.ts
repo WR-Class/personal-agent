@@ -24,10 +24,18 @@
  * priority}`, scenario-keyword routing). Its style/persona layer is deliberately
  * not copied — D14 records that as "后补".
  *
- * ponytail: skills are injected, not loaded. Next step is reading a JSON
- * catalogue from the agent home (WorkBuddy's two-level skills dirs), which needs
- * path-safety review under `security-config.ts`; the assembly itself does not
- * change when that lands.
+ * ponytail: skills are injected, not loaded. The JSON catalogue this predicted
+ * has landed — D84's `skill-catalogue.ts` reads `skills.json` from the agent
+ * home, ENOENT yields no skills and any other read failure throws, and
+ * `runtime.ts:789-790` loads it and passes it in here. The prediction below it
+ * held: this assembly did not change when the catalogue landed.
+ *
+ * ⚠️ Read `priority` (:42) and the tie-break (:71-72) before proposing a
+ * "rank" field. Score, then `priority`, then declaration order *is* the
+ * three-level order DSH documents for its skill registry, so the concept is
+ * present under a different name. D95 recorded `priority` as removed by D84;
+ * it was not — D84 removed it from `constraints.ts:66`'s *refusal* list
+ * precisely so that it stays legal as a skill field here.
  */
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 

@@ -2743,6 +2743,37 @@ const manifest: DshPackageManifest = {
 
 **⑦ ⚠️ 蜂群纪律连续第六轮无法执行，如实记**：`swarm_cycle` 仍不可用（本会话的工具集里没有 `swarm_*`）⇒ **D91–D96 六轮都没有 PDRI 记录、基因绑定与边界账本，`blame` 归 `external`**；按协议拒绝有约束力、未尝试替代途径。**⚠️ 本轮尤其要记这一点**：本轮是"准备写代码却发现不该写"的一轮，**如果有周期与基因绑定，`plan-ready` 那一刻就会被要求写出验证命令，而写验证命令就会逼我先读 `runtime.ts:1204` ⇒ 蜂群协议缺失的代价在这一轮是可见的：它本来能拦住这个错误。** 这不代表工具缺失是借口 —— ④ 那条规矩就是自己给自己补的那道闸门。
 
+### D97 — 操作者一句反问证伪了 D95 的两条断言：本项目**已经有一个提供方接缝**，而且 `priority` 从未被删（研究轮 + 一处产品代码：修 `taskspec-prompt.ts` 的陈旧头注）
+
+**① 操作者的反问，逐字**：*"本项目无快照无提供方故不适用。但是好像成熟产品都有吧？"* —— 指的是 D95 ④3(b) 把"快照不完整时什么都不发"列为不适用。**⚠️ 这句反问是对的，而且它连带证伪了 D95 的另一条。** 按 D96 ④ 刚立的规矩（*"任何'本项目缺 X'的句子必须附带本项目源码的 `file:line`"*）回查，D95 ④3(b) 与 ④2 都只引了 DSH 的 README、没有一处本项目行号 ⇒ **两条都被这道新规矩拦下了，而这是规矩立下之后的第一次实际生效。**
+
+**② ⚠️ 更正一：本项目已经有一个完整的提供方接缝，不在技能那一处，在会话投影那一处。** `session-store.ts:255-334` 逐字取证：
+- **Definition**：`export interface SessionProjectionUnit<S> { readonly key: string; readonly initial: S; fold(state: S, event: SessionEvent | ExternalSessionEvent): S; }`（`:269-286`），JSDoc 自己写着 *"This is the **Definition role** of DSH's projection seam（`docs_architecture.md:113`）……`:117` is explicit that a seam has three roles and **'one role alone is not a seam'** — so this interface means something only together with `registerSessionProjection`（**Provider**）and `SessionStore.stateOf`（**Consumer**）"*（`:258-263`）。
+- **Provider 注册**：`export function registerSessionProjection<S>(unit): () => void`（`:298-311`），含 **key 校验**（`:299-301`）、**重名拒绝**（`:302-304`：`session projection already registered: ${unit.key}`）、**返回 disposer**（`:307-310`）。
+- **可审计**：`export function sessionProjectionKeys(): readonly string[]`（`:313-316`），注释 *"**What can be listed can be audited.**"*。
+- **核心自己注册自己那一份**：`export const disposeTaskStateProjection = registerSessionProjection<…>({ key: "taskState", … })`（`:332-334`），JSDoc（`:318-331`）逐字：*"⚠️ That the core is both provider and consumer here does **not** make this a fake seam"*，并引 `docs_architecture.md:113`、`:117`（*"A package may combine roles"*）与 `:119`（*"the value is not that a swap is likely but that **the dependency is written as an interface instead of an import**"*）。
+- **⚠️ 而且它已经实现了 D95 ②(c) 里我当作"DSH 独有、本项目缺"的那条防护**：`:294-296` 的注释 *"Ownership is a unique token for the same reason as in `registerEventKind`: **matching on the unit's identity would let a stale disposer from a reload unregister the live registration behind it**"*，实现是 `:305` 的 `const token = Symbol(unit.key)` 与 `:309` 的 `if (current !== undefined && current.token === token) sessionProjections.delete(unit.key);` ⇒ **这与 DSH 的 *"invalidate() 仅当接收它的那条精确注册仍处于活动状态时才生效，因此延迟回调无法干扰同名替代提供方"* 是同一个防护、同一个理由，本项目 D72 就做了。**
+
+**⇒ 所以 D95 ④3(b) 那句"本项目无提供方"是错的。** **准确的表述是**：**技能那一处没有提供方接缝**（`runtime.ts:789` 直接 `this.taskPromptSkills ?? (await loadSkillCatalogue(this.home))` —— 硬编码的单一来源调用，无接口、无注册表、无 disposer），**而会话投影那一处有、且三角色齐全**。**⚠️ "快照"那半句仍然成立但要说清位置**：技能确实无缓存无快照（`skill-catalogue.ts` 全文无缓存；`runtime.ts:704` 在 `finally` 里每轮清空），所以"incomplete snapshot sends nothing"**在技能这一处**不适用；**但在投影那一处，`initial` + `fold` 就是快照**，且 D72 的 step ① 是全量折叠、step ④ 才是增量（`:265-267` 自己记着）。
+
+**③ ⚠️ 更正二：`priority` 从未被删，D95 ④2 那条"缺 `rank` 概念"是假的。** `taskspec-prompt.ts` 全文读过（115 行）：
+- **`:41-42`**：`/** Higher wins a tie. Absent is treated as 0. */ readonly priority?: number;` ⇒ **`priority` 一直在 `TaskPromptSkill` 里。**
+- **`:90-91`**：`const priority = skill.priority ?? 0;` / `if (score > bestScore || (score === bestScore && priority > bestPriority))` ⇒ **它真的参与裁决。**
+- **⚠️ `:71-72` 逐字写着三级平局顺序**：*"Score is the number of matched scenarios; **`priority` breaks ties; earlier declaration wins a remaining tie**, so the result is deterministic."* ⇒ **这与 DSH 的 *"单层内重名则依次按 rank、提供方注册顺序与提供方本地顺序裁决"* 是同一个三级结构**（匹配分 → `priority` → 声明顺序）。
+- **⚠️ D95 ④2 的错误来源**：我把 D84 那条 *"把 `priority` 从 `constraints.ts:66` 的拒绝清单里移除、因为它在技能里是合法字段"* 记成了 *"D84 从技能 schema 里删掉了 `priority`"*。**两句话的意思正好相反**：D84 是**为了让它合法**才把它从拒绝清单里拿掉的。**⇒ D95 ④2 那句"D84 删对了键名、但确实删掉了一个真实需要的概念"整句作废：概念在、键名在、三级顺序也在。**
+
+**④ ⚠️ D95 ④"本项目缺的四样"的最终清点（本轮全部回读到本项目行号之后）**：**#1 调用策略（`modelInvocable`/`userInvocable`）—— ✅ 确实缺**（`TaskPromptSkill` 只有 `id`/`scenarios`/`prompt`/`priority`，全库 grep 无这两个概念），**但触发条件未到**（没有第二个消费接口，`interactive.ts` 从未真机跑过）；**#2 分层与平局裁决 —— ⚠️ 不缺**（见 ③；**分层**那半确实缺，但只有一个来源时无从分层，触发条件同 D95 ④1）；**#3 陈旧检测 —— ⚠️ 概念已在库里**（见 ② 的所有权 token），技能这一处因无缓存而不需要；**#4 KV cache 仅追加 —— ⚠️ 是真的结构差异**（D96 ③），但触发条件是"真的按 token 计费或真的观测到命中率问题"，而现在连一次真机计费观测都没有。**⇒ 四样里只有一样是真缺、且被触发条件挡住；一样是结构差异、且被同一个触发条件挡住；两样是我上一轮没回读代码造成的假缺。**
+
+**⑤ ✅ 本轮的产品代码（一处，小）**：**`taskspec-prompt.ts:27-30` 的 `ponytail:` 头注自 D84 起就是陈旧的**（写着"下一步是从 agent home 读一份 JSON 目录"，而那一步 D84 已经做完），**已改为记录它已经落地、并把它当时那句预测的验证结果写进去**（*"the assembly itself does not change when that lands"* ⇒ **实测成立：`assembleTaskPrompt` 一行未改**）。**⚠️ 同时把 ③ 那条更正写进同一个头注**，理由：下一个读到 `priority` 的人最可能在那里，而 D95 已经证明"缺 `rank`"这个错误提议会被重复提出 ⇒ **把更正放在代码里比只放在决策文档里更能拦住它**。**⚠️ 本轮没有改任何运行时行为** —— 改的全是注释；验证方式是 `tsc --noEmit` 退出码 0 加全套测试数不变（见提交）。
+
+**⑥ ⇒ 对"技能提供方接缝"的判定（⚠️ 这是本轮真正产生的下一步，且不再需要裁定）**：**照抄本项目自己已有的 `registerSessionProjection` 形状，不照抄 DSH。** 理由：**(a)** ponytail 第 2 级 —— 它已经在库里（`session-store.ts:298-311`），包括 key 校验、重名拒绝、disposer、所有权 token、`…Keys()` 可审计；**(b)** `docs_architecture.md:119`（`session-store.ts:325-327` 已引）说明接缝的价值*"不在于替换是否可能发生，而在于依赖被写成接口而不是 import"* ⇒ **一个来源也值得有接缝**；**(c)** 操作者第 ④ 点（*"一切皆插件……就像积木一样……其实就像 pi 一样"*）明确要求第二来源可加；**(d) ⚠️ 而且这一处正是 `ARCHITECTURE.md` §3.4⑤ 那个"病灶"断言仍然成立的地方** —— D90 只证伪了它对**工具**的部分（`ToolRegistry` 已经开放），**而技能这一处 `runtime.ts:789` 确实硬 import 了 `loadSkillCatalogue`，加一个来源就得改 `runtime.ts`。** **⚠️ 范围与顺序（下一轮实现）**：Definition = `interface SkillProvider { readonly key: string; list(): Promise<readonly TaskPromptSkill[]> }`；Provider = 把 `loadSkillCatalogue(this.home)` 包成第一个 provider（key `"agent-home"`）；Consumer = `runtime.ts:789` 改为向注册表要；**⚠️ 并按 `session-store.ts:302-304` 的先例对重名直接抛**（不做 DSH 那种"先到先得 + 警告"，理由见 D95 ④5：工具与技能都是能力面，静默顶掉不可审计）；**⚠️ 不做分层与 `rank`**（触发条件未到，见 ④）。
+
+**⑦ 明确不做（本轮，含触发条件）**：**不改运行时行为**（只改注释）；**不实现技能提供方接缝**（⑥ 已定形状，但它是下一轮的整轮工作，本轮预算不够且没有测试）；**不加 `modelInvocable`/`userInvocable`**（④#1 触发条件未到）；**不加分层与 `rank`**（④#2）；**不改注入块结构**（D96 ③ 的触发条件未到）；**不改技能来源位置**（D95 ④1 推荐 (甲) 保持 D84 不变）。
+
+**⑧ ⚠️ 未读、如实记**：**`runtime.ts:1060-1080`**（D81 那条安全排序的完整上下文；**⚠️ 本轮仍只读了 `:1070` 与 `:1195` 的引文，按 ④ 那条新规矩这不足以支撑"改注入结构会动安全排序"的断言 —— 所以 D96 ③ 那条仍标为未验证**）；**`runtime.ts:1207-1277`**（`system` 之后如何接 `past`，D96 ③ 的结构断言只读到 `:1211`）；`session-store.ts:335-…`（`stateOf` 消费侧，② 只读到注册侧）；`dsh-plugin-manager/README.zh.md`（**已按 D96 ⑥ 降级**）；GitHub 上 `packages/util/package-manifest/src/types.ts`。**⚠️ 待清理**：`D:\DSHXM\AgentKHD` 根下三个探针残留。
+
+**⑨ ⚠️ 蜂群纪律连续第七轮无法执行，如实记**：本会话工具集里没有 `swarm_*` ⇒ **D91–D97 七轮都没有 PDRI 记录、基因绑定与边界账本，`blame` 归 `external`**；按协议拒绝有约束力、未尝试替代途径。**⚠️ 本轮有一处与 D96 不同要如实说**：本轮**动了产品代码**（`taskspec-prompt.ts` 的注释），**而写闸门随蜂群工具集一起消失**（D92 ⑧ 已记）⇒ **这次写入没有经过任何基因边界的计量，只有 fs-observation-policy 那道"读过才能改"。** 补偿措施：改动限于注释、`tsc` 与全套测试数作为验证、并在提交信息里逐字写明改了什么与为什么。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
