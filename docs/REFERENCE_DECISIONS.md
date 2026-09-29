@@ -2548,6 +2548,52 @@ without waiting, but growth that never stops is the failure this test exists to 
 
 **⑦ ⚠️ 本轮的蜂群纪律未能执行，如实记**：调查按 D90 的纠正全部放在开周期之前做完（读不被写闸门拦），**但准备开 `research` 周期时 `swarm_cycle` 返回 `unknown tool`，蜂群工具集在会话中途被卸载**（同一会话内 D88/D89/D90 三个周期都调用成功）。**⇒ 本轮没有 PDRI 记录、没有基因绑定、没有边界账本，`blame` 归 `external`（工具集不可用，与本轮工作质量无关）。按协议，拒绝是有约束力的、不得绕行，故未尝试任何替代途径开周期。**
 
+### D92 — DSH 的插件清单实读取证：`package.json.dsh`，并把 D91 的设计结论从"一个产品这么做"升级为"两个成熟产品都这么做"（研究轮，零产品代码）
+
+**① ⚠️ 取证路径与可达性纠正（D75/D79 那条教训第三次生效）。** 操作者指出 `D:\DSHXM\LLL\_update-check\` 有最新安装包。**实读该目录**：`deepseek-harness-0.2.0-rc.2-win-x64.exe`（275.91 MB）、**`app-embedded.7z`（275.09 MB）**、**`resources\app.asar`（121,348,951 B，已抽出）**、`current-packages.json` / `new-packages.json`、三份 diff 清单、`check-swarm-api.js`。**⇒ 不需要解压安装包，`app.asar` 已经在那里**；用一段 20 行的 asar 头部解析（pickle 头 → JSON 树 → `base = 8 + headerPayloadSize` → 按 `offset`/`size` 直接读）**无需落地任何文件即可读包内内容**，**这比 D79 那次的抽取脚本更省、也避开了它那个"关闭 fd 后再读 ⇒ `EBADF`"的坑**。**⚠️ 另一条可达性纠正：会话上下文里那个 `D:\DeepSeekHarness\resources\app.asar\dsh\` checkout 路径本轮读取失败（`package.json` 不存在，退出码 1）⇒ 该路径已不可用，取证一律走 `_update-check\resources\app.asar`。**
+
+**② ⚠️ DSH 的插件机制不在任何叫 `plugin` 的目录里，它是一整族包。** `new-packages.json` 是 0.2.0-rc.2 的完整包清单（约 280 个包）。**上一轮"checkout 里没有任何路径含 plugin"的观察是对的、但结论方向错了** —— 机制以包名分布：**清单** = `dsh-package-manifest`；**加载** = `cordis-plugin-loader`、`dsh-plugin-manager`、`dsh-host-plugin-inventory`、`dsh-plugin-package-inventory-deepseek`、`dsh-lazy-require`；**⚠️ 三件套** = `dsh-typert-protocol` / `dsh-typert-registry` / `dsh-typert-loader`（**正是 `docs_architecture.md:117` 说的三角色形状**）；**UI** = `dsh-client-ui-plugin-manager`、`dsh-client-ui-settings-plugins`、`dsh-client-ui-settings-plugin-inventory`。**⚠️ "一切皆插件"的实证**：`dsh-tools` 之外还有 **20 个独立的 `dsh-tool-*` 包**（`dsh-tool-bash`、`dsh-tool-fs`、`dsh-tool-skill`、`dsh-tool-subagent`、`dsh-tool-web`…）⇒ **每个工具就是一个包**。**⚠️ 顺带定位了本轮拦住我的那个东西**：`dsh-fs-observation-policy` 就是一个独立包；另有 `dsh-invariants`（队列里那条"Model-visible means logged"）、`dsh-session-format-v0-to-v1`…`v3-to-v4`（**印证 D75 的相邻单步迁移**）、`dsh-session-query-sqlite`、`schemastery`、`dsh-mcp-client`。
+
+**③ ✅ 清单格式（`dsh-package-manifest/README.zh.md`，4,412 B，全文读过）。包的自我描述逐字是 *"Shared type declarations for `package.json.dsh` configuration fields"* ⇒ DSH 的清单也是 `package.json` 里的一个命名空间字段，字段名是 `dsh`，与 pi 的 `"pi"` 完全同构。** 逐字示例：
+
+```ts
+const manifest: DshPackageManifest = {
+  name: 'example-dsh-plugin',
+  version: '1.0.0',
+  engines: { node: '>=24', dsh: '0.1.5-alpha.1' },
+  dsh: {
+    manifestVersion: 1,
+    bundle: { patch: './cordis.patch.yml' },
+    client,
+  },
+}
+```
+
+**逐字事实（每条都对设计有约束力）**：
+- **`DshPackageManifest` 描述 DSH 使用的 `package.json` 字段，其中 `name` 与 `version` 必填；*"它不是完整的 npm schema"***；**本地 profile 读取方使用 `Partial<DshPackageManifest>`，*"因为 profile 无需发布版本"***。
+- **`dsh.manifestVersion`** = *"manifest 格式标识；声明的格式为 `1`，**独立于 npm 包版本和 Session 格式版本**"* ⇒ **三个版本号各自独立演进**（对照本项目：`SKILL_CATALOGUE_VERSION = 1`、`CONSTRAINTS_VERSION = 1`、`TASKSPEC_VERSION = 2` 也正是彼此独立的）。
+- **`engines.dsh`** = 作者声明的兼容宿主版本，SemVer 范围或精确预发布版；***"此字段与 `engines.node`、`engines.npm` 并列；engines 对象可省略 `dsh`"***。
+- **`dsh.bundle.patch`** = *"一个 patch 文件路径，或一个有序的路径列表，均相对于包根目录；**launcher 按列表顺序把它们作为同一个组合包层应用**"* ⇒ **⚠️ 这是"插件如何改变宿主"的答案：不是 import 代码，而是打补丁层**（cordis patch）。**这直接回答了 D91 ④ 留下的那个否定结论。**
+- **⚠️ 读取方不推断默认值**：*"以下元数据字段均可选。省略时，格式版本或兼容的宿主版本**保持未声明状态**；**读取方不推断默认值**。"*
+- **⚠️ 最重要的诚实限制，逐字**：*"**兼容性仅作声明。** 当前安装器和加载器**不强制检查** `dsh.manifestVersion` 或 `engines.dsh`；声明范围**不会拒绝**不兼容的宿主，也不会校验 SemVer 语法。"* ⇒ **一个成熟产品声明兼容性但不强制它。**
+- **⚠️ "仅提供静态类型"，逐字**：*"消费方读取并校验所需的 JSON 字段，再将共享声明适配为运行时数据。**本包不提供解析器、getter helper、文件检查或默认值**。"* ⇒ **每个读取方自己做 JSON 解析 + 校验 + 默认值解析**（`README` 概述里也是这句：*"各读取方负责 JSON 解析、校验和默认值解析"*）。**⚠️ 这与本项目 `constraints.ts` / `skill-catalogue.ts` 的形状完全一致：严格解析、损坏即拒绝、绝不静默默认。**
+- `LocalizedText` = *"携带字面文本或**带必需英文回退值**的语言映射"*；`PluginLocalizedMeta` = 已安装插件的可选展示标题/描述、**从 `package.json.icon` 解析的图片 data URL**、以及元信息诊断，由 **App boot** 读取。
+- **⚠️ 内部字段刻意不公开**：`configTrees`、`sessionFormatMigration`、生成的 `moduleFallback` *"分别由镜像打包器、目录生成器和启动器读取方拥有；**公共类型不暴露这些字段**"*。
+- **⚠️ 源码不可达（与 D75 对 `dsh-session-projection` 的观察同形状）**：`package.json` 的 `files` 只有 `lib/index.js` 与 `lib/types/**/*.d.ts`，**asar 里这个包只有 `LICENSE`/`README.md`/`README.i18n.yaml`/`README.zh.md`/`index.js`(11 B)/`package.json`，没有 `src/` 也没有 `lib/types/*.d.ts`** ⇒ **`exports` 里声明的 `"./src/*": "./src/*"` 是空的**。**⇒ 类型定义本身读不到，但 `README.zh.md` 把字段语义写全了，足够做设计决策。**
+
+**④ ⚠️ DSH 是开源的，仓库地址从包元数据里直接读到了**：`dsh-package-manifest/package.json` 的 `repository.url` = **`git+https://github.com/deepseek-ai/deepseek-harness.git`**，`directory` = **`packages/util/package-manifest`**，版本 `0.2.0-rc.2`，`license: MIT`，`peerDependencies: { "@deepseek-ai/cordis": "~4.0.4" }`。**⇒ 操作者说的"去 github 上找它开源的 dsh harness"这条路成立，且仓库名与包在仓库里的目录都已确定**；**`src/types.ts` 的完整字段可以从那里读到，弥补 ③ 最后那条"源码不可达"**。
+
+**⑤ ⇒ 对 D91 设计结论的影响（三条，都是升级或修正）。**
+- **✅ 升级**：D91 ④ 的"清单应当是 `package.json` 里的一个命名空间字段"**现在有两个独立的成熟产品作证**（pi 的 `"pi"`、DSH 的 `"dsh"`），**不再只是"操作者点名的那个形状"**。**并且两家都额外用 `engines` 表达宿主兼容**（pi 用 `engines.node >= 22.19.0` + `peerDependencies` 指向宿主四个包；DSH 用 `engines.dsh` + `peerDependencies: cordis`）⇒ **本项目的清单也应当是 `package.json` 的一个命名空间字段 + `engines` 里一个宿主版本范围，而不是自造清单文件。**
+- **⚠️ 修正 D91 ④ 那条否定结论**：D91 说"pi 直接 import TypeScript 源文件路径，本项目不能照搬"。**DSH 给出了第二条路：`dsh.bundle.patch` —— 插件不是被 import 的代码，而是按顺序应用的一组补丁层**（配 `cordis-plugin-loader` 里的 `isolate.ts`、`tree.ts`、`group.ts`、`diff.ts`）。**⇒ "插件代码从哪来、谁批准加载"这个问题有了第三种候选答案：不是"import 源码"（pi）、也不是"禁止外部代码"（本项目现状），而是"声明式的补丁层 + 宿主按序应用"。** **⚠️ 但 `isolate.ts`（5,560 B）本轮未读，所以"补丁层是否真的隔离、隔离到什么程度"还不能下结论** —— 这是下一轮的第一件事。
+- **⚠️ 一条要拒绝的做法，理由逐字可引**：DSH 自己承认 *"兼容性仅作声明……不强制检查"*。**本项目不能照搬这一条**，因为本项目的整个安全论证建立在"机械强制"上（`decide()` 默认拒绝、写闸门按基因边界计费、`MAX_*_BYTES` 超限即抛不截断）。**⇒ 采纳 `engines.dsh` 这个字段的位置与语义，但拒绝它"仅声明不强制"的实现**：本项目的宿主版本范围应当在加载时校验、不兼容即拒绝，**并像 `constraints.ts` 那样在错误里报出实际值**。
+
+**⑥ 明确不做（本轮）**：**零产品代码**；不定 schema 的具体字段名；不实现加载器；不改 `engines`（改的是发布契约，需操作者签字）；**不因为读到了 `bundle.patch` 就采纳它** —— `isolate.ts` 未读之前，"补丁层"只是一种候选机制，不是结论。
+
+**⑦ ⚠️ 未读、如实记（下一轮的清单，按价值排序）**：**`cordis-plugin-loader/isolate.ts`（5,560 B，隔离机制，最高优先）**、`entry.ts`（8,049 B）、`tree.ts`（4,260 B）、`group.ts`（2,610 B）、`diff.ts`（2,171 B）、`internal.ts`（5,765 B）、`index.ts`（7,308 B）、`index.js`（23,896 B）；**`dsh-typert-protocol/README.zh.md`（10,713 B）+ `json-value.js`/`owned-value.js`/`remote-error.js`（⇒ 跨进程协议，与隔离问题直接相关）**；`dsh-typert-registry`、`dsh-typert-loader`；`dsh-plugin-manager`；`dsh-host-plugin-inventory`；`dsh-skill` + `dsh-skill-filesystem`（**与 D84 的 `skills.json` 直接对照**）；`dsh-lazy-require`；**GitHub 上 `packages/util/package-manifest/src/types.ts` 的完整字段**；`_update-check` 里那三份 diff 清单与 `check-swarm-api.js`（前期成果，未读）。**⚠️ 另记：`D:\DSHXM\AgentKHD` 根下有三个早期探针残留 `orphan-marker.txt`、`tagprobe.test.ts`、`testout.txt`** —— 在 `personal-agent/test/` 之外所以不会被套件捡到，但是垃圾，**待清理，不当本轮的事**。
+
+**⑧ ⚠️ 本轮的蜂群纪律仍未能执行，如实记**：与 D91 同因 —— **`swarm_cycle` 返回 `unknown tool`，蜂群工具集在会话中途被卸载**（D88/D89/D90 三个周期都调用成功过）。**⚠️ 一个可观察的连带后果：D91 与 D92 的文档写入都是在没有开放周期的情况下通过的，而本轮更早时同一份文件曾被 fs-observation-policy 以 "file has not been read" 拒绝 ⇒ 拦住写入的只剩下"读过才能改"这条观测策略，蜂群那道按基因边界计费的写闸门随工具集一起消失了。** **⇒ 这两轮没有 PDRI 记录、没有基因绑定、没有边界账本，`blame` 归 `external`（工具集不可用，与本轮工作质量无关）；按协议拒绝是有约束力的，未尝试任何替代途径去"开一个周期"。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
