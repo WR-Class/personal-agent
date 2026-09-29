@@ -356,15 +356,62 @@ export const disposeTaskStateProjection = registerSessionProjection<TaskStateEve
  * understand, and `SessionInspection.external` still surfaces them, so nothing is
  * silently dropped.
  */
-export type SessionEvent =
-  | SessionHeaderEvent
-  | MessageEvent
-  | UsageEvent
-  | ToolCallEvent
-  | ToolResultEvent
-  | SummaryEvent
-  | TaskStateEvent
-  | AuditEvent;
+/**
+ * The event kind table: kind literal → the event shape that carries it.
+ *
+ * ⚠️ This exists so that a kind contributed from outside can join `SessionEvent`
+ * **with its own literal**, by declaration merging:
+ *
+ * ```ts
+ * declare module "../src/session-store.ts" {
+ *   interface SessionEventMap {
+ *     "my/kind": { readonly v: number; readonly kind: "my/kind";
+ *                  readonly ignorable: true; readonly at: string; readonly n: number };
+ *   }
+ * }
+ * ```
+ *
+ * That is route 丙 (D75/D76), and it is why the eight narrowing sites do **not**
+ * have to change. What broke them in D71 was not an open union — it was the
+ * catch-all member `ExternalSessionEvent`, whose `kind: string` overlaps every
+ * literal so TypeScript cannot exclude it at `event.kind === "…"`. A merged member
+ * carries a distinct literal, so narrowing keeps working; D76 measured exactly this
+ * under the project's real `tsconfig.json`, including at runtime under both
+ * `--experimental-strip-types` and plain node.
+ *
+ * Written as `SessionEventMap[keyof SessionEventMap]` rather than D76's mapped-type
+ * derivation because this form needs none of the eight interfaces below to change:
+ * the map's values are the event types themselves, each already carrying its own
+ * `kind` literal. Deriving `{ kind: K } & payload` instead would mean splitting all
+ * eight into payload shapes, and `Omit<…, "kind">` drops `readonly` and optionality
+ * details — a wider blast radius around the very narrowing sites this is meant to
+ * protect.
+ *
+ * ⚠️ One consequence to keep in view: `tsconfig.json` includes the whole `test`
+ * tree, so an augmentation written in a test file is visible while compiling
+ * `src/`. That is `docs_development.md:56`'s "one program seeing both merges"
+ * inside our single program. `test/session-event-map.test.ts` augments on purpose,
+ * to measure whether it pollutes the core's narrowing. It does not — but if it ever
+ * does, the fix is program separation, not reverting the table.
+ *
+ * ⚠️ Written without a glob on purpose: the sequence star-star-slash inside a glob
+ * pattern terminates a block comment early, which turns every following line of the
+ * comment into code. That happened on the first draft of this comment and produced
+ * eleven cascading syntax errors including `TS1443: Module declaration names may
+ * only use ' or " quoted strings`, all pointing far away from the real cause.
+ */
+export interface SessionEventMap {
+  session: SessionHeaderEvent;
+  message: MessageEvent;
+  usage: UsageEvent;
+  "tool/call": ToolCallEvent;
+  "tool/result": ToolResultEvent;
+  summary: SummaryEvent;
+  "task-state": TaskStateEvent;
+  audit: AuditEvent;
+}
+
+export type SessionEvent = SessionEventMap[keyof SessionEventMap];
 
 /** Raised when a line cannot be read as a session event; carries its position. */
 export class SessionCorruptionError extends Error {

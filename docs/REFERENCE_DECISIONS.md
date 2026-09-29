@@ -2145,6 +2145,67 @@ is not assignable to parameter of type 'never'.
 
 **仍未取证**：`SessionEventMap` 在 DSH 里的实际定义（在哪个包、是否真叫这个名字、是否也是映射类型派生）—— **本轮证明了"这种形状可行"，没有证明"DSH 就是这么写的"**；`lib/types/index.js` 全文；`app.asar` 里可能存在的 `subsystems/*`、`.agents/notes/*`（含 `README.zh.md:110` 点名的那份投影 RFC `2026-07-27-session-projection-and-command-log.zh.md`）、`capability-seams.md`；`dsh-upstream-AGENTS.reference.md`；`blog-cordis-tencent.html`；`_evomap_ref/evolver-README.zh-CN.md`。**⚠️ 下一轮若继续取证，应先在 `app.asar` 里搜这些路径 —— D75 已经证明它们大概率就在里面。**
 
+### D77 丙的第一步落地：类型表可增广，且在真实文件里**实测不污染核心**（2026-09-30，**有代码**）
+
+**操作者裁定丙（"行，可以。做吧"）后的第一轮。范围刻意收窄到一件事：让声明合并有一个可增广的落点，并测量它在本项目真实布局下会不会污染核心。**
+
+#### 一、做了什么
+
+新增 `export interface SessionEventMap`（8 个内置种类，键为种类字面量、值为既有事件接口），把 `export type SessionEvent` 从手写 8 项联合改为 `SessionEventMap[keyof SessionEventMap]`。**纯类型层重构，零运行时行为变化。**
+
+**⚠️ 刻意不用 D76 探针里那个映射类型派生写法**（`{ [K in keyof SessionEventMap]: {kind:K} & SessionEventMap[K] }[keyof …]`）。那个写法要求 map 的值是"去掉 `kind` 的 payload 形状"，于是 8 个既有接口都要拆开或 `Omit`，**改动面从 1 处扩到 9 处，且 `Omit<…, "kind">` 会丢 `readonly` 与可选性细节 —— 在本要保护的那 8 处收窄点周围扩大爆炸半径**。丙真正需要的性质只是"增广一个键之后 `SessionEvent` 多出一个带自己字面量的成员"，**最简形式同样满足，且 8 个接口一个字都不用改**。**D76 证明了映射类型那种形状可行，没有证明只有那种形状可行。**
+
+#### 二、⚠️ 本轮最重要的测量：增广在真实文件里**不**污染核心
+
+`tsconfig.json` 的 `include` 覆盖整个 `test` 树 ⇒ 新测试文件 `test/session-event-map.test.ts` 里的 `declare module "../src/session-store.ts"` 增广**在编译 `src/` 时可见**。**这正是 `docs_development.md:56` 说的"一个 program 看到两侧的合并"，发生在我们自己的单程序里**，而不是 DSH 的 Host/Client 两个聚合程序之间。
+
+**实测：`tsc --noEmit` 退出码 0，错误数 0。**
+
+**⇒ 丙的核心主张在真实文件、真实 tsconfig、真实那 8 处收窄点下成立**：一个带自己字面量的合并成员进入 `SessionEvent`，**不会**破坏 `session-store.ts` 里任何一处 `event.kind === "…"` 的收窄。**⚠️ 这比 D76 强得多** —— D76 只在探针目录里证明"这种形状可行"，本轮证明"它在本项目里可行且不破坏既有代码"，而且是在 **651 项测试全绿的同一份代码上**测的。
+
+**⚠️ 同时这条测量也说明 DSH 那套隔离本项目暂时不需要**：`:56` 的冲突需要"两侧对**同一个键**合并出不同形状"，而本项目只有一个 `SessionEventMap` 的所有者（核心），插件各贡献自己的键 ⇒ **单程序布局下不会撞，撞了也是 `TS2717` 编译期硬错误（变异 C 已在本仓库复现）**。**⇒ `:58-60` 那三条纪律与走 Project Reference 图的 `constraints` 门禁，是 DSH 那种多聚合程序场景的需要，本项目由每轮必跑的 `tsc --noEmit` 直接覆盖。** 这条判断本轮有实测支撑，不是推断。
+
+**⚠️ 但"不污染"这个性质不能由测试自己证明**：一个测试无法断言"我不存在时也会通过"。**它的证明者是编译器 —— 在这份增广存在于 program 的前提下检查 `src/` 仍然通过。** 所以本轮把它写成 `tsc` 的一次测量并记录退出码，而不是写成一条 `assert`。
+
+#### 三、⚠️ 一个计划里的错误，在动手前查出来：变异 B 是空操作
+
+**原计划的变异 B 是"把 map 里 `"task-state"` 键改成错的字面量，`tsc` 必须变红"。这个计划是错的**：`SessionEventMap[keyof SessionEventMap]` 是**索引访问，只取值、不取键** ⇒ **改键名对 `SessionEvent` 完全没有影响，变异 B 语义上是空操作，跑它只会得到一个假绿。**
+
+**⚠️ 而这个错误本身暴露了本设计的一处真实弱点，必须记下来**：**键名与成员的 `kind` 字面量之间没有任何强制关系。** 一个插件可以增广 `"my/kind": { …; kind: "totally-different"; … }`，**`tsc` 不会报错，`SessionEvent` 照样多出一个成员，只是它的 `kind` 与它在表里的键对不上** ⇒ 之后按键查表（`SessionEventMap["my/kind"]`）与按 `kind` 收窄会得到不一致的结果。
+
+**⚠️ 对照 D76 的映射类型写法：那个写法是从键**派生** `{ kind: K }`，所以键与字面量天然一致、不可能对不上。** **⇒ 这是本轮选最简形式所付的真实代价，不是免费的。** 本轮不修它（修法要么换成映射类型派生、要么加一条静态断言，两者都超出本轮范围），**但记为已知弱点，并在下一轮决定"是否要求注册即增广"时一并考虑** —— 因为如果 `registerEventKind` 收紧成 `K extends keyof SessionEventMap`，那条约束就会把键名变成运行时注册的一部分，键与字面量不一致会立刻在注册处暴露。
+
+**改用 B'（从表里删掉 `audit: AuditEvent;` 这一行）**：`tsc` 退出码 2、**12 条错误**，含 `src/session-store.ts(1090,34): error TS2345: Argument of type 'AuditEvent' is not assignable to parameter of type 'SessionEvent'` ⇒ **证明这张表是承重的，不是装饰。**
+
+#### 四、⚠️ 本轮自己造成的一个错误：块注释里的 glob 会终止注释
+
+第一版 `SessionEventMap` 的 JSDoc 里我写了 glob `test/**/*.ts`。**其中的 `*/` 把块注释提前终止**，于是注释后面的 `declare module …` 被当成代码解析，`tsc` 报了 **11 条级联语法错误**：`TS1109: Expression expected`、`TS1005: ';' expected`、`TS1443: Module declaration names may only use ' or " quoted strings`、`TS1228: A type predicate is only allowed in return type position`。
+
+**⚠️ 而且这 11 条全部指向远离真因的行号**（`390`/`391`/`392`/`418`），真因在注释内部。**若不是逐条读错误文本、看到 `TS1443` 提到 "Module declaration names" 才回头怀疑注释边界，很容易误判成"增广语法在本项目不成立"从而错误地否掉丙。**
+
+**⇒ 补一条纪律：块注释里不得出现 `**/` 这个字符序列；引用 glob 时改写或用文字描述。** 这条陷阱已连同那 11 条错误一起写进 `session-store.ts` 的注释本身（**因为它会再犯：任何在块注释里引用 glob 的地方都会中招，写在代码里比写在决策记录里更容易被下一个人看到**）。
+
+#### 五、验证
+
+- **`tsc --noEmit` 退出码 0、错误数 0**（增广在 program 内的前提下）。
+- **新测试 `test/session-event-map.test.ts` 3/3**：**(a)** `Extract<SessionEvent, {kind:"probe/augmented"}>` 不是 `never`、payload 字段有类型（**⚠️ 这条性质由编译器在测试运行之前就检查过了，所以它不可能靠运行时巧合通过**）；**(b)** 9 个种类字面量彼此可区分、`SessionEventMap["probe/augmented"]` 可按键取到形状；**(c) 端到端** —— 类型侧增广 + D71 的运行时 `registerEventKind` + D74 的行号归并接成一条路径：写两行外部种类日志（中间夹一条内置 `message`）⇒ `inspect` 的 `external` 收到 2 条、`problems` 为空 ⇒ 投影折叠出 7。**⇒ 丙的类型侧与 D71/D74 的运行时侧真的通了。**
+- **全量 651 项 / 648 通过 / 2 失败 / 1 跳过**（648 基线 + 3 新增 = 651 ✓）。**⚠️ 那 2 项失败已隔离核实**：`background-jobs` 单独重跑 **11/11 全绿** ⇒ 是 12 轮未修的负载相关间歇项（本轮超时值 3157/3160/3329/3329 ms），**不是本轮回归**。**报成失败而不是挥过去，也不声称已修。**
+- **三处变异全红、字节还原 = true**（`src` 与 `test` 两侧都还原）：
+  - **A** `SessionEvent` 改回手写 8 项联合 ⇒ **5 条错误**，含 `test/session-event-map.test.ts(69,24): error TS2339: Property 'n' does not exist on type 'never'` —— **这正是判别器设计的预期表现：增广没进联合时 `Extract` 得到 `never`** ✅
+  - **B'** 表里删掉 `audit` 成员 ⇒ **12 条错误** ✅
+  - **C** 在测试里对**同一个键**增广出不同形状 ⇒ **5 条错误，含 `TS2717: Subsequent property declarations must have the same type. Property '"probe/augmented"' must be of…`** ⇒ **D76 P3 在本仓库复现** ✅
+- **还原后 `tsc` 退出码 0、新测试 3/3。**
+
+#### 六、⚠️ 对 plan-ready 的一处偏离，如实报
+
+plan-ready 第五节列了 5 份文档，**本轮只改了 4 份：`REFERENCE_DECISIONS.md`(D77)、`ARCHITECTURE.md` §3.4④、`CODE_MAP.md`、`STATUS.md`，没改 `SAFETY.md`**。**理由**：本轮是纯类型层重构，**没有任何安全/审批行为发生变化** —— 既没有新增或放宽任何权限边界，也没有改变 `decide()`、写预算、路径约束或审批语义；而 plan-ready 里预计要写进 `SAFETY.md` 的那条内容（"已测、未触发污染"）**本质是类型层测量结果，归属 `ARCHITECTURE.md` 与 `CODE_MAP.md`**。**按项目规矩"每轮只碰受影响的那几份文档"，`SAFETY.md` 本轮不受影响 ⇒ 不碰它是对的，plan-ready 把它列进去是错的。**
+
+#### 七、⚠️ 本轮明确没做（各有理由）
+
+- **没删 `ExternalSessionEvent`、没删 `InspectionResult.external`、没删 D74 的行号归并、没动 `migrateEvent` 的 8-case switch。** 删兜底成员意味着把 `registerEventKind` 收紧成"注册即增广"（`K extends keyof SessionEventMap`），**会作废 D71 已落地的形状与它那 9 项测试**（它们在运行时注册 `"probe/lying"` 等种类而不做增广），**并连带让 D74 的归并成为死代码** ⇒ **那是一次涉及三处已记录决定的联动改动，不该与"让类型表可增广"挤在同一轮。**
+- **没做 D72 第 ② 步。** **⚠️ 但它的前提已经变了**：D74 第四节说第 ② 步的第 2 层硬阻塞是"`TaskStateEvent` 必须退出 `SessionEvent` 联合"—— **丙之后这条阻塞消失了**，因为 `task-state` 可以留在表里、由 provider 提供校验，而不需要退出联合。**⇒ 下一轮做第 ② 步的成本要重新估，不能沿用 D74 的估计。**
+- **没修第三节那个"键名与 `kind` 字面量不一致无人强制"的弱点**（超出本轮范围，理由见第三节）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
