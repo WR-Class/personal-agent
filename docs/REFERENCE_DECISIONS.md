@@ -2206,6 +2206,104 @@ plan-ready 第五节列了 5 份文档，**本轮只改了 4 份：`REFERENCE_DE
 - **没做 D72 第 ② 步。** **⚠️ 但它的前提已经变了**：D74 第四节说第 ② 步的第 2 层硬阻塞是"`TaskStateEvent` 必须退出 `SessionEvent` 联合"—— **丙之后这条阻塞消失了**，因为 `task-state` 可以留在表里、由 provider 提供校验，而不需要退出联合。**⇒ 下一轮做第 ② 步的成本要重新估，不能沿用 D74 的估计。**
 - **没修第三节那个"键名与 `kind` 字面量不一致无人强制"的弱点**（超出本轮范围，理由见第三节）。
 
+### D79 "是否要求注册即增广"—— 查完源码后，**这个问题本身是个伪选择**（2026-09-30，**研究轮，零产品代码**）
+
+**⚠️ 本轮起因是我的纪律违规，先记下来**：上一轮我把"是否要求注册即增广（删 `ExternalSessionEvent` 兜底成员）"当成待裁定项抛给操作者，**而没有为它做过任何研究** —— 没查成熟产品、没量影响、没比性能、没核架构一致性。**这违反 D69 那条规矩（*"任何『不做 X』的结论，必须附上读过 X 的证据"*）的镜像：任何交给操作者的选择，必须附带我做过的研究、证据与推荐，不能只列选项让操作者替我做功课。** 操作者的质问（*"这些你都做过了吗？来问我这个问题？"*）是对的，**答案是"没有"**。
+
+**取证方式**：从 `D:\DeepSeekHarness\resources\app.asar` 解包（D75 的方法），**只读，未改宿主数据**，解到仓库外 `D:\DSHXM\d79ref\`。**⚠️ 顺带纠正两处既有记录**：**(1)** `@deepseek-ai` 作用域在 asar 里位于 **`dsh/node_modules/` 之下**，不在顶层 `node_modules/`（我按顶层找，第一次搜索报"0 个文件"）；**(2)** D75 记录的解包路径是对的，但**当时只解了 `.js`，没解类型层** —— 而本问题的答案恰恰在类型层。
+
+---
+
+#### 一、⚠️ 最重要的发现：**Cordis 的真实 TypeScript 源码就在 asar 里**
+
+`dsh/node_modules/@deepseek-ai/cordis/` 下有 **`src/registry.ts`(11,711 B)、`src/context.ts`(6,137 B)、`src/service.ts`(4,255 B)、`src/events.ts`、`src/fiber.ts`、`src/reflect.ts`** —— **不是 `.d.ts`，是带注释的 `.ts` 源码**。**⇒ 我此前多轮标注"Cordis 只有二手转述（`docs_cordis-primer.md` 45 行、`blog-cordis-tencent.html` 204 KB 未读）"是可达性认定错误，与 D75 那次同形状，这是第二次犯。**
+
+**⚠️ 补一条纪律（第二次了，必须升级）**：**说"某份源码读不到"之前，不但要查已安装产物的打包体（D75），还要查它在包内的**非标准位置**（`src/` 而不只是 `lib/`、作用域目录而不只是顶层 `node_modules/`）。**
+
+#### 二、问题 1：「注册即增广」到底指什么
+
+指把 `registerEventKind(kind: string, handler)` 收紧成 `registerEventKind<K extends keyof SessionEventMap>(kind: K, handler)` —— **即：没有先写 `declare module` 类型增广，就无法在运行时注册这个种类**。连带后果是 `ExternalSessionEvent`（`kind: string` 的兜底成员）失去存在理由而被删，于是 `InspectionResult.external` 与 D74 的行号归并都成为死代码。
+
+**⚠️ 上一轮我把它描述成"需要你裁定"，这个描述本身就是错的** —— 因为它把一个**有客观答案的事实问题**（成熟产品怎么做）伪装成了一个**价值判断题**。
+
+#### 三、问题 2：成熟产品是什么样的 —— **两层，运行时开放、类型侧可选增广**
+
+**Cordis（DSH 所基于的插件框架）的真实源码，逐字**：
+
+- **运行时侧不受约束** —— `src/registry.ts:107-108`：
+  ```ts
+  /** Service name(s) the plugin provides (read by `Service` and by loaders). */
+  provide?: string | string[]
+  ```
+  **⇒ 插件声明自己提供什么服务，用的是裸 `string`。**
+- **类型侧只在"取用"那一端受约束** —— `src/registry.ts:19,22-23,37`：
+  ```ts
+  export type Inject<M = Dict> = (keyof M)[] | { [K in keyof M]?: M[K] }
+  export type InjectKey = keyof {
+    [K in keyof Context & string as Context[K] extends { [symbols.config]: any } ? K : never]: any
+  }
+  export function Inject<K extends InjectKey>(name: K, config?: …)
+  ```
+  **⇒ `InjectKey` 是从 `Context` 的键派生的，所以一个插件要想被别人**带类型地**注入，就必须先增广 `Context`；但它自己**注册**时并不需要。**
+- **Cordis 自己就在用声明合并** —— `src/registry.ts:164`：`declare module './context.ts' {`。**⇒ 增广是这套框架的内部常规手法，不是外部插件才用的逃生门。**
+- **`src/context.ts:31-32`**：`/** The plugin registry. Its methods are mixed onto `ctx` (`ctx.plugin`, `ctx.inject`). */ registry: RegistryService`。
+
+**DSH 的投影包，逐字**（`dsh-session-projection/lib/types/types.js:1-8`，**这是 D75 从未读过的文件**）：
+
+> *"Pure-type outlet of the session-projection Service Definition: **the one projection type table**, importable from client aggregates **without dragging the host-side cordis Context merges** of the package root (dsh-agent → dsh-session). **Domain packages may declare-merge through either the package root or this outlet — re-export preserves symbol identity, so both land on the same table.**"*
+
+**⚠️ 三条信息**：**(1)** 确实存在"唯一一张投影类型表"（**这补上了 D75 记为"推断、未证实"的那一环的一半**）；**(2)** **领域包通过声明合并接入它**；**(3) ⚠️ 这个 `/types` 子路径的存在理由，正是为了绕开 `docs_development.md:56` 那个冲突** —— *"without dragging the host-side cordis Context merges"*。
+
+**⚠️ 而且 `dsh-session-projection` 全包没有任何 `.d.ts`**（14 个文件里只有 `LICENSE`/`README*`/`lib/index.js`/`lib/types/index.js`/`lib/types/types.js`/`package.json`）⇒ **它的类型信息全部走 JSDoc + 这个纯类型出口**，**没有任何机制在运行时注册处强制类型增广**。
+
+**⇒ 结论：成熟产品的形态是「运行时开放（裸 `string`）+ 类型侧可选增广」，而这正是本项目 D77 之后的形态**（`registerEventKind(kind: string, …)` 开放 + `SessionEventMap` 可增广）。**⇒ 问题 1 那个"是否要求注册即增广"没有分歧可裁：不要求，现状已经对齐。**
+
+#### 四、⚠️ 问题 5 的答案里藏着一个我缺的机制：**纯类型出口（pure-type outlet）**
+
+DSH 为 `:56` 那个冲突给出的**已发布解法**不是"强制增广"，也不是我在 D77 里写的"本项目只有一个程序所以不撞"，而是**拓扑解法**：**再开一个只含类型表的子路径出口（`/types`），让客户端聚合程序能拿到类型表而不必拖进宿主侧的 `Context` 合并**；并靠 **re-export 保持符号同一性，所以两个入口的增广落在同一张表上**。
+
+**⚠️ 这修正了 D77 的一个结论**：D77 写"DSH 那套隔离本项目暂时不需要"。**那句在"本项目只有一个程序"的前提下仍然成立，但我当时把 DSH 的解法理解成了"两个聚合程序"这一种，漏了这个纯类型出口。** **⇒ 记为：若本项目将来拆出宿主/客户端两个程序，DSH 已发布的解法是加一个纯类型出口，而不是把类型表复制两份、也不是收紧注册。**
+
+#### 五、问题 3：有什么影响（若真去收紧）
+
+- **类型层**：任何没写增广的 `registerEventKind` 调用变成编译错误。**⚠️ 这会立刻作废 D71 已落地的 9 项测试** —— 它们在运行时注册 `"probe/lying"` 等种类而**不做增广**（`test/event-kind-registry.test.ts`）。
+- **运行时层**：`ExternalSessionEvent`、`InspectionResult.external`、**D74 的行号归并**全部成为死代码。**⚠️ 而 D74 的归并是修一个真实交付过的缺陷（D73 的接缝两半不通）才加的，删它要连带删 `test/projection-external.test.ts` 里那条交错序测试（`"mxmx"`）。**
+- **⚠️ 最重的一条影响，与操作者的目标直接冲突**：收紧之后，**插件必须用 TypeScript 写、并且必须参与本项目的编译**（因为它的增广要进同一个 `ts.Program` 才能生效）。**⇒ "像积木一样可插拔"就不再成立 —— 积木不该要求先改宿主的类型表。** 这违反 `ARCHITECTURE.md` §1 的小核心目标，也违反操作者五点重定向的第 ④ 点（*"一切皆插件…就像 pi 一样"*）。**而 Cordis 的 `provide?: string | string[]` 恰恰是为了让非 TS 插件与动态服务名也能注册。**
+
+#### 六、问题 4：性能谁更好（**必须分两侧说，D70 的规矩**）
+
+- **运行时侧：无差别。** 类型全部被剥离（D76 实测：`--experimental-strip-types` 与裸 `node` 都退出码 0 且行为正确），所以"兜底成员 vs 全字面量"在运行时不产生任何指令差异。**⇒ 这一侧没有性能问题可谈。**
+- **类型检查侧：全字面量（丙）严格更好，而兜底成员（`kind: string`）更差。** 依据是 **D71 的实测**：把 `kind: string` 的成员加进联合后，TS 在 8 处 `event.kind === "…"` 无法排除它，其中一处是 `inspect` 的工具批次安全检查（对 `tool/call | tool/result` 做析取收窄后读 `callId`/`name`/`arguments`）。**⇒ 兜底成员让收窄退化，全字面量让收窄成为判别式查找。**
+- **⚠️ 但这是"依据 D71 的实测现象做的推理"，不是对编译耗时的直接测量。** 本轮没有跑 `tsc --extendedDiagnostics` 去对比两种形态的编译时间 ⇒ **记为「未测，只有推理」**，不冒充实测。**若将来真要拿编译耗时当理由，必须先测。**
+
+#### 七、问题 6：是否与本项目架构和想要的东西一致
+
+| 对照项 | 现状（D77 之后） | 若收紧成"注册即增广" |
+|---|---|---|
+| `ARCHITECTURE.md` §1 小核心 | ✅ 新增种类不改核心 | ⚠️ 新增种类必须改类型表（虽然是增广不是改核心代码，但**必须参与本项目编译**） |
+| `:113` *"fails explicitly when the registry or required key is absent"* | ✅ D73 已落地（未注册 key 抛错） | 不变 |
+| `:117` *"one role alone is not a seam"* | ✅ 三个角色都可设计（D77 端到端测试已把类型侧与运行时侧接通） | 不变，但**插件作者被迫多写一份类型增广** |
+| 操作者第 ④ 点"像积木一样、就像 pi 一样" | ✅ 运行时注册即可用 | ❌ **积木要先改宿主的类型表** |
+| Cordis 的 `provide?: string \| string[]` | ✅ 同形 | ❌ 与它相反 |
+
+**⇒ 现状一致，收紧会破坏一致性。**
+
+#### 八、决定
+
+1. **❌ 不做"注册即增广"，保留 `ExternalSessionEvent`、`InspectionResult.external`、D74 的行号归并。** 理由不是"改动大"，而是**成熟产品的形态就是运行时开放 + 类型侧可选增广（Cordis `provide?: string | string[]` + `InjectKey` 派生自增广后的 `Context`；DSH 领域包声明合并进"唯一一张投影类型表"），本项目 D77 之后已经与之对齐；而收紧会把"插件必须用 TS 写并参与本项目编译"变成隐含前提，与 §1 小核心和操作者"像积木一样"的目标冲突。**
+2. **⚠️ 撤销上一轮那个"待裁定"提法。** 它把一个有客观答案的事实问题伪装成价值判断题抛给操作者，**这是本轮真正要修的错**，比结论本身重要。
+3. **✅ 采纳一条新机制进候选清单（不是本轮实现）**：**纯类型出口**（DSH 的 `/types` 子路径）。**触发条件写清楚：当本项目拆出宿主/客户端两个 `ts.Program` 时采用，用它替代"复制类型表"或"收紧注册"。** 在此之前不做 —— **ponytail 阶梯第一级：目前没有第二个程序，YAGNI。**
+4. **✅ D77 那个 kind-key 静态断言维持跳过**，且本轮给了它更强的理由：**Cordis 也不强制"注册名 == 类型键"**（`provide` 是裸 `string`），所以"键与字面量不一致无人强制"**不是本项目的缺陷，而是这一族设计的共同取舍**。**何时该重新考虑：出现第一个真实的第三方插件、且它真的踩到这个不一致时。**
+5. **⚠️ 连带修订 D77 的一处结论**（第四节已写）：DSH 对 `:56` 冲突的解法是**纯类型出口**这一拓扑手段，不只是"两个聚合程序"；D77 说"本项目暂时不需要隔离"在当前单程序前提下仍成立，但当时对 DSH 解法的理解不完整。
+
+#### 九、仍欠（不静默丢掉）
+
+- **`CODE_MAP.md` 第 54 行（`preflight.ts`）仍有 1 个多余单元格**：D78 已修好第 20、53 行（把代码跨度里的联合类型竖线按 GFM 转义为 `\|`）、并查清第 37 行**本来就没坏**（是我的探针数了原始竖线、把已转义的 `\|` 也算成破损）；**第 54 行去掉空单元格后从 7 降到 5，仍差 1，未定位。** **⚠️ 这些修改目前在工作区未提交。**
+- **⚠️ D78 那条验证方法的教训必须落档**：验证文档完整性时 **(a)** 不要用手写正则查"某段文字在不在"（同类假失败已第 3 次：D69 漏反引号、D72 漏 `⚠️ ` 字形、D78 漏 `**：**`）；**(b)** 计数类检查先确认"同一计数单位在全文档是否同构"（`CODE_MAP.md` 有两张列数不同的表，取全表众数毫无意义）；**(c) 数分隔符必须排除转义形式。**
+- **`DECISIONS_ACTIVE.md` 仍停在 D68**，而 D69–D79 里有四轮改动了"现行有效"的内容（D77 作废 §3.4④ 一条判断、D79 撤销一个待裁定项并修订 D77 一处结论）⇒ **这份"现行有效"视图现在主动误导人，优先级高于其余文档整理。**
+- **D72 第 ② 步的取消尚未落档**（D78 的 plan-ready 里写了理由，但那个周期被强制关闭、没有产出文档）。**理由**：丙已消除它要解决的问题（新增种类必须改核心），剩下的只是"把 `task-state` 的逐字段校验从核心 switch 搬进 provider"这个代码组织改善，**而目前没有第二个种类需要搬 ⇒ 无第二消费者 ⇒ 不做**。**何时重新捡起：出现第二个需要独立校验语义的事件种类时。**
+- **`d79ref` 里已解出但未读**：`cordis/src/registry.ts` 全文（只 grep 了）、`context.ts` 全文、`service.ts`、`events.ts`、`fiber.ts`、`reflect.ts`、`dsh-session-projection/lib/types/index.js` 全文、`dsh-session-projection-cache/README.zh.md`、`blog-cordis-tencent.html`、`dsh-upstream-AGENTS.reference.md`、`_evomap_ref/evolver-README.zh-CN.md`。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
