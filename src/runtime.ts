@@ -16,6 +16,7 @@ import { assessTaskState, formatTaskStateForPrompt, type TaskStateAssessment } f
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
+import { loadSkillCatalogue } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
@@ -566,7 +567,7 @@ export class AgentRuntime {
    * in `buildPrompt` for the measurement that forced the split.
    */
   private taskPromptExternalBytes = 0;
-  private readonly taskPromptSkills: readonly TaskPromptSkill[];
+  private readonly taskPromptSkills: readonly TaskPromptSkill[] | undefined;
   /** Outcome row address for the send in flight; undefined = no round started. */
   private outcomeAddress: string | null | undefined;
   /** The request kind for the send in flight, so failures can be grouped (D16). */
@@ -630,7 +631,7 @@ export class AgentRuntime {
     this.countPromptTokens = options.countPromptTokens;
     this.model = options.model;
     this.systemPrompt = options.systemPrompt;
-    this.taskPromptSkills = options.taskPromptSkills ?? [];
+    this.taskPromptSkills = options.taskPromptSkills;
     this.geneStore = options.geneStore;
     this.cycleStore = options.cycleStore;
     this.temperature = options.temperature;
@@ -778,7 +779,15 @@ export class AgentRuntime {
     // 或者组装一份好的提示词" stopped after 分析意图. The catalogue is empty for
     // now, which is literally the operator's "如果没有就不匹配": no skill is
     // injected, and the intent fragment still is.
-    this.taskPromptBlock = assembleTaskPrompt(taskSpec, this.taskPromptSkills);
+    // ⚠️ D84: the catalogue comes from the agent home unless a caller injected one
+    // — the same shape as `loadConstraints(this.home)` in `buildPrompt`. One small
+    // file read per turn, from a directory the file tools cannot write by location
+    // (`protectedRoots`, D50), so re-reading it adds no self-escalation surface.
+    // An injected catalogue wins outright rather than merging with the disk one:
+    // two sources for a single routing decision is how an operator stops being able
+    // to tell which skill fired.
+    const skillCatalogue = this.taskPromptSkills ?? (await loadSkillCatalogue(this.home));
+    this.taskPromptBlock = assembleTaskPrompt(taskSpec, skillCatalogue);
     // ⚠️ D82: only the skill half is charged to the injected cap, so measure it
     // instead of estimating it. Assembling against an empty catalogue yields exactly
     // the intent fragment, and the difference is the external part. Note this is a
