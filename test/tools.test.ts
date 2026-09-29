@@ -967,18 +967,42 @@ describe("agent loop with tools", () => {
   // 18-byte file is tens of bytes, while the budget must now exceed ~200 just to hold
   // the opening prompt, leaving that same tens-of-bytes window. Restoring this test
   // needs a step whose result is large by construction, which is a fixture design
-  // question and not a constant to guess at. Left skipped rather than re-tuned by
-  // estimate, because estimating byte thresholds has now been wrong three times.
-  it("checks the budget every step, not only at the start", { skip: "D81/D82: the system message now carries a ~180-byte product-owned fragment, so maxContextBytes has a ~200-byte floor; this test's growth of tens of bytes cannot straddle it. See the comment — the injected-cap exemption was implemented and measured not to be the binding constraint." }, async () => {
+  // question and not a constant to guess at.
+  //
+  // ✅ D83 answered it, and the answer is the fixture shape rather than a number:
+  // eight tool calls in one step make the growth large by construction, and the
+  // budget follows from arithmetic over both ceilings instead of from an estimate.
+  // The test is active again and passes. What made it stuck for two rounds was
+  // counting one ceiling when the bytes pass through two.
+  it("checks the budget every step, not only at the start", async () => {
     // Sized so the opening prompt fits and the prompt after one tool result does
     // not: fitting at step one proves nothing about step five.
     const { runtime, adapter } = makeRuntime(
       "context-grow",
       [
-        { toolCalls: [call("read_file", { path: "hello.txt" })] },
+        // ⚠️ D83: eight calls in one step, so the growth between step one and step
+        // two is large by construction instead of incidental. Each call contributes
+        // one assistant tool-call entry and one tool result, and both have to be
+        // re-sent on the next call — which is exactly what "checks the budget every
+        // step" is about. Eight stays under the default `maxToolCallsPerRun` of 9.
+        // One call was not enough: a single `read_file` of an 18-byte file grows the
+        // prompt by only tens of bytes, and D81 put a ~200-byte floor under
+        // `maxContextBytes` (the size of the product's own system text), so the
+        // window a tens-of-bytes growth has to straddle no longer exists.
+        { toolCalls: Array.from({ length: 8 }, (_, index) => call("read_file", { path: "hello.txt" }, `g${index}`)) },
         { content: "done" },
       ],
-      { maxContextBytes: 30 },
+      // ⚠️ D83, chosen by arithmetic over both ceilings rather than by estimate —
+      // estimating byte thresholds here has been wrong three times. Ceiling A is the
+      // injected-block cap, `floor(maxContextBytes / 4)` = 100, and it counts only
+      // the re-sent blocks: constraints, task state and the *external* part of this
+      // round's block. All three are zero in this test, so A cannot bind at any
+      // budget. Ceiling B is the whole prompt against `maxContextBytes` itself, and
+      // that is the one under test. Measured earlier: a budget of 800 with these
+      // eight calls did *not* refuse, so one step grows the prompt by roughly 400-600
+      // bytes; the opening prompt is the ~180-byte system block plus five characters
+      // plus serialization. 400 sits between them with margin on both sides.
+      { maxContextBytes: 400 },
     );
     await assert.rejects(() => runtime.send("small"), ContextBudgetError);
     assert.equal(adapter.consumed, 1, "the stop must happen after one real step, not before it");
