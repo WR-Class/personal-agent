@@ -389,19 +389,33 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     // Built from the tier's tool list, so a posture that does not offer a tool
     // makes it genuinely absent rather than merely refused (D28/D32). Configuration
     // cannot add a tool back: it reaches the rule table, never the registry.
-    const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,job_output:createJobOutputTool,job_kill:createJobKillTool,
-      edit_file:createEditFileTool,patch_file:createPatchFileTool,
-      create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
-      batch_files:createBatchFilesTool} as const;
     const createRuntime=(sessionId:string)=>{
-      // update_task_state needs the store and this session's id, which the other
-      // factories take no arguments for, so the registry is built per session
-      // rather than once. Building it once outside would either capture a stale
-      // session id — letting one session write another's task state — or need a
-      // mutable holder, which is the same hazard with more steps.
-      const tierTools=tier.tools.map(name=>name==="update_task_state"
-        ? createUpdateTaskStateTool(store,sessionId)
-        : allTools[name as keyof typeof allTools]());
+      // ⚠️ D90: this table lives *inside* createRuntime rather than beside it, because
+      // one entry needs this session's id. It used to sit outside with
+      // `update_task_state` special-cased by a ternary in the map below, which meant
+      // adding a tool that needs session state required editing control flow instead of
+      // a table. Now the table is the only registration point for every tool,
+      // session-scoped or not, and the map is a single lookup.
+      //
+      // The registry is still built per session rather than once. Building it once
+      // outside would either capture a stale session id — letting one session write
+      // another's task state — or need a mutable holder, which is the same hazard with
+      // more steps.
+      const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,job_output:createJobOutputTool,job_kill:createJobKillTool,
+        edit_file:createEditFileTool,patch_file:createPatchFileTool,
+        create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
+        batch_files:createBatchFilesTool,
+        update_task_state:()=>createUpdateTaskStateTool(store,sessionId)} as const;
+      // ⚠️ D90: check before calling. Without this, a tier naming a tool that has no
+      // factory dies as `TypeError: allTools[...] is not a function`, and it dies
+      // *before* `ToolRegistry`'s own "available tool is not registered" check
+      // (tools.ts:1226-1230) can say anything useful. Naming the offending tool and
+      // listing what does exist is the difference between a diagnosis and a stack trace.
+      const tierTools=tier.tools.map(name=>{
+        const factory=allTools[name as keyof typeof allTools];
+        if(!factory) throw new Error(`档位声明了工具 ${JSON.stringify(name)}，但没有对应的工厂；表里有的是 ${Object.keys(allTools).join(", ")}`);
+        return factory();
+      });
       return new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
       tools:new ToolRegistry(tierTools,tier.tools),rules,maxSteps:options.maxSteps,

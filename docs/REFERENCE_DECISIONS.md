@@ -2485,6 +2485,37 @@ without waiting, but growth that never stops is the failure this test exists to 
 
 > **⚠️ 更正（D89，同轮补正，上面那句的原样保留在此以供对照）**：这句最初写的是 **`IMPLEMENTATION.md:117`，文件名错了**。实读 `IMPLEMENTATION.md:112-125` 证实 **`:117` 是那张机制表里的「蜂群 worker」行**（*"一个父任务分派最多两个只读 worker，各自独立上下文，失败互不影响"*），**与接缝三角色无关**；**三角色判据出自 `docs_architecture.md:117`**，逐字为 *"A **seam** is a swappable capability with three roles: a **Service Definition** declaring the interface, a **Service Provider** implementing it, and a **Consumer** using it… A package may combine roles, but **one role alone is not a seam; adding a capability means designing all three**"*。**⇒ 这是一次引用漂移，而且是被自己下一次读取抓到的**：错的文件名同轮出现在 `plan-ready`、本节、与 `STATUS.md` 批次 ㊿-补3 的 ⑨ 三处，直到为下一轮做调查、真的去读 `IMPLEMENTATION.md:112-125` 才发现那一行根本不是我说的那条。**⚠️ 而避免它本来只需要读一眼既有引用**：本文件 `:1604` 与 `ARCHITECTURE.md:227` 引的都是同一个 `:117`、同一段英文原文。**记法：写"按 `文件:行号`"之前要读到那一行；要引一段此前已被引用过的原文时，先确认既有的那处引用指向的是哪个文件。** 这正是队列里那条「引用/声明漂移闸门」要机械化拦住的类别 —— **本轮它以人工方式又发生了一次，而且发生在一轮刚刚写完"编译器替我守了一条性质"之后**，说明**能被机械检查的性质与不能被机械检查的性质要分开对待：前者交给 `tsc`，后者目前只有"写之前读到那一行"这一条纪律**。
 
+### D90 — 统一工具装配表：把三元特判换成表项，并更正 §3.4⑤ 对工具的断言（本轮有代码）
+
+**⚠️ 本轮第一个产出是推翻我自己写在文档里的结论。** 上一轮（D88）把"建工具接缝"列为下一轮，理由是 `ARCHITECTURE.md` §3.4⑤ 那句 *"要让任何东西成为插件，都得先改 `runtime.ts`"*。**开周期之前实读四段源码，证实这句话对工具不成立**：
+
+| 角色 | 实读位置 | 实际形状 |
+|---|---|---|
+| Service Definition | `tools.ts:130-136` | `Tool` 接口，`execute(args, context): Promise<ToolResult>` —— 已存在 |
+| Service Provider | `tools.ts` 12 处 | `createReadFileTool` / `createEditFileTool` / `createRunCommandTool` / `createUpdateTaskStateTool(store, sessionId)` 等 12 个工厂 —— 已存在 |
+| 注册表 | `tools.ts:1219-1231` | `constructor(tools: readonly Tool[] = [], available?: readonly string[])` —— **传什么就注册什么，内部零硬编码工厂**；`:1226-1230` 还检查 `available` 里的名字必须已注册，否则抛错 |
+| 装配（Consumer 侧） | `cli.ts:392-395` + `:407` | `allTools` **早就是表驱动**；`new ToolRegistry(tierTools, tier.tools)` |
+
+**⇒ 接缝的三个角色本来就齐了，"建工具接缝"这件事不存在。** 按 `docs_architecture.md:117` 的判据（*"A package may combine roles, but one role alone is not a seam; adding a capability means designing all three"*），这里三个角色都在、而且注册表是开放的。
+
+**① 真正的病灶比文档所述小得多、而且位置不同。** `allTools` 原先定义在 `createRuntime` **之外**（`cli.ts:392`，而 `:396` 才是 `const createRuntime=(sessionId:string)=>{`），**所以它引用不到 `sessionId`**；而 `update_task_state` 的工厂需要 `store` 与 `sessionId` ⇒ 装配处用一个三元表达式把它特判掉：`tier.tools.map(name=>name==="update_task_state" ? createUpdateTaskStateTool(store,sessionId) : allTools[name as keyof typeof allTools]())`。**后果**：**加一个不需要会话状态的工具只需改表；加一个需要的就必须改控制流。** 这才是"特权核心"在工具这一项上的真实形状 —— **不是"注册表封闭"，而是"注册表开放、但装配表够不到会话状态，于是要绕开表"**。
+
+**② 修法（ponytail 阶梯：最省的真能解决的那个）。** **把 `allTools` 整张表移进 `createRuntime`，并加上 `update_task_state:()=>createUpdateTaskStateTool(store,sessionId)` 这个表项** ⇒ 三元消失、`tier.tools.map(...)` 变成一次查表、**表成为唯一注册点，无论工具需不需要会话状态**。**代价**：表按会话重建一次 —— 而 `cli.ts:398-401` 的注释已说明注册表本来就是每会话构建的（否则会捕获过期 session id，让一个会话写另一个的任务状态），**所以这不是新代价**。**明确不做**：不引入 `ToolFactory` 类型别名（`as const` 加对象字面量已经把它推出来了，一个只被一处使用的类型是未被要求的抽象）；不做插件加载（那是另一件事，需要先定清单格式）；不改 `ToolRegistry`、不改 12 个工厂的签名；不动 `tier.tools` 的语义（**配置仍然加不回一个工具，`cli.ts:390-391` 那条性质不变**）。
+
+**③ ⚠️ 顺带补一个既有隐患的检查。** `allTools[name]` 对未知名字会给出 `undefined` 然后 `()` 崩成 `TypeError: allTools[...] is not a function`，**而这发生在 `ToolRegistry` 那个"available 必须已注册"的检查（`tools.ts:1226-1230`）之前** ⇒ **档位里写错一个工具名，今天得到的是一条无信息的 TypeError**。改为先查、再抛一条指名道姓的错误（列出 offending 名字与表里实际有什么）。**这是 ponytail 那条"没有检查的懒代码是没写完的代码"的直接应用**，而且 ③ 的检查被 ④ 的变异证明是活代码、不是摆设。
+
+**④ ⚠️ 变异测试：第一次选错目标、结果是绿的，按 D74 的规矩不算通过。**
+- **第一次**：删掉 `update_task_state` 表项，跑 `test/task-state-writer.test.ts` ⇒ **13/13 全过（绿）**。**⇒ 绿的变异意味着测试没有表达那条性质**：那个文件直接调工厂、不经过 `cli.ts` 的装配。**本轮因此换了目标，而不是把它记成"通过"。**
+- **第二次**：删掉 `read_file:createReadFileTool,`，跑全量 ⇒ **676 项 / 663 通过 / 12 失败**，且失败信息正是 ③ 新加的那条（*"档位声明了工具 "read_file"，但没有对应的工厂；表里有的是 …"*）。**⇒ 同时证明两件事：表是唯一注册路径（不是与三元并存的两条路径），以及 ③ 那条错误确实被执行到。**
+- **⚠️ 变异纪律按 D86 的教训执行**：测试命令带 `--test-force-exit`（避免它不返回导致还原被跳过），**还原用字符串反向替换而不是 `git checkout`**（树里有未提交改动，`git checkout` 会吞掉它们 —— 这正是 D81/D83 那条规矩适用的场合，与 D86 那次树是干净的情形相反）。**还原三重验证**：表项回来 = true、`tsc` 退出码 0、`git diff --stat` 回到 26+/12-。
+- **⚠️ `--test-force-exit` 又一次改变了报告的测试总数**（676 而非基线 675），与 D86 的观察同形状：文件级失败也算一项。**这不是回归，是该标志的计数方式。**
+
+**验证**：`tsc --noEmit` **退出码 0**；**全量套件 675 项 / 674 通过 / 0 失败 / 1 跳过**（**与 D85–D89 基线逐项一致 ⇒ 零回归**）；机械复核三条：残留三元特判数 = **0**、`update_task_state` 表项数 = **1**、`allTools` 定义处数 = **1** 且位于 `createRuntime`（`:392`）之内（`:404`）；变异如上。
+
+**⚠️ 方法论记法（这条比工具本身重要）**：**"某处是病灶"是一个关于代码的断言，与"某文档已过时"同类，必须先读到那一处再说。** 这句断言在 `ARCHITECTURE.md` 里躺了多轮、并被 D88 当作"工具接缝的前置条件"的理由引用过；**实读 4 段源码就推翻了它**。这与 D89 那次引用漂移是同一类错误、同一个解法，**⇒ 两条合起来是同一句：写"按 `文件:行号`"或"某处是病灶"之前，读到那一行。**
+
+**明确不做（本片）**：**插件加载机制**（需要先定清单格式；`Agent-Reach` 是主参考，`redmom`/`redmond` 只参考清单格式、绝不参考代码）；**不改 `ToolRegistry` 的公开形状**；**不把 12 个工厂的签名统一成 `(ctx)=>Tool`**（本轮用一个闭包包住了唯一需要参数的那个，统一签名会改 12 处而只换来 0 处收益，**等第二个需要会话状态的工具出现时再做** —— 那时才知道该传什么）；**不动 `ARCHITECTURE.md` §3.4⑤ 里对「组合根按名字硬 import」仍然成立的那一半**（`cli.ts` 确实按名字 import 12 个工厂）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
