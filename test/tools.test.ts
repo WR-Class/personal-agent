@@ -949,8 +949,27 @@ describe("agent loop with tools", () => {
   // a way around the ceiling") and last round I argued against exempting anything.
   // The measurement above is why that argument was wrong: it conflated two blocks
   // with different provenance. Reversing a recorded decision is not mine to do
-  // unilaterally, so this stays skipped and the finding is reported instead.
-  it("checks the budget every step, not only at the start", { skip: "D81: the always-on intent fragment is charged to the maxContextBytes/4 ceiling, so no budget satisfies both this test's tens-of-bytes growth and the ~180 bytes the ceiling must hold; see the comment for the measured evidence and the proposed fix" }, async () => {
+  // unilaterally, so that round skipped this test and reported the finding.
+  //
+  // ⚠️ D82 implemented the exemption — and measured that it does NOT restore this
+  // test, which corrects the diagnosis above. With the fragment exempt, the injected
+  // total here is 0 bytes against a ceiling of 7, so that check passes. The turn is
+  // still refused before step one (`adapter.consumed` is 0), because the refusal
+  // comes from the *whole-prompt* ceiling: the system message now carries the
+  // ~180-byte intent fragment, and this test's budget is 30. So D81 set a hard floor
+  // on `maxContextBytes` of roughly 200 bytes — the size of the product's own system
+  // text — and that floor is a separate consequence from the injected cap.
+  //
+  // The exemption is still correct and stays: it removes a refusal whose message
+  // blamed two zero-byte blocks, and it keeps the unbounded half (a matched skill's
+  // prompt) charged byte for byte. What it does not do is make a 30-byte budget
+  // usable, and no value works here either — the growth from one `read_file` of an
+  // 18-byte file is tens of bytes, while the budget must now exceed ~200 just to hold
+  // the opening prompt, leaving that same tens-of-bytes window. Restoring this test
+  // needs a step whose result is large by construction, which is a fixture design
+  // question and not a constant to guess at. Left skipped rather than re-tuned by
+  // estimate, because estimating byte thresholds has now been wrong three times.
+  it("checks the budget every step, not only at the start", { skip: "D81/D82: the system message now carries a ~180-byte product-owned fragment, so maxContextBytes has a ~200-byte floor; this test's growth of tens of bytes cannot straddle it. See the comment — the injected-cap exemption was implemented and measured not to be the binding constraint." }, async () => {
     // Sized so the opening prompt fits and the prompt after one tool result does
     // not: fitting at step one proves nothing about step five.
     const { runtime, adapter } = makeRuntime(

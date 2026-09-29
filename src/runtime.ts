@@ -558,6 +558,14 @@ export class AgentRuntime {
    * operator's text.
    */
   private taskPromptBlock: string | undefined;
+  /**
+   * The bytes of `taskPromptBlock` that came from outside the product — the matched
+   * skill's prompt — and are therefore charged to the injected-block cap in
+   * `buildPrompt`. The intent fragment is excluded on purpose: it is product-owned,
+   * five compile-time constants, about 180 bytes, bounded. D82; see the cap comment
+   * in `buildPrompt` for the measurement that forced the split.
+   */
+  private taskPromptExternalBytes = 0;
   private readonly taskPromptSkills: readonly TaskPromptSkill[];
   /** Outcome row address for the send in flight; undefined = no round started. */
   private outcomeAddress: string | null | undefined;
@@ -692,7 +700,7 @@ export class AgentRuntime {
       }
       throw error;
     }
-    finally { this.busy = false; this.genePrompt = undefined; this.taskPromptBlock = undefined; }
+    finally { this.busy = false; this.genePrompt = undefined; this.taskPromptBlock = undefined; this.taskPromptExternalBytes = 0; }
   }
 
   /**
@@ -771,6 +779,14 @@ export class AgentRuntime {
     // now, which is literally the operator's "如果没有就不匹配": no skill is
     // injected, and the intent fragment still is.
     this.taskPromptBlock = assembleTaskPrompt(taskSpec, this.taskPromptSkills);
+    // ⚠️ D82: only the skill half is charged to the injected cap, so measure it
+    // instead of estimating it. Assembling against an empty catalogue yields exactly
+    // the intent fragment, and the difference is the external part. Note this is a
+    // real second caller of `assembleTaskPrompt` with `[]`, not a test-only
+    // convenience — which is also why the fragment-only path has to stay correct.
+    this.taskPromptExternalBytes =
+      Buffer.byteLength(this.taskPromptBlock ?? "", "utf8") -
+      Buffer.byteLength(assembleTaskPrompt(taskSpec, []) ?? "", "utf8");
     // Set before anything can throw past this point: whichever way the round
     // ends, an attempted round journals an outcome. A refused spec (above)
     // never reaches here, so a hard refusal still leaves no trace.
@@ -1144,13 +1160,23 @@ export class AgentRuntime {
     // never tripped by this check. It bites only when an operator lowers
     // `maxContextBytes`, which is exactly when the sum needs checking. One eighth
     // would be wrong: 65536 at the default collides with two maximum-size blocks.
-    // ⚠️ The request-derived block counts toward the same cap. Leaving it out
-    // would let an arbitrarily large matched-skill prompt bypass the ceiling —
-    // and a skill's text can come from a curated catalogue outside the product,
-    // so "it is small" is not something this code may assume.
+    // ⚠️ Only the *external* part of the request-derived block counts toward this
+    // cap (D82, correcting D81's "it must count in full"). The block has two halves
+    // with different provenance: the intent fragment is product-owned — five
+    // compile-time constants, about 180 bytes, bounded — while a matched skill's
+    // prompt comes from a curated catalogue outside the product and is unbounded.
+    // The cap exists for the second one. D81 charged both, and measuring showed the
+    // consequence rather than leaving it argued: any `maxContextBytes` below roughly
+    // 720 then refuses *every* turn, because a quarter of it cannot hold 180 bytes,
+    // and the refusal blames the long-term constraints and the task state, which in
+    // that situation are both zero bytes. Exempting the fragment restores "an
+    // operator may lower maxContextBytes" without opening the bypass the cap exists
+    // to prevent — the unbounded half is still charged, in full, byte for byte.
     const taskPromptBytes = Buffer.byteLength(this.taskPromptBlock ?? "", "utf8");
     const injectedBytes =
-      Buffer.byteLength(constraints ?? "", "utf8") + Buffer.byteLength(taskState ?? "", "utf8") + taskPromptBytes;
+      Buffer.byteLength(constraints ?? "", "utf8") +
+      Buffer.byteLength(taskState ?? "", "utf8") +
+      this.taskPromptExternalBytes;
     const injectedCap = Math.floor(this.maxContextBytes / 4);
     if (injectedBytes > injectedCap) {
       // ⚠️ A named ContextBudgetError, not a plain Error (D81). Failure
@@ -1162,7 +1188,7 @@ export class AgentRuntime {
         injectedBytes,
         injectedCap,
         `注入块合计 ${injectedBytes} 字节（长期约束 ${Buffer.byteLength(constraints ?? "", "utf8")} + 任务状态 ` +
-          `${Buffer.byteLength(taskState ?? "", "utf8")} + 本轮提示 ${taskPromptBytes}），超过 maxContextBytes 的四分之一即 ${injectedCap} 字节；` +
+          `${Buffer.byteLength(taskState ?? "", "utf8")} + 本轮提示 ${taskPromptBytes}（其中计入上限的外部部分 ${this.taskPromptExternalBytes} 字节；产品自有的意图片段不计入，它有编译期上界）），超过 maxContextBytes 的四分之一即 ${injectedCap} 字节；` +
           `请缩短其中最大的一块，或调高 maxContextBytes。不会截断；开新会话也没用，这些块每轮都会重新发送。`,
       );
     }
