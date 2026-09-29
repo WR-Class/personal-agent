@@ -161,6 +161,12 @@ tools.ts         -> … session-store.ts, task-state.ts
 
 > **✅ 已修（D71，提交 `7542367`）：`migrateEvent` 前面接了一层运行时"种类→处理器"注册表**（`registerEventKind(kind, handler) → disposer`、`registeredEventKinds()`），**既有 8 个 case 的 switch 一行未改**，所以既有种类的校验逻辑零改动、回归面为零。**⚠️ 但本节说的"封闭"只修掉了一半，必须如实说清**：运行时开放了，**类型侧仍然封闭** —— `ExternalSessionEvent` **故意没有进 `SessionEvent` 联合**，因为加进去实测会让 8 处按 `event.kind === "…"` 收窄的地方全部编译失败（开放成员的 `kind` 是 `string`，与所有字面量重叠，TS 无法排除它），其中 `inspect` 的工具批次审计是 `tool/call || tool/result` 的**析取**收窄后读 `callId`/`name`/`arguments`，为买类型层便利去改写一处安全校验不划算。改法是**两个集合分开**：`InspectionResult.events` 只装核心认识的种类，`.external` 装注册进来的（**连行号一起，什么都没丢**）。**⇒ 这是 D70 那条教训在第二个位置复现**：`docs_development.md:56` 记 DSH 因"两侧声明合并同一个 `Context` 键会碰撞"而拆成两个 tsconfig 聚合，我当时写"本项目单 program 所以不可达"，**实测证明开放类型的代价只是换了个位置，落在收窄点上。**
 
+> **✅ 第 ① 步已落地（D72 决定 / D73 实现，提交 `4b699b2`）：`external` 的消费者已定为 DSH 的 Projection seam，且三角色齐备。** `docs_architecture.md:113` 的 *"registered units fold committed events incrementally, host consumers read one typed state with `stateOf()`"* 已按 `:117` 的三角色实现：**Definition** = `SessionProjectionUnit<S> = {key, initial, fold}`；**Provider** = `registerSessionProjection(unit) → disposer`，核心在模块作用域注册自己的 `taskState` 单元；**Consumer** = `store.stateOf<S>(sessionId, key)`，既有 `taskState()` 已改成它的一层薄封装。**⇒ D71 那个"存在但未被使用"的注册表因此有了第一个调用方，两轮合成一条链。**
+>
+> **⚠️ 三点必须连着读，否则会误判进度**：**(1) 折叠仍是每次全量，不是 `:113` 说的 `incrementally`** —— 增量是 D72 第 ④ 步，与恢复 `latestMarks` 的一趟优化绑在一起，**本轮有意偏离并记在 D73 第四节，不是漏做**；**(2) `latestMarks`/`buildPrompt` 原样未动**，所以那一趟"读两样"的优化没被拆散（D72 第四节 (4)）；**(3) 校验位置未动** —— `case "task-state"`（`session-store.ts:511`）仍在核心 switch 里，搬进 provider 是第 ② 步，**所以核心 switch 目前仍是 8 个 case，本节 ④ 说的"封闭"只解掉了运行时的注册一侧**。
+>
+> **⚠️ 写路径的安全性质比计划提前到手**：D72 把"投影缺失即拒绝写入"排在第 ③ 步，实测发现 `appendTaskState`（`session-store.ts:850`）调的就是 `taskState()` ⇒ 第 ① 步就自动覆盖了。**但第 ③ 步没有因此完成**：它真正剩下的部分是"增量折叠之后写路径还能不能拿到前一份状态"，那是第 ④ 步改了折叠方式才会出现的问题。
+
 **⑤ 真正的病灶：组合根与循环按名字硬 import。**
 
 | 文件 | out-degree | 含义 |

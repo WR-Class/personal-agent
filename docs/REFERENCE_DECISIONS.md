@@ -1865,6 +1865,71 @@ D70 从 `docs_development.md:56` 读到：DSH 把仓库拆成 **Host/Client 两�
 - **本项目侧断言全部 `grep` 实读核对**：`case "task-state"` = `session-store.ts:511`；`taskState()` 的消费者 = `runtime.ts:846` 与 `session-store.ts:850`；`latestMarks` 的消费者 = `runtime.ts:1080`（在 `buildPrompt`，`:1063`）内；`buildPrompt` 的调用点 = `runtime.ts:744` 与 `:771`；**`stateOf` 全 src 零命中**（确认是待引入的名字）。
 - **⚠️ 未读，不下结论**：`session-projection-mandatory-seam.md`（`:113` 末尾链接的那份 decision note）**在 `_dsh_ref` 内不存在、本地不可达** ⇒ **DSH 那个"mandatory"到底强制了什么，本轮没有证据，只有 `:113` 正文。** 同理 `capability-seams.md`、`subsystems/*`。
 
+### D73 Projection seam 第 ① 步落地，写路径安全性质提前到手，以及一条排法教训（2026-09-30，**有代码**，提交 `4b699b2`）
+
+**执行 D72 次序的第 ① 步**：Definition + `stateOf` 的显式失败语义 + 让既有 `taskState()` 成为第一个 consumer。**不改存储、不改校验位置** —— `case "task-state"`（`session-store.ts:511`）留在原地，那是第 ② 步。
+
+#### 一、承重的一条：两种 "absent" 必须分开，混为一谈就是 D60 的坑
+
+| 情况 | 行为 | 依据 |
+|---|---|---|
+| **键没有注册投影** | **抛错** `no session projection registered for key: …` | `docs_architecture.md:113`：*"A host reader either requires this service during activation or **fails explicitly** when the registry or required key is absent"*、*"**without silently defaulting** a missing host value"* |
+| **键已注册、日志里还没有该种类的事件** | **返回该单元的 `initial`** | 合法状态：什么都还没写过 |
+
+**⇒ 若把两者都做成"返回默认值"，D60 记录的失败形态就会重现**：功能"看起来在工作"（有状态、有注入、有 claim），却永远判不出任何东西，**而所有测试都通过**。**这是本轮的核心安全性质，也是变异验证 A 的目标。**
+
+#### 二、⚠️ 写路径的安全性质比 D72 计划的提前两步到手
+
+**D72 把写路径排在第 ③ 步**，理由是 `session-store.ts:850` 的 `appendTaskState` 在写入前读旧状态做 D61 单调性检查，属写路径依赖。**实测发现它调的就是 `this.taskState(sessionId)`** ⇒ `taskState()` 一改走 `stateOf`，**写路径自动跟着走，不需要单独实现**。
+
+**⇒ 于是第 ① 步就落地了这条性质：投影缺失时写入必须失败，而不是被读成"没有前一份状态"从而放行任何 claim。** 有专门测试钉住它：**dispose 掉核心投影后，读路径与写路径都必须拒绝**；`finally` 里重新注册，随后断言 `taskState()` 仍返回原状态 ⇒ **日志一个字没丢，失败的只是接线**。
+
+**⚠️ 这条要如实标成"提前到手"而不是"第 ③ 步已完成"**：第 ③ 步真正剩下的部分是**"增量折叠之后写路径还能不能拿到前一份状态"**，那是第 ④ 步改了折叠方式之后才出现的问题。**本轮解决的是"缺失即拒绝"，不是"增量之下仍正确"。**
+
+#### 三、核心自己注册自己的投影，这不是假接缝
+
+**模块作用域注册**（`disposeTaskStateProjection`），**每进程一次而不是每 store 实例一次** —— 构造函数里注册会让第二个 `SessionStore` 实例撞上 D71 的拒重复。
+
+**依据三条，都在 D72 读过**：`:113` 末句 *"**The agent loop registers shared `turnBoundary` state for its readers**"*（DSH 的核心也这么干）、`:117` *"A package **may combine roles**, but one role alone is not a seam"*、`:119` *"Seams are why **one provider swap changes the whole product**"* ⇒ **价值不在"替换很可能发生"，而在依赖被写成接口而不是 import。**
+
+**⚠️ 这一条是上一轮救过我的那句话的实际运用**：D72 第一节记录了，我原本的推理是"核心消费它 ⇒ 它是核心功能 ⇒ 搬出去是假接缝"，被 `:113` 最后一句反证。**本轮把它写进代码，等于把那次纠正固化下来。**
+
+#### 四、刻意不碰的东西（各有依据，不是遗漏）
+
+- **`latestMarks` 原样不动。** 它的注释（`session-store.ts:884`）写明存在理由：*"`buildPrompt` needs the compaction boundary and the task state on every model call… Calling both would read it twice per call, which on a long session is the dominant cost of building a prompt."* **D72 第四节 (4) 说这个优化不能先删再补** ⇒ 第 ① 步只改 `taskState()` 这条独立路径，**`buildPrompt` 行为零变化**。
+- **折叠仍是每次全量，不是增量。** `:113` 说的是 *"fold committed events **incrementally**"*，**本轮没有做到，也不声称做到** —— 增量折叠是第 ④ 步，与恢复 `latestMarks` 的一趟优化绑在一起。**⇒ 这是本轮对 `:113` 的一处有意偏离，记在此处而不是藏在注释里。**
+- **不搬 `case "task-state"` 的校验**（第 ② 步）、**不预设插件如何加载注册**（D71/D72 已声明不预设）。
+
+#### 五、验证
+
+- **`tsc --noEmit` 退出码 0**；新套件 `test/session-projection.test.ts` **7/7**。
+- **全量 645 项 / 644 通过 / 0 失败 / 1 跳过**（638 基线 + 7 新增 = 645 ✓）。
+- **三处变异全红，且咬住的正是对应用例**：
+  - **A** 把"键缺失即抛错"改成静默默认（`?? { … initial: undefined … }`）⇒ `throws when no projection is registered for the key` + `makes the write path fail too once the projection is gone` 变红 ✅ **（这条就是 D60 坑的证明）**
+  - **B** 去掉 disposer ⇒ `makes the write path fail too…` + `folds a third-party projection over builtin events` 变红 ✅
+  - **C** latest-wins 改成 first-wins ⇒ `keeps latest-wins, so taskState() did not change behaviour` 变红 ✅
+- **源码字节还原 = true**；还原后 7/7。
+- **⚠️ 如实记录，不当成绩**：前两轮全量里那 2 个 `background-jobs` kill 失败**本轮没有复现**。它们是负载相关的，**12 轮未修；一次干净不等于修好，本轮不声称修好。**
+
+#### 六、⚠️ 一条排法教训：连续两轮欠文档账，共同形状是"文档排在最后"
+
+**事实**：`event-kind-registry`（D71）与本轮（D73）**连续两次**都是"代码先提交、五份文档欠到下一轮"。D71 那次在提交信息里如实写了欠账，本轮又写了一次。
+
+**共同形状**：**我在 `plan-ready` 里把文档排在验证之后，而预算总是在文档之前耗尽。** 两次都不是"忘了文档"，两次都数清了要改哪几份 —— **是排序让它成了最先被牺牲的那一项。**
+
+**⚠️ 更深一层：我的调用次数估算连续两次偏低。** 本轮 `extend` 的理由里写"约 12–14 次调用，10 分钟装不下"，续了 15 分钟，**结果仍然在文档之前耗尽**。⇒ **估算本身不可靠，不是某一次算错。**
+
+**⇒ 三条可执行的改法（本轮起生效）**：
+1. **代码与文档必须在同一次 `git commit` 里。** 上一轮之所以欠账能"发货"，是因为代码先提交了、仓库进入一个看似完成的状态，停下来的压力就消失了。**同一次提交让"代码已提交但未记录"这个状态在结构上不可能出现。**
+2. **文档在 `plan-ready` 里就写成与代码交错的步骤，不写成收尾。** 具体次序：改代码 → 跑 build → **写文档** → 跑测试与变异 → 一次提交。**把文档放在测试之前**，因为测试与变异是"可以延后一轮而不损害仓库状态"的那一项，文档不是。
+3. **调用次数估算乘 1.5**，且**若预算不足以覆盖代码+文档+验证三者，就在写第一行代码之前 `extend`，而不是在代码提交之后**。
+
+**⚠️ 本轮自身就是反例，如实说**：本轮（补文档轮）是按操作员指示单独开的，所以第 1 条改法本轮无法自我验证 —— **它要在下一个有代码的轮次（D72 第 ② 步）才第一次被执行和检验。**
+
+#### 七、下一步（D72 第 ② 步）
+
+**把 `case "task-state"` 的逐字段严格校验搬进 provider，并接上 `problems` 上报。** 两个硬约束（D72 第四节 (1)(2)）：**`payload` 是 `unknown`，不搬校验解析就丢了**；**畸形行必须继续"报错并指出第几行"，不能让 `fold` 静默跳过而退化成"投影回到初始值"** —— 那是把可诊断的失败换成不可诊断的失败。**完成之后核心 switch 少一个 case。**
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

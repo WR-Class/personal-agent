@@ -282,6 +282,29 @@
 
 
 
+## 投影接缝的边界（D72/D73）
+
+`stateOf` 让核心与插件都能注册"把已提交事件折叠成一份类型化状态"的投影单元（`registerSessionProjection`）。**它引入的唯一新攻击面是"接线丢失被当成空状态"**，因此只有一条边界，但它是承重的。
+
+**⚠️ 键没有注册投影时必须抛错，绝不返回默认值。** 依据是 `docs_architecture.md:113`：*"A host reader either requires this service during activation or **fails explicitly** when the registry or required key is absent"*、*"**without silently defaulting** a missing host value"*。
+
+**理由是 D60 已经付过一次的那个失败形态**：功能"看起来在工作"（有状态、有注入、有 claim），**却永远判不出任何东西，而所有测试都通过**。**⇒ 一个静默的默认空状态比一个显式的崩溃危险得多，因为它把"接线断了"伪装成"任务还没进展"。**
+
+**⚠️ 两种 absent 必须分开，混为一谈就等于取消了这条边界**：
+
+| 情况 | 行为 |
+|---|---|
+| **键没有注册投影** | **抛错** `no session projection registered for key: …` |
+| **键已注册、日志里还没有该种类的事件** | **返回该单元的 `initial`**（合法：什么都还没写过） |
+
+**⚠️ 这条边界在写路径上同样生效，而且那里更严。** `appendTaskState` 在写入前经 `taskState()` → `stateOf` 读旧状态，做 D61 的单调性检查。**若投影缺失被读成"没有前一份状态"，单调性检查就会被跳过，"把验收标准调低"这个攻击会重新可行** —— 因为单调性检查是挡它的唯一机制（D61：*"隐蔽的攻击不是自报完成，而是把标准挪低"*）。**⇒ 投影缺失时写入必须失败。**
+
+**变异验证**：把"键缺失即抛错"改成静默默认 ⇒ `throws when no projection is registered for the key` 与 `makes the write path fail too once the projection is gone` 两条一起变红。
+
+**⚠️ 如实记录本接缝当前的限度**：折叠仍是每次全量重扫，不是 `:113` 说的 `incrementally`；`latestMarks` 与 `buildPrompt` 原样未动；`case "task-state"` 的逐字段校验仍在核心 switch 里。**⇒ 三项都属 D72 的第 ②④ 步，不是本轮遗漏**，详见 D73 第四节。
+
+## 操作纪律
+
 1. 完全权限不是清理授权；不得自动递归删除用户目录、宿主数据、备份或测试现场。
 2. fixture放在唯一生成且根路径已校验的目录，带owner标记；默认保留。
 3. 运行未经阅读的恢复/迁移/清理脚本前停止；不修改外部参考项目或宿主DSH。
