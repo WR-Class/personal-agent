@@ -2463,6 +2463,26 @@ without waiting, but growth that never stops is the failure this test exists to 
 
 **⑦ `src/` 净改动为零**（变异已字节还原并三重核对）⇒ **本轮实际提交的是两份文档**。**⚠️ `CODE_MAP.md` 与 `SAFETY.md` 仍然不受影响、不碰**（无代码行为变化、无安全行为变化）。
 
+### D88 — 把 gene/task-state/validation 的类型抽进 `types.ts`：工具接缝的记录在案前置条件（本轮有代码）
+
+**记录在案的前置条件是：*"在动手建工具接缝之前，先把 `gene.ts`/`task-state.ts` 的类型抽进 `types.ts`，否则接缝会复制同一个泄漏"*。本轮做这件事，不做接缝本身** —— 把一次机械搬迁与一次设计变更混在同一轮，正是 D74 那次交出一个两半永不相连的接缝的方式。
+
+**① ⚠️ 调查全部在开周期之前做完（这是对连续三轮超支的纠正，本轮第一次执行）。** 读操作不被写闸门拦，而计时从 `swarm_cycle start` 就开始 ⇒ **让预算只覆盖"写"**。查出的四条事实决定了整个方案：`taskspec.ts` **零 import**（叶子）、`types.ts` **零 import**（叶子，入度 7）、`RoundEvidence` 住在 `validation.ts:24`、`ClaimOutcome` 住在 `:31`，而 `task-state.ts:58` 从 `validation.ts` 导入这两者、`validation.ts:21` 又从 `gene.ts` 导入 `Gene`/`GeneValidation`。
+
+**② ⚠️ 查出一个真实的成环风险，以及它的解法。** 若只搬 gene/task-state 的类型，`types.ts` 就必须为了 `AssessedStep`/`TaskStateAssessment` 而 import `validation.ts` ⇒ **得到 `types.ts → validation.ts → gene.ts → types.ts` 的三元环**（**⚠️ `gene.ts` 为兼容而写的再导出也是一条真实的 import 边，这一点在推理环时极容易漏**）⇒ **本项目"零循环依赖"这项实测资产会因此丢掉**。**解法**：`RoundEvidence` 与 `ClaimOutcome` **实测都完全自足**（前者只有两个 `readonly string[]` 字段，后者是三个字面量）⇒ **一起搬进 `types.ts`，那条唯一可能成环的边就不存在了**。**搬完后 `types.ts` 只有一条出边、指向零 import 的 `taskspec.ts` ⇒ 它不可能出现在任何环里，这是从 import 列表得到的证明，不是对今天这张图的测量**（**所以这句写进了 `types.ts` 的头注释，而不是只留在提交信息里**）。
+
+**③ ⚠️ 明确拒绝的捷径：桶文件（barrel）。** 最省的做法是**不搬任何声明**、只让 `types.ts` 加三行 `export type { … } from "./gene.ts"` 之类 —— **1 处编辑、零风险，接缝也能从中性模块导入名字**。**但它会把分层反过来**：`types.ts` 现在是**入度 7、出度 0 的叶子**，加桶之后它出度变 3、**依赖三个实现模块**，于是任何为了 `ChatMessage` 而 import `types.ts` 的模块都会传递性地拖进 `gene.ts`。**耦合没有消失，只是往后挪了一跳，而项目里最该是叶子的那个模块变成了枢纽 ⇒ 不做。** **⚠️ 这是 ponytail 阶梯第 1 级（"这东西需要存在吗"）给出否定答案的一个实例：便宜的那版并不能真的解决问题，理由要写下来，否则下一个人还会再提一次。**
+
+**④ 搬了什么、刻意没搬什么。** 搬 **19 个类型声明**：`gene.ts` 13 个（`GeneIntent`/`GeneStepKind`/`GeneStep`/`GeneConstraints`/`GeneValidation`/`Gene`/`GeneDraft`/`MintedGene`/`GeneExpression`/`SelectionPolicy`/`GeneRequest`/`ScoredCandidate`/`GeneSelection`）、`task-state.ts` 4 个（`TaskStateStep`/`TaskStateInput`/`AssessedStep`/`TaskStateAssessment`）、`validation.ts` 2 个（`RoundEvidence`/`ClaimOutcome`）。**⚠️ 两处更正我自己开周期前的说法**：**(a)** `WeakenedTaskStateError` **是 `export class … extends Error {}`，运行时的值不是类型**，不能进一个 meant-to-erase 的模块 ⇒ 留在 `task-state.ts`（我上一轮把它算进了搬迁清单）；**(b)** **再导出不会把名字带进本地作用域** ⇒ 每个源文件需要**两行**（`import type` 供本地用 + `export type` 供既有 importer 用），不是我上一轮说的"1 行再导出"。**函数与常量一个都没搬**（`canonicalize`/`geneAddress`/`mintGene`/`parseValidation`/`scoreCandidates`/`selectGene`/`assertNotWeakened`/`assessTaskState`/`checkValidation`/`format*` 全家族/`MAX_TASK_STATE_BYTES`/`GENE_INTENTS`/`DEFAULT_SELECTION_POLICY`）：**这个模块只放形状，不放行为。** **⇒ 既有 31 处 import 站点 0 处改动**，全靠再导出保持兼容。
+
+**⑤ ⚠️ 编译器当场抓住了 ④(b) 那个陷阱，这是一次免费的验证。** 第一版 `gene.ts` 的本地 `import type` 列表**漏了 `GeneStepKind`**（它在再导出列表里、不在 import 列表里），而 `gene.ts:159,161` 的 `parseValidation` 要用它 ⇒ **`tsc` 报 `TS2552: Cannot find name 'GeneStepKind'`**。**⇒ 记法：`verbatimModuleSyntax` + 一个纯类型模块，让"再导出与本地导入是两件事"这个错误变成编译期硬错误而不是运行时惊喜** —— 这条性质本轮被自己的反例证明了一次。
+
+**⑥ ⚠️ 一个独立的行为证据，来自一次"失败"的运行。** `tsc` 报上面那个错时，**全量套件仍然是 675 / 674 通过 / 0 失败 / 1 跳过、退出码与基线一致** —— 因为 `--experimental-strip-types` 只剥类型、不做类型检查。**⇒ 这独立证明了本轮搬迁没有改变任何运行时行为**：一个类型层面的错误能让 `tsc` 变红而套件全绿，正说明被搬走的东西在运行时不存在。**这不是"套件没抓到缺陷"，而是本轮缺陷的性质决定只有 `tsc` 能抓到。**
+
+**验证**：`tsc --noEmit` **修掉 `GeneStepKind` 后退出码 0**；**全量套件 675 项 / 674 通过 / 0 失败 / 1 跳过**（**与 D85/D86/D87 的基线逐项一致 ⇒ 零回归**）；**用脚本重测 import 图**：**38 个文件、101 条边、循环依赖 0**；**`types.ts` 出度 = 1 → `["taskspec"]`，`taskspec.ts` 出度 = 0 ⇒ ②里那条无环证明与实测一致**；**`types.ts` 入度 7 → 10**（`gene`/`task-state`/`validation` 三个新增）；**`validation.ts` 出度只剩 `["types"]` ⇒ `validation.ts → gene.ts` 这条边确实被去掉了**；`gene.ts` 出度 `["taskspec","types"]`、`task-state.ts` 出度 `["gene","validation","types"]`（**仍需那两个函数，这是行为依赖、不是类型依赖，符合 ④ 的意图**）。**⚠️ 变异未跑，如实记**：本轮是纯搬迁，可跑的变异是"把某个再导出行删掉"⇒ 应当让既有 importer 编译失败；**没有跑**，因为 `tsc` 在 31 处 import 站点全部通过这件事本身就是那条性质的覆盖（**删掉任何一行再导出都会让 `tsc` 变红，与 D88 的 ⑤ 同一个机制**）。
+
+**明确不做（本片）**：**工具接缝本身**（那是下一轮，且按 `IMPLEMENTATION.md:117` 必须三个角色一起设计，*"一个角色不构成接缝"*）；**不改 `SessionEventMap`**；**不动 `WeakenedTaskStateError` 的位置**；**不把 `GENE_INTENTS`/`DEFAULT_SELECTION_POLICY` 这类值搬进类型模块**。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

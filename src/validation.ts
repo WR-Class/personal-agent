@@ -18,17 +18,25 @@
  *                    been done. An honest "we cannot tell" is a real outcome and
  *                    the only reason this module can be trusted at all.
  */
-import type { Gene, GeneValidation } from "./gene.ts";
+import type { ClaimOutcome, Gene, GeneValidation, RoundEvidence } from "./types.ts";
 
-/** What a round left behind, as the journal recorded it. */
-export interface RoundEvidence {
-  /** Paths the round actually wrote, in order. */
-  readonly filesWritten: readonly string[];
-  /** Tools the round actually called, in order. */
-  readonly tools: readonly string[];
-}
-
-export type ClaimOutcome = "met" | "unmet" | "unverifiable";
+/**
+ * ⚠️ D88: `RoundEvidence` and `ClaimOutcome` moved to `types.ts` and are re-exported
+ * here. They moved for a specific reason rather than for tidiness: `task-state.ts`
+ * needs both, for `AssessedStep` and `TaskStateAssessment`, which now live in
+ * `types.ts` — so had they stayed here, `types.ts` would have had to import this
+ * module, and since this module imports `Gene`/`GeneValidation` the graph would have
+ * gained the cycle `types.ts → validation.ts → gene.ts → types.ts` (**the re-export
+ * in `gene.ts` is a real import edge too**, which is easy to miss when reasoning
+ * about cycles). Both are self-contained — `RoundEvidence` is two `readonly string[]`
+ * fields and `ClaimOutcome` is three literals — so moving them cost nothing and
+ * removed the only edge that could have closed a cycle.
+ *
+ * ⚠️ This module's type import is also repointed at `types.ts` instead of `gene.ts`,
+ * which removes the `validation.ts → gene.ts` edge entirely: **type dependencies now
+ * flow one way, into `types.ts`, and never between two implementation modules.**
+ */
+export type { ClaimOutcome, RoundEvidence } from "./types.ts";
 
 export interface ClaimResult {
   readonly claim: GeneValidation;

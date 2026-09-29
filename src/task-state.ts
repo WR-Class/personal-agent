@@ -53,49 +53,32 @@
  * - A kind change is refused: there is no strength order across kinds, and the
  *   default answer to an undefined comparison is no.
  */
-import { parseValidation, type GeneValidation } from "./gene.ts";
+import { parseValidation } from "./gene.ts";
 import { checkValidation } from "./validation.ts";
-import type { ClaimOutcome, RoundEvidence } from "./validation.ts";
+import type {
+  AssessedStep,
+  ClaimOutcome,
+  GeneValidation,
+  RoundEvidence,
+  TaskStateAssessment,
+  TaskStateInput,
+  TaskStateStep,
+} from "./types.ts";
 
-export interface TaskStateStep {
-  /** Prose. Not authority — the claim is. May be rewritten freely. */
-  readonly text: string;
-  /**
-   * The acceptance criterion, as an observable fact. Absent means the step has
-   * no criterion yet, which is reported as an unknown rather than as progress.
-   */
-  readonly claim?: GeneValidation;
-}
-
-/** What a writer supplies. Note what is absent: no `done`, no `outcome`. */
-export interface TaskStateInput {
-  /** Prose progress. Freely rewritable; it is context, not a record of fact. */
-  readonly state: string;
-  readonly steps: readonly TaskStateStep[];
-}
-
-export interface AssessedStep {
-  readonly text: string;
-  readonly claim?: GeneValidation;
-  /** Absent when the step has no claim — that is an unknown, not a pass. */
-  readonly outcome?: ClaimOutcome;
-  /** Why the outcome is what it is, in observable terms. */
-  readonly detail?: string;
-}
-
-export interface TaskStateAssessment {
-  readonly steps: readonly AssessedStep[];
-  /**
-   * True only when there is at least one step and every one of them is `met`.
-   * Mirrors `checkValidation.satisfied`: an empty state is not complete, and an
-   * `unverifiable` step is not met.
-   */
-  readonly complete: boolean;
-  /** Steps with no criterion, or one this runtime cannot decide. */
-  readonly unknowns: readonly string[];
-  /** Steps whose criterion was decided and contradicted. */
-  readonly failed: readonly string[];
-}
+/**
+ * ⚠️ D88: the four interfaces that were declared below now live in `types.ts` and are
+ * re-exported here, so existing import sites keep working. `WeakenedTaskStateError`
+ * deliberately stayed: it is `export class … extends Error {}`, a **runtime value**,
+ * and a module meant to erase at compile time cannot hold one.
+ *
+ * ⚠️ Note which edges this removed. `GeneValidation` used to be imported from
+ * `gene.ts`, and `ClaimOutcome`/`RoundEvidence` from `validation.ts`. All three now
+ * come from `types.ts`, so this module's remaining imports from those two are the
+ * `parseValidation` and `checkValidation` **functions** — **type dependencies no
+ * longer cross between two implementation modules; only behaviour does.** That
+ * crossing was the leak the tools seam would otherwise have copied.
+ */
+export type { AssessedStep, TaskStateAssessment, TaskStateInput, TaskStateStep } from "./types.ts";
 
 /** Raised when a later state would lower a bar an earlier one set. */
 export class WeakenedTaskStateError extends Error {}

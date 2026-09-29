@@ -15,63 +15,51 @@
 import { createHash } from "node:crypto";
 
 import type { TaskIntent } from "./taskspec.ts";
+import type {
+  Gene,
+  GeneConstraints,
+  GeneDraft,
+  GeneExpression,
+  GeneIntent,
+  GeneRequest,
+  GeneSelection,
+  GeneStep,
+  GeneStepKind,
+  GeneValidation,
+  MintedGene,
+  ScoredCandidate,
+  SelectionPolicy,
+} from "./types.ts";
 
-/** Same set as TaskSpec's intent: the spec is the front door to selection. */
-export type GeneIntent = TaskIntent;
+/**
+ * ⚠️ D88: the type declarations that used to live below now live in `types.ts`,
+ * and are re-exported here so that **all 31 existing import sites keep working
+ * unchanged**. Two lines are needed rather than one because a re-export does not
+ * bring a name into this module's own scope, and this file still uses these shapes
+ * locally — `GENE_INTENTS` right below is typed `readonly GeneIntent[]`, and
+ * `DEFAULT_SELECTION_POLICY` is typed `SelectionPolicy`.
+ *
+ * The reason for the move is in `types.ts`'s header: a seam interface must not
+ * import its types from an implementation module, or every seam author is coupled
+ * to that implementation. This module keeps the behaviour; `types.ts` holds shapes.
+ */
+export type {
+  Gene,
+  GeneConstraints,
+  GeneDraft,
+  GeneExpression,
+  GeneIntent,
+  GeneRequest,
+  GeneSelection,
+  GeneStep,
+  GeneStepKind,
+  GeneValidation,
+  MintedGene,
+  ScoredCandidate,
+  SelectionPolicy,
+} from "./types.ts";
+
 export const GENE_INTENTS: readonly GeneIntent[] = ["build", "fix", "research", "verify", "operate"];
-
-export type GeneStepKind = "guard" | "act" | "verify" | "rollback";
-
-export interface GeneStep {
-  readonly kind: GeneStepKind;
-  readonly text: string;
-}
-
-export interface GeneConstraints {
-  readonly maxFiles: number;
-  readonly maxLines: number;
-  readonly forbiddenPaths: readonly string[];
-}
-
-/**
- * A validation entry: an observable fact the round must show, or — as a bare
- * string written before this existed — a command kept verbatim and reported as
- * unverifiable until a runner exists (D20).
- */
-export type GeneValidation =
-  | { readonly kind: "files-written"; readonly paths: readonly string[] }
-  | { readonly kind: "no-write" }
-  | { readonly kind: "tool-used"; readonly tool: string; readonly times?: number }
-  | { readonly kind: "command"; readonly command: string };
-
-/** An immutable capability unit. Superseded, never edited. */
-export interface Gene {
-  readonly name: string;
-  readonly intent: GeneIntent;
-  /** Vocabulary whose presence makes this Gene a retrieval candidate. */
-  readonly signalsMatch: readonly string[];
-  readonly preconditions: readonly string[];
-  readonly strategy: readonly GeneStep[];
-  /** Recorded at mint; enforced mechanically by the write gate (D18). */
-  readonly constraints: GeneConstraints;
-  /** Claims the round must show. Checked against the journal (D20). */
-  readonly validation: readonly GeneValidation[];
-  /** Compact warnings from past failures — never naive appended prose. */
-  readonly avoid: readonly string[];
-}
-
-/**
- * A gene draft as callers may write it: `validation` accepts bare strings for
- * convenience and for drafts written before claims existed, and `mintGene`
- * normalises them to a `command` claim.
- */
-export type GeneDraft = Omit<Gene, "validation"> & { readonly validation: readonly (GeneValidation | string)[] };
-
-/** A minted gene: the body plus the identity derived from it. */
-export interface MintedGene {
-  readonly gene: Gene;
-  readonly address: string;
-}
 
 /** Stable JSON: sorted keys, no incidental formatting. Same data, same bytes. */
 export function canonicalize(value: unknown): string {
@@ -193,33 +181,16 @@ function parseConstraints(constraints: unknown): GeneConstraints {
   return { maxFiles: positive(raw.maxFiles, "constraints.maxFiles"), maxLines: positive(raw.maxLines, "constraints.maxLines"), forbiddenPaths: strings(raw.forbiddenPaths ?? [], "constraints.forbiddenPaths", { allowEmpty: true }) };
 }
 
-/** What a gene's usage has actually been. Counters only; identity lives in the body. */
-export interface GeneExpression {
-  attempts: number;
-  successes: number;
-  /**
-   * When this gene last *worked*. Confidence is about the last proof, not the
-   * last attempt: a gene that just failed has not become more current.
-   */
-  lastSuccessAt: number | null;
-  /** Consecutive failures since the last success. */
-  streak: number;
-}
-
-export interface SelectionPolicy {
-  readonly signalWeight: number;
-  readonly reliabilityWeight: number;
-  readonly recencyWeight: number;
-  readonly priorSuccesses: number;
-  readonly priorAttempts: number;
-  readonly halfLifeMs: number;
-  /** Consecutive failures that take a gene out of selection until it is re-proven. */
-  readonly quarantineStreak: number;
-}
-
 /**
  * Laplace smoothing (1 pseudo-success / 1 pseudo-attempt) keeps a 1/1 gene from
  * outranking a 9/10 gene; recency decays *confidence*, never the record.
+ *
+ * ⚠️ D88: the four interfaces that surrounded this constant — `GeneExpression`,
+ * `SelectionPolicy`, `GeneRequest`, `ScoredCandidate` — moved to `types.ts` and are
+ * re-exported at the top of this file. **This constant stayed because it is a
+ * value, and it is also the concrete reason a re-export alone was not enough**: it
+ * is typed `SelectionPolicy`, so this module needs that name in its own scope, and
+ * `export type { … } from "./types.ts"` does not provide one.
  */
 export const DEFAULT_SELECTION_POLICY: SelectionPolicy = {
   signalWeight: 1,
@@ -230,23 +201,6 @@ export const DEFAULT_SELECTION_POLICY: SelectionPolicy = {
   halfLifeMs: 30 * 24 * 60 * 60 * 1000,
   quarantineStreak: 2,
 };
-
-export interface GeneRequest {
-  readonly intent: GeneIntent;
-  readonly signals: readonly string[];
-  readonly text: string;
-}
-
-export interface ScoredCandidate {
-  readonly address: string;
-  readonly gene: Gene;
-  readonly score: number;
-  readonly overlap: number;
-  readonly reliability: number;
-  readonly recency: number;
-  /** Why this candidate was excluded, or null when it is live. */
-  readonly excluded: string | null;
-}
 
 /**
  * Score every candidate. Intent is a gate, not a weight: a gene of the wrong
@@ -287,13 +241,6 @@ export function scoreCandidates(
     const score = policy.signalWeight * overlap + policy.reliabilityWeight * reliability + policy.recencyWeight * recency;
     return { address, gene, score, overlap, reliability, recency, excluded: null };
   });
-}
-
-export interface GeneSelection {
-  /** The top live candidate, or null when every candidate was excluded. */
-  readonly selection: ScoredCandidate | null;
-  /** Live candidates, best first. */
-  readonly ranked: readonly ScoredCandidate[];
 }
 
 export function selectGene(
