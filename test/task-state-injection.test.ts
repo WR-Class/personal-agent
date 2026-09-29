@@ -21,6 +21,7 @@ import { SessionStore } from "../src/session-store.ts";
 import { ToolRegistry, createReadFileTool } from "../src/tools.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
+import { stripTaskPromptBlock } from "./task-prompt-strip.ts";
 import { MAX_TASK_STATE_BYTES, formatTaskStateForPrompt } from "../src/task-state.ts";
 import { constraintsPath } from "../src/constraints.ts";
 import { decide } from "../src/rule-table.ts";
@@ -59,7 +60,7 @@ describe("task state injection", () => {
   it("injects nothing when no state was ever recorded", async () => {
     const { agent } = runtime([{ content: "回答" }]);
     const send = await agent.send("做一件事");
-    assert.equal(send.history[0]!.content, SYSTEM, "the system prompt is byte-identical to the one before this feature existed");
+    assert.equal(stripTaskPromptBlock(send.history[0]!.content), SYSTEM, "the system prompt is byte-identical to the one before this feature existed, once D81's request-derived block is removed (丙: scoped, not loosened)");
   });
 
   it("injects the recorded state after the product's own text", async () => {

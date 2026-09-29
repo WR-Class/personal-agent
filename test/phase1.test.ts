@@ -85,9 +85,18 @@ describe("runtime", () => {
     const result = await runtime.send("  hello  ");
     assert.equal(result.reply.content, "echo: hello");
     assert.equal(result.model, "echo-1");
-    assert.deepEqual(
-      result.history.map((message) => message.role),
-      ["user", "assistant"],
+    // D81 丙: `makeRuntime` passes no `systemPrompt`, so before D81 the system text
+    // was empty and there was no system message at all. The request-derived block
+    // is always assembled, so there is one now — and it can only be that block,
+    // since no product or operator text was configured. The property under test is
+    // the order of the persisted turns, so scope the role list to the non-system
+    // messages and pin what the system message actually is.
+    const roles = result.history.map((message) => message.role);
+    assert.deepEqual(roles.filter((role) => role !== "system"), ["user", "assistant"]);
+    assert.equal(roles[0], "system");
+    assert.ok(
+      String(result.history[0]!.content).startsWith("本轮意图：build"),
+      "没有配置 systemPrompt 时，唯一的 system 文本只能是本轮提示块",
     );
   });
 

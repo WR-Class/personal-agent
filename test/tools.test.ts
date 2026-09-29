@@ -774,7 +774,15 @@ describe("agent loop with tools", () => {
   it("reports the host count for the prompt actually sent", async () => {
     const { runtime } = makeRuntime("host-count", [{ content: "ok", usage: { inputTokens: 7, outputTokens: 2 } }], {
       maxContextTokens: 1000,
-      countPromptTokens: (messages) => messages.reduce((total, message) => total + message.content.length, 0),
+      // ⚠️ D81 narrowed this counter, and the narrowing is recorded rather than
+      // hidden: the runtime now always appends a request-derived system block, so
+      // a counter over every message would no longer total 12. The property under
+      // test is that the host count describes the prompt actually sent rather than
+      // the provider's previous call (7 below), which survives the filter. What the
+      // filter costs is that this test no longer notices a dropped system message —
+      // `taskspec.test.ts` pins that instead, end to end.
+      countPromptTokens: (messages) =>
+        messages.filter((message) => message.role !== "system").reduce((total, message) => total + message.content.length, 0),
     });
     const { budget } = await runtime.send("twelve chars");
     assert.equal(budget.predictedTokens, 12, "the prompt itself, not the provider's previous call");
@@ -882,10 +890,17 @@ describe("agent loop with tools", () => {
   });
 
   it("refuses an over-size prompt before calling the model, and leaves no trace", async () => {
-    const { runtime, adapter } = makeRuntime("context-over", [{ content: "never reached" }], { maxContextBytes: 64 });
+    // ⚠️ D81 re-sized this, and the arithmetic is worth recording: the runtime now
+    // always appends a request-derived block (~180 bytes), and the injected-block
+    // ceiling is `maxContextBytes / 4`. So the budget has to be large enough that
+    // 180 fits under a quarter of it (>720) while the prompt still exceeds the whole
+    // of it — the old 64-byte budget with a 500-char prompt cannot satisfy both, and
+    // the refusal would come from the injected ceiling instead of the one under test.
+    // 1000 with a 2000-char prompt does: quarter is 250 > 180, and 2000 > 1000.
+    const { runtime, adapter } = makeRuntime("context-over", [{ content: "never reached" }], { maxContextBytes: 1000 });
 
     await assert.rejects(
-      () => runtime.send("x".repeat(500)),
+      () => runtime.send("x".repeat(2000)),
       (error: unknown) => {
         assert.ok(error instanceof ContextBudgetError, "the refusal must be a named budget error");
         assert.ok(error.bytes > error.limit, "it must report the observed size and the limit");
@@ -911,7 +926,12 @@ describe("agent loop with tools", () => {
         { toolCalls: [call("read_file", { path: "hello.txt" })] },
         { content: "done" },
       ],
-      { maxContextBytes: 30 },
+      // ⚠️ D81: 30 no longer works. The injected-block ceiling is
+      // `maxContextBytes / 4`, and the request-derived block is ~180 bytes, so any
+      // budget under ~720 refuses at the injected ceiling before step one and
+      // `adapter.consumed` stays 0 — which would silently invert what this test
+      // proves ("the stop must happen after one real step, not before it").
+      { maxContextBytes: 800 },
     );
     await assert.rejects(() => runtime.send("small"), ContextBudgetError);
     assert.equal(adapter.consumed, 1, "the stop must happen after one real step, not before it");

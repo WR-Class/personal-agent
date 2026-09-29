@@ -15,6 +15,7 @@ import { assessTaskState, formatTaskStateForPrompt, type TaskStateAssessment } f
 
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
+import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
@@ -159,6 +160,19 @@ export interface AgentRuntimeOptions {
   countPromptTokens?: (messages: readonly ChatMessage[]) => number;
   model?: string;
   systemPrompt?: string;
+  /**
+   * Curated capability prompts routed by scenario keywords (D81). Absent or empty
+   * means no skill can match, which is the operator's "如果没有就不匹配" — the
+   * intent fragment is still assembled.
+   *
+   * ⚠️ This exists as an injection point before any loader does, because without
+   * it the safety property "the block counts toward the injected-bytes cap" cannot
+   * be tested end to end: a hard-coded empty catalogue makes the block always
+   * tiny, so removing it from the cap would keep every test green. Loading a JSON
+   * catalogue from the agent home is the next step and needs path-safety review
+   * under `security-config.ts`; the assembly does not change when it lands.
+   */
+  taskPromptSkills?: readonly TaskPromptSkill[];
   temperature?: number;
 }
 
@@ -215,15 +229,31 @@ export class DeadlineExceededError extends Error {
 export class ContextBudgetError extends Error {
   readonly bytes: number;
   readonly limit: number;
+  /**
+   * The caller's own wording, used as the whole message when present.
+   *
+   * ⚠️ D81: there are two distinct byte ceilings and they need different advice.
+   * The whole-prompt ceiling (`assertContextFits`) is about history length, so its
+   * message says "start a new session or shorten the history". The injected-block
+   * ceiling (`maxContextBytes / 4`) is about the blocks re-sent every turn, so
+   * telling the operator to start a new session would be useless — the blocks come
+   * back on the next turn regardless — and it has to say *which* block to shorten.
+   * Both are context-budget refusals and both must stay this named type, because
+   * failure attribution branches on `instanceof ContextBudgetError`; a plain
+   * `Error` would be classified `unknown` and lose the cause.
+   */
+  readonly detail?: string;
 
-  constructor(bytes: number, limit: number) {
+  constructor(bytes: number, limit: number, detail?: string) {
     super(
-      `context budget exceeded: prompt is ${bytes} bytes, limit is ${limit} ` +
-        `(a byte ceiling, not a token count — start a new session or shorten the history)`,
+      detail ??
+        `context budget exceeded: prompt is ${bytes} bytes, limit is ${limit} ` +
+          `(a byte ceiling, not a token count — start a new session or shorten the history)`,
     );
     this.name = "ContextBudgetError";
     this.bytes = bytes;
     this.limit = limit;
+    if (detail !== undefined) this.detail = detail;
   }
 }
 
@@ -516,6 +546,19 @@ export class AgentRuntime {
   private readonly systemPrompt: string | undefined;
   /** The selected gene's injection block for the send in flight. */
   private genePrompt: string | undefined;
+  /**
+   * The request-derived prompt block: intent fragment plus a matched skill, if
+   * one matched. Set per round from the TaskSpec and cleared in the same
+   * `finally` that clears `genePrompt`, so it cannot leak into a later round.
+   *
+   * ⚠️ Lowest authority of the five system-prompt blocks — it is derived from
+   * the request, and a matched skill's text may come from a curated catalogue
+   * outside the product. `buildPrompt` therefore appends it last, after
+   * `taskState`, so it cannot displace the product's, the library's or the
+   * operator's text.
+   */
+  private taskPromptBlock: string | undefined;
+  private readonly taskPromptSkills: readonly TaskPromptSkill[];
   /** Outcome row address for the send in flight; undefined = no round started. */
   private outcomeAddress: string | null | undefined;
   /** The request kind for the send in flight, so failures can be grouped (D16). */
@@ -579,6 +622,7 @@ export class AgentRuntime {
     this.countPromptTokens = options.countPromptTokens;
     this.model = options.model;
     this.systemPrompt = options.systemPrompt;
+    this.taskPromptSkills = options.taskPromptSkills ?? [];
     this.geneStore = options.geneStore;
     this.cycleStore = options.cycleStore;
     this.temperature = options.temperature;
@@ -648,7 +692,7 @@ export class AgentRuntime {
       }
       throw error;
     }
-    finally { this.busy = false; this.genePrompt = undefined; }
+    finally { this.busy = false; this.genePrompt = undefined; this.taskPromptBlock = undefined; }
   }
 
   /**
@@ -720,6 +764,13 @@ export class AgentRuntime {
       ? await this.geneStore.selectFor({ intent: taskSpec.intent, signals: taskSpec.signals, text: taskSpec.originalInput })
       : undefined;
     this.genePrompt = applied?.block;
+    // The other half of the TaskSpec pipeline: the spec's intent — and a curated
+    // skill when one actually matches the request — becomes prompt text. Before
+    // this the spec only gated and scored gene selection, so "分析意图并匹配提示词
+    // 或者组装一份好的提示词" stopped after 分析意图. The catalogue is empty for
+    // now, which is literally the operator's "如果没有就不匹配": no skill is
+    // injected, and the intent fragment still is.
+    this.taskPromptBlock = assembleTaskPrompt(taskSpec, this.taskPromptSkills);
     // Set before anything can throw past this point: whichever way the round
     // ends, an attempted round journals an outcome. A refused spec (above)
     // never reaches here, so a hard refusal still leaves no trace.
@@ -1072,9 +1123,12 @@ export class AgentRuntime {
     // product's own safety text. The anti-dilution property comes from the system
     // message being first in the conversation, not from its internal order.
     const constraints = formatConstraintsForPrompt(await loadConstraints(this.home));
-    // Task state rides last: of the four blocks it carries the least authority —
-    // `systemPrompt` is the product's, `genePrompt` is the library's, `constraints`
-    // is the operator's, and this one is the task's own record of where it got to.
+    // Task state rides after the operator's constraints: of the blocks it carries
+    // less authority — `systemPrompt` is the product's, `genePrompt` is the
+    // library's, `constraints` is the operator's, and this one is the task's own
+    // record of where it got to. The request-derived block (intent fragment plus a
+    // matched skill) rides last of all, below even this one: it is assembled from
+    // the request and a skill's text can come from a catalogue outside the product.
     // One pass over the log yields both "latest wins" marks; reading them
     // separately would read the whole session file twice per model call.
     const marks = await this.store.latestMarks(this.sessionId);
@@ -1090,16 +1144,29 @@ export class AgentRuntime {
     // never tripped by this check. It bites only when an operator lowers
     // `maxContextBytes`, which is exactly when the sum needs checking. One eighth
     // would be wrong: 65536 at the default collides with two maximum-size blocks.
-    const injectedBytes = Buffer.byteLength(constraints ?? "", "utf8") + Buffer.byteLength(taskState ?? "", "utf8");
+    // ⚠️ The request-derived block counts toward the same cap. Leaving it out
+    // would let an arbitrarily large matched-skill prompt bypass the ceiling —
+    // and a skill's text can come from a curated catalogue outside the product,
+    // so "it is small" is not something this code may assume.
+    const taskPromptBytes = Buffer.byteLength(this.taskPromptBlock ?? "", "utf8");
+    const injectedBytes =
+      Buffer.byteLength(constraints ?? "", "utf8") + Buffer.byteLength(taskState ?? "", "utf8") + taskPromptBytes;
     const injectedCap = Math.floor(this.maxContextBytes / 4);
     if (injectedBytes > injectedCap) {
-      throw new Error(
+      // ⚠️ A named ContextBudgetError, not a plain Error (D81). Failure
+      // attribution branches on `instanceof ContextBudgetError`; a plain Error
+      // here would be classified `unknown` and the real cause would be lost. The
+      // detail wording is this method's own because the advice differs: starting a
+      // new session does not help, since these blocks are re-sent every turn.
+      throw new ContextBudgetError(
+        injectedBytes,
+        injectedCap,
         `注入块合计 ${injectedBytes} 字节（长期约束 ${Buffer.byteLength(constraints ?? "", "utf8")} + 任务状态 ` +
-          `${Buffer.byteLength(taskState ?? "", "utf8")}），超过 maxContextBytes 的四分之一即 ${injectedCap} 字节；` +
-          `请缩短其中之一，或调高 maxContextBytes。不会截断。`,
+          `${Buffer.byteLength(taskState ?? "", "utf8")} + 本轮提示 ${taskPromptBytes}），超过 maxContextBytes 的四分之一即 ${injectedCap} 字节；` +
+          `请缩短其中最大的一块，或调高 maxContextBytes。不会截断；开新会话也没用，这些块每轮都会重新发送。`,
       );
     }
-    const systemText = [this.systemPrompt, this.genePrompt, constraints, taskState].filter((part) => part !== undefined && part !== "").join("\n\n");
+    const systemText = [this.systemPrompt, this.genePrompt, constraints, taskState, this.taskPromptBlock].filter((part) => part !== undefined && part !== "").join("\n\n");
     const system: ChatMessage[] = systemText === "" ? [] : [{ role: "system", content: systemText }];
     const compaction = marks.compaction;
     if (compaction && compaction.covers > 0) {

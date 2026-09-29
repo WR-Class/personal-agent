@@ -18,6 +18,8 @@
 
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
+
+import { stripTaskPromptBlock } from "./task-prompt-strip.ts";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -141,7 +143,7 @@ describe("operator standing constraints", () => {
     const agent = runtime("no-file", [{ content: "ok" }]);
     const send = await agent.send("hello");
     assert.equal(send.history[0]!.role, "system");
-    assert.equal(send.history[0]!.content, SYSTEM, "an operator with no constraints gets no injected text");
+    assert.equal(stripTaskPromptBlock(send.history[0]!.content), SYSTEM, "an operator with no constraints gets no injected text");
   });
 
   it("injects the constraint verbatim into the system message", async () => {
@@ -167,7 +169,7 @@ describe("operator standing constraints", () => {
     const agent = runtime("workspace-smuggle", [{ content: "ok" }]);
     const send = await agent.send("hello");
     assert.ok(!sentText(send).includes("WORKSPACE-SMUGGLED-INSTRUCTION"));
-    assert.equal(send.history[0]!.content, SYSTEM);
+    assert.equal(stripTaskPromptBlock(send.history[0]!.content), SYSTEM);
   });
 
   it("is re-injected on every turn, not once per run", async () => {
@@ -281,6 +283,6 @@ describe("operator standing constraints", () => {
     await setConstraints({ version: CONSTRAINTS_VERSION, constraints: [] });
     const agent = runtime("empty-registry", [{ content: "ok" }]);
     const send = await agent.send("hello");
-    assert.equal(send.history[0]!.content, SYSTEM);
+    assert.equal(stripTaskPromptBlock(send.history[0]!.content), SYSTEM);
   });
 });
