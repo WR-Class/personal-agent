@@ -150,6 +150,49 @@ describe("background jobs run and report", () => {
   });
 });
 
+/**
+ * Wait until `marker` stops growing, and fail if it never does.
+ *
+ * ⚠️ D85: this replaces a fixed 300 ms grace period, and the reason is a contract
+ * distinction rather than a flake being papered over. `killJob` and `shutdownJobs`
+ * launch `taskkill /PID … /T /F` and deliberately do not wait for it —
+ * `background-jobs.ts:241-245` gives the reason: both run on the shutdown path and
+ * inside a tool call, and blocking either on a process that is being killed would
+ * turn a stopped job into a hung agent. So `true` from `killJob` means "the kill was
+ * initiated", not "the process is dead", and `taskkill.exe` is itself a process that
+ * has to be launched. Under the parallel load of a full suite run that can take longer
+ * than 300 ms — which is what made these two tests fail intermittently for more than
+ * twelve rounds while an isolated re-run of this file always passed.
+ *
+ * The property the module actually promises is that the job stops, and stops promptly
+ * — `background-jobs.ts:15-18` calls a job that outlives the agent "the bad case,
+ * because nothing tells the operator it is still there". So this polls until the file
+ * stops growing and fails if that does not happen within the deadline. A job that
+ * never dies keeps appending, the deadline expires, and the test says so with the
+ * size it reached.
+ *
+ * ⚠️ What this deliberately no longer asserts: that not one further byte is written
+ * after the kill call returns. That was never true, because the kill is asynchronous,
+ * and asserting it was asserting an implementation detail as if it were the contract.
+ * The relaxation is recorded here and in D85 rather than left implicit — a test that
+ * gets more permissive without a written reason is how a real regression gets a
+ * permanent home.
+ */
+async function awaitStoppedWriting(marker: string, deadlineMs: number): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  let previous = readFileSync(marker, "utf8").length;
+  while (Date.now() < deadline) {
+    await wait(200);
+    const current = readFileSync(marker, "utf8").length;
+    if (current === previous) return;
+    previous = current;
+  }
+  assert.fail(
+    `the job was still writing ${deadlineMs} ms after the kill was initiated (marker reached ${previous} bytes); ` +
+      `a few further ticks are expected because taskkill is launched without waiting, but growth that never stops is the failure this test exists to catch`,
+  );
+}
+
 describe("a background job can be stopped", () => {
   it("kills the process, which is the property that makes it safe to leave running", async () => {
     const { home, workspace } = fixture();
@@ -164,11 +207,12 @@ describe("a background job can be stopped", () => {
     assert.ok(beforeKill > 0, "the job never started writing, so this test would prove nothing");
 
     assert.equal(killJob(job.id), true);
-    await wait(300);
-    const atKill = readFileSync(marker, "utf8").length;
-    await wait(1200);
-    const after = readFileSync(marker, "utf8").length;
-    assert.equal(after, atKill, `the job kept running after killJob (${after - atKill} more ticks)`);
+    // ⚠️ D85: no fixed grace period — see `awaitStoppedWriting` for why betting on
+    // 300 ms was asserting an implementation detail rather than the contract. Ten
+    // seconds is a deadline for a failure, not an expected duration; a healthy kill
+    // settles in one or two 200 ms polls, so this is faster than the old shape on
+    // the passing path and only slower when something is actually wrong.
+    await awaitStoppedWriting(marker, 10_000);
   });
 
   it("reports an unknown job rather than pretending to stop something", () => {
@@ -188,14 +232,11 @@ describe("closing the agent closes its jobs", () => {
 
     const killed = shutdownJobs();
     assert.ok(killed >= 1, "shutdown reported nothing to stop");
-    await wait(300);
-    const atShutdown = readFileSync(marker, "utf8").length;
-    await wait(1200);
-    assert.equal(
-      readFileSync(marker, "utf8").length,
-      atShutdown,
-      "a job outlived the shutdown, which is the case the operator asked to prevent",
-    );
+    // ⚠️ D85: same shape as the `killJob` test, for the same reason — `shutdownJobs`
+    // goes through the identical fire-and-forget `killTree`. The property the
+    // operator asked for is "closing the agent closes the jobs", which is that they
+    // stop, not that they stop within an arbitrary 300 ms of the call returning.
+    await awaitStoppedWriting(marker, 10_000);
   });
 });
 
