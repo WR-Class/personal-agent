@@ -91,7 +91,8 @@ describe("session projection seam", () => {
       registerSessionProjection<import("../src/session-store.ts").TaskStateEvent | undefined>({
         key: "taskState",
         initial: undefined,
-        fold: (state, event) => (event.kind === "task-state" ? event : state),
+        fold: (state, event) =>
+          event.kind === "task-state" && "atMessage" in event ? event : state,
       });
     }
     assert.equal((await store.taskState(id))?.state, "开始了", "the log was never lost");

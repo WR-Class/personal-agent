@@ -269,7 +269,20 @@ export function registeredEventKinds(): readonly string[] {
 export interface SessionProjectionUnit<S> {
   readonly key: string;
   readonly initial: S;
-  fold(state: S, event: SessionEvent): S;
+  /**
+   * ⚠️ The parameter includes `ExternalSessionEvent`, because a kind registered
+   * through {@link registerEventKind} lands in `InspectionResult.external` and not
+   * in `events`. Without it the two halves of the seam do not connect: a plugin
+   * could register both a kind and a projection and that projection would never
+   * see a single event of its own kind, while every existing test still passed —
+   * the D60 shape again, a feature that looks wired and decides nothing.
+   *
+   * The cost is D71's narrowing bill coming due a second time: an open member
+   * whose `kind` is `string` overlaps every literal, so a provider that wants a
+   * builtin kind must narrow on a field unique to it (`"atMessage" in event`)
+   * rather than on `kind` alone.
+   */
+  fold(state: S, event: SessionEvent | ExternalSessionEvent): S;
 }
 
 const sessionProjections = new Map<
@@ -320,8 +333,11 @@ export const disposeTaskStateProjection = registerSessionProjection<TaskStateEve
   key: "taskState",
   initial: undefined,
   // Latest wins, matching the `summary` precedent: the log keeps every version,
-  // readers see the current one.
-  fold: (state, event) => (event.kind === "task-state" ? event : state),
+  // readers see the current one. Narrowed on `atMessage` rather than on `kind`
+  // alone, because `ExternalSessionEvent.kind` is `string` and would otherwise stay
+  // in the narrowed type — D71's bill, paid here in one expression.
+  fold: (state, event) =>
+    event.kind === "task-state" && "atMessage" in event ? event : state,
 });
 
 /**
@@ -968,8 +984,29 @@ export class SessionStore {
       throw new Error(`no session projection registered for key: ${key}`);
     }
     const report = await this.inspect(sessionId);
+    // Fold in line order across BOTH collections. "All of events, then all of
+    // external" would be wrong: latest-wins depends on chronological order, and an
+    // external kind's lines are interleaved with builtin ones in the same log.
+    // `events`/`eventLines` are parallel arrays and `external` carries its own line.
+    const external = report.external;
     let state = registered.unit.initial;
-    for (const event of report.events) state = registered.unit.fold(state, event);
+    let i = 0;
+    let j = 0;
+    while (i < report.events.length || j < external.length) {
+      const ext = j < external.length ? external[j] : undefined;
+      const takeExternal =
+        ext !== undefined &&
+        (i >= report.events.length || ext.line < (report.eventLines[i] ?? Number.MAX_SAFE_INTEGER));
+      if (takeExternal && ext !== undefined) {
+        state = registered.unit.fold(state, ext.event);
+        j += 1;
+      } else {
+        const builtin = report.events[i];
+        if (builtin === undefined) break;
+        state = registered.unit.fold(state, builtin);
+        i += 1;
+      }
+    }
     return state as S;
   }
 
