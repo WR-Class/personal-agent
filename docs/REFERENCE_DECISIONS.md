@@ -3008,7 +3008,7 @@ const manifest: DshPackageManifest = {
 | EvoMap v2 | 本项目 |
 | :--- | :--- |
 | 硬门在装配阶段、打分之前，连显式指定也越不过 | `gene.ts:221/231/237` 三道 `excluded`（intent 不符／零重叠／连续失败）**也在打分前** ⇒ **这一层形状一致** ✅ |
-| 主权重 `health 0.6 / 信号匹配 0.4`，且 `signals_match` 被当弱证据（贡献上限 0.04） | **`signalWeight: 1 / reliabilityWeight: 1 / recencyWeight: 0.5`（`gene.ts:197-198`）—— 信号重叠与可靠性【同权且都是最高】** ⚠️ |
+| 主权重 `health 0.6 / 信号匹配 0.4`（`geneSelection.d.ts:194-195`、`:246`），**⚠️ 更正 D110：原写"且 `signals_match` 被当弱证据（贡献上限 0.04）"是把两个项混了** —— `:186` 那句 *"signals_match is weak domain evidence; its maximum score contribution is 0.08 \* 0.5 = 0.04"* 讲的是**附加的 `TASK_DOMAIN_WEIGHT = 0.08` 项**，不是主信号项；主信号项是 **0.4 对 health 0.6**。而他们的重叠**度量**是对称且 IDF 加权的（`geneSelection.js` 从 `signals/expand.js` 导入 `bagCosine`/`idfTagOverlapScore`/`tagOverlapScore`） | **`signalWeight: 1 / reliabilityWeight: 1 / recencyWeight: 0.5`（`gene.ts:196-198`）—— 信号重叠与可靠性【同权且都是最高】**，且重叠度量是 `matched / gene.signalsMatch.length`（`gene.ts:229`，**按基因自身宽度归一 ⇒ 窄基因在这一项上不可能输**） ⚠️ |
 | 权重向量编码进版本串，加一个因子就升版 | **无版本号**，权重是裸字面量 ⚠️ |
 | 每个软因子都写了"为什么是这个权重"（按证据强度排序） | **三个权重无任何理由记录** ⚠️ |
 | 探索 = 打分后按概率在 top-N 内漂移，强度 `1/sqrt(Ne)` 自调节 | **无探索阶段**；`recency` 反而惩罚未成功者（`gene.ts:240`） ⚠️ |
