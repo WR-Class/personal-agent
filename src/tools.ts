@@ -144,6 +144,24 @@ export interface Tool {
   readonly parameters: JsonSchema;
   /** Host-trusted declaration. Non-readOnly tools are currently denied by the registry. */
   readonly readOnly: boolean;
+  /**
+   * Skip `inspectSchema`'s strict keyword allowlist for this tool's own argument
+   * validation, while `parameters` still ships to the model unchanged (M4 路 C, 丙-3).
+   *
+   * Exists for one reason: an MCP-bridged tool's `parameters` is the *server's*
+   * inputSchema, an arbitrary JSON Schema the server wrote for its own purposes —
+   * it may use `pattern`, `minLength`, `format`, `$ref`, anything, none of which
+   * `SUPPORTED_SCHEMA_KEYS` recognises. Rejecting every such tool at registration
+   * (or worse, silently stripping the keywords the model needs to see) is not an
+   * option, so validation is deferred to the party that actually knows the
+   * schema — the server, which the client already surfaces as a `tools/call`
+   * error through the ordinary failure path. This does not weaken a tool we wrote
+   * ourselves: every built-in tool leaves this unset and keeps the full check.
+   * One guard still applies unconditionally regardless of this flag, in
+   * `ToolRegistry.execute` before schema validation runs at all: arguments must
+   * be a JSON object before they reach any tool, bridged or not.
+   */
+  readonly externalSchema?: boolean;
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }
 
@@ -171,8 +189,17 @@ async function denied(name: string, reason: string, context: ToolContext): Promi
   return fail(name, reason);
 }
 
-/** Ask once unless this exact call already has an unexpired grant. */
-async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
+/**
+ * Ask once unless this exact call already has an unexpired grant.
+ *
+ * Exported (M4 路 C, 丙-3) because it is tool-agnostic — it closes over nothing
+ * but `name`/`args`/`prompt`/`context` — and an MCP-bridged tool needs exactly
+ * this behaviour: pre-approved calls skip the prompt, a matching grant is a cache
+ * hit, otherwise the operator is asked once per distinct call. Reimplementing it
+ * in the bridge would be a second copy of this exact logic for no reason; a
+ * shared function cannot drift from itself the way two hand-written copies could.
+ */
+export async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
   // The tier already allowed this call, so asking would contradict the posture
   // the operator chose. This is what makes `full-access` mean "do not ask"
   // rather than "do not ask, except for the file tools".
@@ -1288,12 +1315,14 @@ export class ToolRegistry {
       return fail(call.name, "arguments must be a JSON object");
     }
     let argumentProblem: string | undefined;
-    try {
-      argumentProblem = validateToolArguments(tool.parameters, args);
-    } catch (error) {
-      return fail(call.name, (error as Error).message);
+    if (tool.externalSchema !== true) {
+      try {
+        argumentProblem = validateToolArguments(tool.parameters, args);
+      } catch (error) {
+        return fail(call.name, (error as Error).message);
+      }
+      if (argumentProblem) return fail(call.name, `invalid arguments: ${argumentProblem}`);
     }
-    if (argumentProblem) return fail(call.name, `invalid arguments: ${argumentProblem}`);
     const match = decide(context.rules ?? DEFAULT_RULES, call.name, args as Record<string, unknown>);
     if (match.decision === "deny" && tool.readOnly !== true) {
       // Attribute the refusal to the rule that made it, so a denial can be
