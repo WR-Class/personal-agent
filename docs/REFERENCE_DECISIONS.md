@@ -2877,6 +2877,62 @@ const manifest: DshPackageManifest = {
 
 **⑧ ⚠️ 蜂群纪律连续第十一轮无法执行，如实记，并且本轮把它的含义说清了**：操作者问"这是指你现在的运行模式吗"⇒ **是**。当前工具清单里**没有 `swarm_plan`／`swarm_cycle`／`swarm_gene_add`／`swarm_guard`／`swarm_reflect`／`swarm_distill`／`swarm_merge` 中的任何一个**；D91 那次是发出调用拿回 `Error: unknown tool "swarm_cycle"`，**现在是清单里就不存在、连调用都发不出**。**⇒ 三条具体后果**：没有 PDRI 周期（无基因绑定、无边界账本、无评分）；**harness 那道写闸门也不在**（写操作只受 fs-observation-policy 的"读过才能改"约束）；**连"放弃"都无法记进机器** —— 协议说"没有理由的放弃等于由 nobody 做出的归因决定"，而 `blame: external` 只能写在文档里。**⇒ 我自己补的替代物**：每轮那两张清单（"明确不做 + 触发条件"、"未读如实记"）、变异验证、以及**引文闸门** —— 它本轮已经真的拦下了一次提交。**⚠️ 但如实说：这三样加起来仍不等价于蜂群的边界计量**，因为它们都依赖我自觉执行，而基因边界是从工具实参计量的、不依赖自觉。
 
+## D102 — 全权档做成名副其实；三条因果更正；以及"文档为什么没拦住偏移"
+
+**① 本轮新规矩（操作者逼出来的，先记规矩再记内容）**：操作者说 *"你更新了一大堆文档，但是做事情还是偏移为什么？那有没有文档有区别？……在我看来没有任何区别。"* **这个批评成立，实测支持它**：本项目累计十三次"说得比来源强"，**十三次全部是【断言】，零次是【检查】**。而真正抓到过东西的是三样机器检查 —— 引文闸门（第一次真跑就抓到 `REFERENCE_DECISIONS.md` 里躺了数轮的失效行号）、变异验证（D90 第一次变异是**绿的**，因此暴露测试根本没走组装路径）、以及**本轮那两个红测试**（直接推翻我上一轮"全权档下已无可升"的论证）。**近 3000 行的本文件抓到过零次。** ⇒ **差别不在"有没有文档"，在于我把文档当成了检查的替代品**：文档记录"我决定什么"，检查证明"代码是什么"；断言错了什么都不发生，检查错了会变红；而写断言只要一句话、写检查要 fixture + 变异 + 一轮红绿，**所以我一直在写便宜的那个，而它看起来像纪律**。⇒ **从本轮起，每条决定必须带"机器检查在哪"，答案是"没有"的要明写**，让"没有检查"可见，而不是混在一堆有检查的决定里。下面各条都按这个格式。
+
+**② 三条必须更正的因果（前十一条记录里都写错了）**：
+
+| 更正 | 先前写的 | 实测 | 机器检查在哪 |
+|---|---|---|---|
+| **(a) DSH 从未发布 `dsh-swarm`** | "工具集在会话中途被卸载" | `diff-removed.txt`(44,855 B)／`diff-added.txt`(49,673 B)／`diff-changed.txt`(67,092 B) 三份里 `swarm` 大小写不敏感命中 **0** 行；新 `app.asar` 里 `swarm` 条目 **0** 个。**真因是 peer 版本上限**：`dsh-swarm/package.json` 钉 `@deepseek-ai/dsh-tools` 到 `>=0.1.2-alpha.1 <0.2`，而 0.2.0 的 asar 里实测 `dsh-tools = 0.2.0-rc.2`（`dsh-llm` 同为 `0.2.0-rc.2`、`cordis = 4.0.4`）⇒ **只有 `dsh-tools <0.2` 这一条被违反**。而**代码本身是兼容的**：`check-swarm-api.js` 实测该插件唯二具名导入 `defineTool`（来自 `dsh-tools`）与 `createUserMessage`（来自 `dsh-llm`）**在 0.2.0 里都还在**。**证据里不存在任何安全理由** —— 唯一与安全沾边的文字是 `cordis.patch.yml` 说 `gateScope` 默认 `'participants'` 因为那是 *"the safe choice for a shared host"* | **没有**（外部仓库的事实，无法用本项目的测试钉住；⚠️ 但 `grep` 空结果按 D99 ④(b) 已用"读文件头 + `Select-String` 重数"二次确认过） |
+| **(b) 基因库不是空的** | 多轮记录写"库是空的" | `C:\Users\RongWu\.dsh\swarm\` 下 `cycles.jsonl` **49,133 B**、`genes.jsonl` **35,251 B**、`failures.jsonl` **9,456 B**。那个信念来自 `swarm_plan` 报错，**不是来自查过存储** | **没有** |
+| **(c) D91–D101 十一轮的 `blame: external` 理由要改写** | "蜂群工具集在会话中途被卸载" | 应改为 **(a) 的实测因果**：peer 版本上限不满足，宿主从未加载该插件。**⚠️ 归因类别仍是 `external`（不是 `gene`、也不是 `selection`），但理由必须换成真的** —— 错误的因果写在十一条记录里，会让后来者以为"宿主会随机收回工具"，从而不去查版本 | **没有**；⚠️ 而且机器里没有周期可改（见 ⑧），**这条更正只能落在文档，这本身就是 (a) 的后果** |
+
+**③ 本轮代码变更：`full-access` 名副其实**（提交 `b985816`，5 files，+140/−19）：
+
+| 改动 | 位置 | 机器检查在哪 |
+|---|---|---|
+| `assertReadablePath` 加第四参数 `unrestricted`，**只放开【工作区收敛】这一道** | `src/security-config.ts`（函数头 `assertReadablePath(target, workspace, extraRoots, unrestricted)`） | ✅ `test/full-access-write.test.ts` 四条；**双向变异已验证**：`if (true)` ⇒ 3 红、`if (false)` ⇒ 1 红；恢复经逐字节比对确认相同 |
+| `ToolContext.unrestrictedWrites` | `src/tools.ts`（紧接 `protectedRoots` 之后） | ✅ 同上（第三、四条断言钉住"放开后 `protectedRoots` 与敏感名字仍然拒"） |
+| 12 个写工具调用点全部传它（6 处直接调用 + 6 处 `sameFile` 复检），一个 `replace_all` 完成 | `src/tools.ts` | ⚠️ **部分**：`sameFile` 那 6 处**没有独立测试**，靠"全绿 687/686/0/1"间接覆盖。触发条件：将来若 `sameFile` 的复检被绕过，这 6 处不会变红 |
+| 从"ADMIN 层 + `tool:"*"` + `allow`"这一**唯一**规则形状推导，**不接受调用方传入** | `src/runtime.ts`（`const context: ToolContext` 处） | ⚠️ **没有直接测试**。间接依据：配置规则钉死在 WORKSPACE 层、JSON 里出现 `tier` 键直接报错（`config.ts`，已有测试）。**触发条件：若将来出现第二个 ADMIN 层的 `tool:"*"` allow 规则，这个推导会静默放宽 —— 应当补一条断言"全库只有一条这种形状的规则"** |
+
+**⚠️ 这个范围不是我选的，是被两个已有测试打出来的**：第一版连 `protectedRoots` 拒绝循环一起放开，`cannot write the constraints file it is told from, whatever its home is called` 与 `cannot write its own privilege-granting state, whatever its home is called` **立刻变红**。`constraints.json` 每轮重读（写它＝改写操作员的长期约束、下一轮就生效），`trust.json` 是授权文件（写它＝自己给自己发只读根，而读路径本轮刻意没放开，所以那是一次真的自我提权）。**两件都不是"升档位"，所以我上一轮那句"全权档下已无可升"盖不住它们。** ⇒ **全权档的含义确定为一句话：操作员不再被问"写哪里"，但 agent 仍然改不了操作员自己的文字。**
+
+**⚠️ 一处我自己读错范围、并已更正**：我上一轮拿 Codex 保护 `.codex` 当"通用硬地板"的论据。实测 `permissions.rs` 那个函数名是 `default_read_only_subpaths_for_writable_root(writable_root, …)` —— **它算的是"某个可写根【里面】哪些子路径要额外批准"，属于 `workspace-write` 档**；`DangerFullAccess` 下没有"可写根"这个概念，所以那条保护**根本不适用**，Codex 在全权档下就是它自己注释写的 *"No restrictions whatsoever. Use with caution."*，**没有"多问一次"**。⇒ **操作者那句"我开了完全权限问我干什么"是对的，我的方案错了。**
+
+**⚠️ 一个实测到的陷阱（已写进测试注释）**：Windows 上 `os.tmpdir()` = `%LOCALAPPDATA%\Temp`，**本身就在 `protectedRoots()` 里面** ⇒ 边界测试若放在那里，测到的是第二道检查而不是工作区收敛，**会以与档位无关的理由通过或失败**。这也是 `fixtures.ts` 把测试产物放进仓库内 `.test-artifacts/` 的原因。
+
+**④ 操作者四问的答案（都先读了代码才答）**：
+
+| 问 | 答 | 机器检查在哪 |
+|---|---|---|
+| **`protectedRoots` 是项目目录吗？"去 XXX 目录复制 XXX 到项目目录"越界吗？"去 XXX 目录操作 XXX"呢？** | **不是项目目录**，是 **agent home + store root，按位置拒**（默认 home `resolve(".personal-agent")` **物理上就在工作区内**，所以保证来自位置不来自名字）。**复制进来不算越界**，前提是 XXX 已被 `--trust-root` 授予为**只读**附加根（读 ✅、写进工作区 ✅）。**去 XXX 目录操作 XXX 算越界、文件工具会拒** —— `--trust-root` 只放宽读，写工具直接调 `assertReadablePath`。⚠️ **但 `run_command` 那条路拦不住**（D27 实测、D33 记录） | ✅ 已有测试（`SAFETY.md` 记的"授予后写仍以 `path escapes the workspace` 拒"）；⚠️ **命令路径那半边没有任何检查，因为没有任何强制** |
+| **新老基因同类型，后面选哪个？老的怎么办？客户端会无限增大吗？** | **打分排序**：`score = 1×overlap + 1×reliability + 0.5×recency`，`reliability = (successes+1)/(attempts+2)`、`recency = 0.5^((now−lastSuccessAt)/30天)`；**意图是门不是权重**；信号零命中直接排除。**老的连着超支 ⇒ attempts 涨、successes 不涨 ⇒ reliability 掉 ⇒ 新的胜出**。更硬的一条：**连续失败 `quarantineStreak: 2` 次就 `excluded`、不参与排序，只有一次新成功能放它出来**（⚠️ 我们代码里是 **2**，插件默认是 **3** —— 我们自己选了更严的值，**但没找到记录说明是有意的，如实记**）。**老的不删**（`genes.jsonl` 仅追加），但 `recency` 半衰期 30 天 ⇒ **自然沉底**。**增长量级实测**：约 90 个已整合周期累积出 `genes.jsonl` 35,251 B ⇒ 约 390 B/周期，一万个周期约 4 MB。**⚠️ 真正需要封顶的不是基因日志、是叙事记忆** —— 插件恰好给了 `narrativeMaxEntries: 30` 与 `narrativeMaxBytes: 12288`（*"Both are enforced; whichever binds first wins"*），**而我们缺的 `memory.ts` 那一项正是唯一需要封顶的那一项** | ✅ `selectGene`/`scoreCandidates` 已有测试（`gene.test.ts` 等）；⚠️ **"叙事记忆需要封顶"这条没有检查，因为我们还没有叙事记忆** |
+| **预算取最大值还是平均值？** | **⚠️ 操作者否掉了我"取最大值"的建议，而且他是对的**：上限只涨不跌＝**一个没有回路的棘轮**，一轮失手写到 145 就永久把此后每轮抬到 145，"预算不再是约束，变成最糟那天的记录"。**但取平均也不是最优** —— 正确的数是操作者自己那句话给的：*"有的10行能解决有时候却要写15行。完全可以做到10行。"* ⇒ **10 行那一轮【证明】了 10 行够用；15 行那轮没有证明 15 行必要**。⇒ **取最近 N 次成功里的【最小值】**，而这正是 `SWARM_LOOP.md` 已登记采用的 EvoMap **"反事实增益"** 在预算上的用法。配套：**(1)** 超支不该直接拒（预算估低是常态，我自己猜错过三次），**该要求 `reason` 并记账、本轮放行，不给理由才拒**（与时间预算 `extend` 同形状）；**(2)** **连续超支要反过来惩罚基因的 `reliability`、而不是抬它的上限** —— 连着三次都要延展才完成，说明**策略本身啰嗦**，这就是"高效完成、不是冗余完成"的落地点；**(3)** 枢纽非对称：**上限往下调是安全的（顶多多解释一次），往上调是危险的（永久放宽约束）**，与 D61 裁定 `paths` 不可变同方向 | ❌ **完全没有，而且这是本轮最重要的欠账**：`distill.ts` 与 `induct.ts` 铸基因时预算**写死** `{ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }`，**没有任何东西读历史**。⚠️ 更要紧的是操作者这个例子暴露的洞：**一条"只有超支才完成"的基因，既不是失败（进不了 `distill`，它的输入是失败记录）、也不是无基因的成功（进不了 `induct`）⇒ 它的超支记录【没有消费者】。这个信号不是没实现，是没接线。** |
+| **文档有什么用？** | 见 ① | ✅ 引文闸门本身就是这条的答案 |
+
+**⑤ 三个内核的确认（操作者要求"确认一下我要的三个内核"）**：`IMPLEMENTATION.md` 第 4 节 *"这三项不是 Skill，也不把 DSH、蜂群或 SoL-Pi 原样接进来。借鉴机制，运行时仍是 `personal-agent` 自己的。"*
+
+| 内核 | 来源 | 状态 | 机器检查在哪 |
+|---|---|---|---|
+| **① TaskSpec 任务编排** | `dsh-lab/plugins/dsh-orchestrator` | ✅ **已落地**（`taskspec.ts`、`taskspec-prompt.ts`(D81)、`skill-catalogue.ts`(D84)、技能接缝(D101)） | ✅ 有测试 |
+| **② 蜂群 worker → 纪律层** | 有界 worker | ⚠️ **部分建成、未作为工具暴露、≥10 项能力缺失**。D13 操作者判定 `dispatch_workers` 扇出"不是蜂群"、整体删除 | ⚠️ 已建部分有测试；**缺的 10 项没有检查，因为它们不存在** |
+| **③ SoL-Pi 工具适配** | `D:\DSHXM\SoL-Pi` | ❌ **未开始** | ❌ 无 |
+
+**⚠️ 核心机制（操作者要求"一两句话就能说清楚"，这是被他接受的那版）**：**蜂群不是"多个 agent 一起干活"，而是一份跨轮共享的能力账本。** 每轮开工前先从账本里挑一条"这类活该怎么做"的记录（基因）**并声明这一轮的边界**，收工后把结果**记回那条记录头上**；于是第二次遇到同类活时它更有把握，而同一处反复失败会自动沉淀成一条硬规矩。闭环两个方向：`induct`（干成了但没用基因 → 捕获成新基因）与 `distill`（同一处反复失败 → 铸成确定性守卫）。**"群体"是跨时间的，不是跨进程的** —— 这正是 D13 拒绝 `dispatch_workers` 的理由。
+
+**⑥ ≥10 项能力在 `personal-agent` 里没有对应物**（`dsh-swarm/core/` 22 个模块实测）：写入门(`gate.ts`) · 边界计量记到基因头上(`boundary.ts`) · 叙事记忆(`memory.ts`) · 确定性合并(`merge.ts`) · 快照(`snapshot.ts` —— **证实了操作者 D97 那个问题：我们真的没有快照**) · 预算延展(`stretch.ts`) · 增益定价(`pricing.ts`) · 结果回灌(`backprop.ts`，我们只在 `runtime.ts` 内联了 `journalOutcome`) · 悬空周期收口(`forcedclose.ts`) · 跨域转移／阶段统计／隔离(`transfer.ts`、`phasestats.ts`、`isolation.js`)。
+
+**⑦ 全量移植不可能的五条 + 三条恢复路径**：**五条**：(1) 三个生产依赖 ⇒ 违反 D01 与零生产依赖；(2) 需要 `dsh.bundle.patch`（D95 记为不采用，且只在 Cordis 宿主里有意义）；(3) 它的状态模型是**进程级宿主状态**，我们是每会话 CLI 进程；(4) `engines.node >=24.0.0` 对我们 `>=22.6`；(5) `SWARM_LOOP.md` 已排除跨进程周期与并行池、且记明**不撤销**。**三条路径（已排序）**：**(1 推荐)** 把 `dsh-swarm` 复制进我们自己的空间、改掉那一行 peer 上限、**先跑它自己的 33 个测试文件**（⚠️ 只验证过那两个具名导入还在，**没验证 0.2.0 的 `tools/pre-execute` 瀑布语义有没有变 —— 而那正是写入门挂钩的地方**）；**(2)** 把机制原生进 `personal-agent`；**(3)** 继续不用。**⚠️ (1) 我自己做不了**：`dsh-lab` 是只读参考仓库，且本会话审批已禁用，所以我不能请求提权。
+
+**⑧ 明确不做（每条带触发条件）**：**(a)** 不改 `run_command` 的路径约束 —— 需要 OS 沙箱或"解析不出即拒"，**触发条件：与 M3 那一档一起裁**；**(b)** 不给读路径放开全权 —— `tools.ts` 的 ToolContext 注释逐字记着 *"Reads and writes share one gate, so widening the workspace would widen both"*，替读放开等于替操作员做第二个他没做过的决定，**触发条件：操作员明确要求**；**(c)** 不把 `forbiddenPaths` 的强制塞进本轮 —— 它是独立缺口（`write-budget.ts` 的 `budgetFor` 签名是 `{ maxFiles: number; maxLines: number } | null`，**`forbiddenPaths` 根本到不了强制路径**），**触发条件：下一轮，且优先于预算推导，因为"声明了但不强制"比"没有"更坏 —— 前者是撒谎、后者是欠账**；**(d)** 不重写历史文档里那约 29 个已失效的 `runtime.ts` 行号（D101 裁定：违反不改写历史，且它们本来就不被闸门检查），**触发条件：某一轮真的依赖到其中一个时，那一轮就地更正**；**(e)** 不把 `quarantineStreak` 从 2 改成 3 或反之 —— **触发条件：先找到当初选 2 的理由，找不到就补一条记录说明这是无意的**。
+
+**⑨ 未读、如实记**：`session-store.ts` 的 `stateOf` 本体（**已欠四轮**）；`gene-store.ts:1-230`（本轮只读了 `:225-250`）；`gene.ts:1-192`（本轮只读了 `:193-257`）；`security-config.ts:1-127`（本轮只读了 `:128-153`，**所以 `protectedRoots()` 的完整成员清单我没读全，只从 `tools.ts` 的注释推知它含 `%LOCALAPPDATA%` 一类宿主树**）；`tools.ts` 那 12 个调用点的上下文（本轮用 `replace_all` 改的，**没有逐个读过**）；`dsh-plugin-manager/README.zh.md`（已降级）。**⚠️ 待清理**：`D:\DSHXM\AgentKHD` 根下三个探针残留。
+
+**⑩ ⚠️ 蜂群纪律连续第十二轮无法执行**：工具清单里仍无任何 `swarm_*`。**但本轮把归因理由改成了 ② (a) 的实测因果，不再写"被卸载"。** 三条后果不变：无 PDRI 周期、无 harness 写闸门、连"放弃"都只能写在文档里。**⚠️ 而本轮恰好证明了 ① 那条规矩的必要性**：替代物里真正拦住错误的是**测试与变异**（机器检查），不是那两张清单（断言）。
+
 ## 3. 实际采用状态（当前）
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|

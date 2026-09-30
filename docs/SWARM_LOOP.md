@@ -176,6 +176,25 @@ Evaluation
 
 关键分野：**Skill/Expert 是静态手册，Gene 必须带选择依据、执行结果、成功率、失败模式与演化历史**。EvoMap 的负结果（纯蒸馏、没有成功轨迹的基因劣于静态 Skill）正是本项目"铸造必须由操作者把关"的依据。
 
+**⚠️ 补记（D102）：上表 `:173` 那一行"采用"列是【意图】，不是【现状】，而本文件此前没有缺口清单 —— 这正是连续十一轮把"工具不在"当成外部事故、而不是当成"内核②只建了一半"的原因。** 实测 `dsh-swarm/core/` 共 22 个模块，**下列 ≥10 项在 `personal-agent` 里没有对应物**：
+
+| 缺口 | 插件模块 | 本项目现状 | 机器检查在哪 |
+|---|---|---|---|
+| **写入门**（无开放周期就不能写） | `gate.ts` | ❌ 无。当前只有 fs-observation-policy 的"读过才能改" | ❌ 无 |
+| **边界计量记到基因头上** | `boundary.ts` | ⚠️ 有一半：`write-budget.ts` 真的强制 `maxFiles`/`maxLines`（三处拒绝），**但 `budgetFor` 的签名是 `{ maxFiles: number; maxLines: number } \| null` ⇒ `forbiddenPaths` 根本到不了强制路径，它是声明了但没强制** | ⚠️ `maxFiles`/`maxLines` 有测试；**`forbiddenPaths` 无，因为它不存在** |
+| **叙事记忆** | `memory.ts` | ❌ 无。⚠️ 而这是**唯一真正需要封顶的一项** —— 插件给了 `narrativeMaxEntries: 30` 与 `narrativeMaxBytes: 12288`（*"Both are enforced; whichever binds first wins"*）；基因日志反而不需要封顶（实测约 390 B/周期、一万周期约 4 MB，且基因只在 `distill`/`induct` 触发时才铸、不是每轮一条） | ❌ 无 |
+| **确定性合并** | `merge.ts` | ❌ 无 | ❌ 无 |
+| **快照** | `snapshot.ts` | ❌ 无 —— **这证实了操作者 D97 那个问题：本项目真的没有快照** | ❌ 无 |
+| **预算延展** | `stretch.ts` | ⚠️ 时间预算有 `extend`（要 `reason`、`planning` 阶段拒、累计上限），**写预算没有** | ⚠️ 时间那边有测试 |
+| **增益定价** | `pricing.ts` | ❌ 无 | ❌ 无 |
+| **结果回灌** | `backprop.ts` | ⚠️ 只有 `runtime.ts` 内联的 `journalOutcome` | ⚠️ 间接 |
+| **悬空周期收口** | `forcedclose.ts` | ❌ 产品内无等价物（我们只作为工具用过一次） | ❌ 无 |
+| **跨域转移／阶段统计／隔离** | `transfer.ts`、`phasestats.ts`、`isolation.js` | ❌ 无 | ❌ 无 |
+
+**⚠️ 而"超支信号没有消费者"是这张表里最要紧的一条洞，且它是操作者的例子暴露的、不是我发现的**：一条"只有超支才完成"的基因，**既不是失败**（进不了 `distill` —— 它的输入是失败记录）**、也不是无基因的成功**（进不了 `induct`）⇒ **它的超支记录没有任何东西读**。`distill.ts` 与 `induct.ts` 铸基因时预算**写死** `{ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }`，没有一处读历史。**⇒ 这个信号不是没实现，是没接线。**
+
+**⚠️ 全量移植不可能的五条**：(1) 三个生产依赖 ⇒ 违反 D01 与零生产依赖；(2) 需要 `dsh.bundle.patch`（D95 记为不采用，且只在 Cordis 宿主里有意义）；(3) 它的状态模型是**进程级宿主状态**，我们是每会话 CLI 进程；(4) `engines.node >=24.0.0` 对我们 `>=22.6`；(5) 本文件已排除跨进程周期与并行池、且 `:181` 记明**不撤销**。**⚠️ 而"工具不在"的真因不是这五条中的任何一条**，是 peer 版本上限：插件钉 `@deepseek-ai/dsh-tools` 到 `>=0.1.2-alpha.1 <0.2`，而 0.2.0 asar 里实测 `dsh-tools = 0.2.0-rc.2`；插件唯二具名导入 `defineTool` 与 `createUserMessage` **在 0.2.0 里都还在**，**证据里不存在任何安全理由**（唯一与安全沾边的文字是 `cordis.patch.yml` 说 `gateScope` 默认 `'participants'` 因为那是 *"the safe choice for a shared host"*）。**⇒ 三条恢复路径见 `REFERENCE_DECISIONS.md` D102 ⑦，推荐第一条（复制进自己的空间、改掉那一行 peer 上限、先跑它自己的 33 个测试文件）；⚠️ 但那条我自己做不了：`dsh-lab` 是只读参考仓库、且本会话审批已禁用。**
+
 > **⚠️ 更正与撤销（2026-09-30，见 [ARCHITECTURE.md](ARCHITECTURE.md)）。上表按规矩保留原文不改写，但 `:173` 的"不采用"列里有一项已被操作员的目标形态撤销：**
 >
 > **① 撤销「Cordis 宿主」这一项不采用。** 操作员明确了目标形态是**一切皆插件**：*"本身产品是一个小产品或者只是核心功能，但是其他的所有的东西都可以插件集成，只是设置好接口就好了…就像积木一样"*，并以 DSH 为范例。**⇒ 要借鉴的正是 Cordis 的接缝形状**（共享 context `provide`/`get`、三类事件 session/agent/capability、可卸载注册）。**⚠️ 但"不引入 Cordis 运行时依赖"仍然有效**（D01 *"无DSH运行依赖"*、零生产依赖取向不变）—— **借鉴形状 ≠ 引入依赖**。同列的「跨进程周期」「并行池」**不撤销**，它们与本项无关。
