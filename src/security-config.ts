@@ -138,11 +138,39 @@ export function sensitivePathName(part: string): boolean {
 }
 
 /** Deny before read and after canonicalization. Error never includes file contents. */
-export function assertReadablePath(target: string, workspace: string, extraRoots: readonly string[] = []): string {
+export function assertReadablePath(target: string, workspace: string, extraRoots: readonly string[] = [], unrestricted = false): string {
   const lexical = cleanPath(target);
   const actual = canonicalPath(lexical);
-  const root = canonicalPath(workspace);
-  if (!isWithin(root, actual)) throw new Error("path escapes the workspace");
+  // `unrestricted` is set only by the write tools, only under the `full-access`
+  // tier, whose meaning is Codex's `DangerFullAccess` — the source comment reads
+  // "No restrictions whatsoever. Use with caution."
+  //
+  // It lifts exactly one of the three checks below: workspace containment. The
+  // protected-root loop and the sensitive-name check both survive it, and that is
+  // not timidity — two existing tests assert it and both went red when the first
+  // version of this lifted the deny loop too:
+  //   "cannot write the constraints file it is told from, whatever its home is called"
+  //   "cannot write its own privilege-granting state, whatever its home is called"
+  // The agent home holds `constraints.json` (re-read every turn, so writing it
+  // rewrites the operator's standing instructions for the next turn) and
+  // `trust.json` (writing it self-grants readable roots). Neither is a tier
+  // escalation, so "there is nothing left to escalate to at full access" does not
+  // cover them. Full access means the operator stopped being asked about *where*;
+  // it does not mean the agent may edit the operator's own text.
+  //
+  // The sensitive-NAME check survives for a different reason: real work writes
+  // plainly-named paths, so keeping the list costs nothing, while what it catches
+  // is the irreversible-and-unrecorded class. `.git` in particular — Codex's own
+  // stated rationale is that `.git/hooks` is an escalation channel, and a hook
+  // runs later, outside the session, with no audit line naming it.
+  //
+  // ponytail: reads are NOT unrestricted. `readableRoots` (D35) stays their only
+  // widening, because `tools.ts` records that reads and writes share this single
+  // gate — widening it for reads too would be a second decision nobody made.
+  if (!unrestricted) {
+    const root = canonicalPath(workspace);
+    if (!isWithin(root, actual)) throw new Error("path escapes the workspace");
+  }
   for (const denied of [...protectedRoots(), ...extraRoots.map(canonicalPath)]) {
     if (isWithin(denied, actual) || isWithin(denied, lexical)) throw new Error("sensitive path is denied");
   }

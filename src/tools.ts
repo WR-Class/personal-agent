@@ -56,6 +56,17 @@ export interface ToolContext {
   /** Trusted runtime supplies its state/log roots; never model-controlled. */
   protectedRoots?: readonly string[];
   /**
+   * True only under the `full-access` tier, and consulted only by the write tools.
+   *
+   * Lifts workspace containment and `protectedRoots`; see the fourth parameter of
+   * {@link assertReadablePath} for what deliberately survives it. Never
+   * model-controlled — the runtime derives it from the tier the operator named on
+   * the command line, which `cli.ts` already writes into the session audit as
+   * `rule:"tier:full-access"`. That is D26's requirement: removing a boundary has
+   * to be a decision on the record, not a label a caller happens to hold.
+   */
+  unrestrictedWrites?: boolean;
+  /**
    * Extra roots that may be *read*, never written (D35).
    *
    * Kept separate from `workspaceRoot` on purpose. Reads and writes share one
@@ -230,9 +241,9 @@ function assertReadablePathOutcome(target: string, context: ToolContext): string
 }
 
 /** Re-check immediately before a write. A replaced path must not receive it. */
-function sameFile(before: string, workspace: string, protectedRoots: readonly string[] | undefined): string | undefined {
+function sameFile(before: string, workspace: string, protectedRoots: readonly string[] | undefined, unrestricted = false): string | undefined {
   try {
-    const again = assertReadablePath(before, workspace, protectedRoots);
+    const again = assertReadablePath(before, workspace, protectedRoots, unrestricted);
     return again === before ? undefined : "path changed before write";
   } catch (error) {
     return (error as Error).message;
@@ -953,7 +964,7 @@ export function createEditFileTool(): Tool {
       if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("edit_file", `content exceeds ${WRITE_FILE_MAX_BYTES} bytes`);
       let resolved: string;
       try {
-        resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots);
+        resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       } catch (error) {
         return fail("edit_file", (error as Error).message);
       }
@@ -974,7 +985,7 @@ export function createEditFileTool(): Tool {
         await context.audit?.({ tool: "edit_file", decision: denial === "approval expired" ? "expired" : "denied", reason: denial });
         return fail("edit_file", denial);
       }
-      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       if (changed) return fail("edit_file", changed);
       const drifted = await unchangedSinceApproval(resolved, contentStamp(current), "edit_file");
       if (drifted) return fail("edit_file", drifted);
@@ -1009,7 +1020,7 @@ export function createPatchFileTool(): Tool {
       if (typeof oldText !== "string" || oldText.length === 0) return fail("patch_file", "'oldText' must not be empty");
       if (typeof newText !== "string") return fail("patch_file", "'newText' must be a string");
       let resolved: string;
-      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false); }
       catch (error) { return fail("patch_file", (error as Error).message); }
       let info;
       try { info = await stat(resolved); }
@@ -1022,7 +1033,7 @@ export function createPatchFileTool(): Tool {
       if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("patch_file", "replacement exceeds the byte limit");
       const denial = await approveExact("patch_file", args, `Patch ${target}?\n${lineDiff(current, content)}\n本次批准 2 分钟内有效。`, context);
       if (denial) return denied("patch_file", denial, context);
-      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       if (changed) return fail("patch_file", changed);
       // The new content was spliced into `current`; if the file moved, writing it
       // would revert whatever the other writer added rather than merely conflict.
@@ -1057,14 +1068,14 @@ export function createCreateFileTool(): Tool {
       if (typeof content !== "string") return fail("create_file", "'content' must be a string");
       if (Buffer.byteLength(content) > WRITE_FILE_MAX_BYTES) return fail("create_file", `content exceeds ${WRITE_FILE_MAX_BYTES} bytes`);
       let resolved: string;
-      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false); }
       catch (error) { return fail("create_file", (error as Error).message); }
       try { await stat(resolved); return fail("create_file", `already exists: ${target}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("create_file", `cannot stat ${target}`); }
       const preview = content.split(/\r?\n/).slice(0, 40).join("\n");
       const denial = await approveExact("create_file", args, `Create ${target} (${Buffer.byteLength(content)} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
       if (denial) return denied("create_file", denial, context);
-      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       if (changed) return fail("create_file", changed);
       try { await writeFile(resolved, content, { encoding: "utf8", flag: "wx" }); }
       catch (error) { return fail("create_file", `cannot create ${target}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
@@ -1084,7 +1095,7 @@ export function createDeleteFileTool(): Tool {
       const target = args.path;
       if (typeof target !== "string" || target.length === 0) return fail("delete_file", "'path' must name a file");
       let resolved: string;
-      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots); }
+      try { resolved = assertReadablePath(path.resolve(context.workspaceRoot, target), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false); }
       catch (error) { return fail("delete_file", (error as Error).message); }
       let info;
       try { info = await stat(resolved); }
@@ -1097,7 +1108,7 @@ export function createDeleteFileTool(): Tool {
       const preview = previewed === undefined ? "文件超过预览上限" : previewed.split(/\r?\n/).slice(0, 40).join("\n");
       const denial = await approveExact("delete_file", args, `Delete ${target} (${info.size} bytes)?\n${preview}\n本次批准 2 分钟内有效。`, context);
       if (denial) return denied("delete_file", denial, context);
-      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots);
+      const changed = sameFile(resolved, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       if (changed) return fail("delete_file", changed);
       // The preview showed the operator *this* content. Deleting a file that has
       // since become something else destroys work they never saw.
@@ -1132,8 +1143,8 @@ export function createRenameFileTool(): Tool {
       let source: string;
       let destination: string;
       try {
-        source = assertReadablePath(path.resolve(context.workspaceRoot, from), context.workspaceRoot, context.protectedRoots);
-        destination = assertReadablePath(path.resolve(context.workspaceRoot, to), context.workspaceRoot, context.protectedRoots);
+        source = assertReadablePath(path.resolve(context.workspaceRoot, from), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
+        destination = assertReadablePath(path.resolve(context.workspaceRoot, to), context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       } catch (error) { return fail("rename_file", (error as Error).message); }
       let info;
       try { info = await stat(source); }
@@ -1143,8 +1154,8 @@ export function createRenameFileTool(): Tool {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail("rename_file", `cannot stat ${to}`); }
       const denial = await approveExact("rename_file", args, `Rename ${from} to ${to}?\n本次批准 2 分钟内有效。`, context);
       if (denial) return denied("rename_file", denial, context);
-      const sourceChanged = sameFile(source, context.workspaceRoot, context.protectedRoots);
-      const destinationChanged = sameFile(destination, context.workspaceRoot, context.protectedRoots);
+      const sourceChanged = sameFile(source, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
+      const destinationChanged = sameFile(destination, context.workspaceRoot, context.protectedRoots, context.unrestrictedWrites ?? false);
       if (sourceChanged || destinationChanged) return fail("rename_file", sourceChanged ?? destinationChanged ?? "path changed");
       await rename(source, destination);
       return { content: `renamed ${from} to ${to}` };

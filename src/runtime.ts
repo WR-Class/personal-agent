@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import type { ChatMessage, ChatUsage, ModelAdapter, ToolCall } from "./types.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { ToolContext, ToolRegistry } from "./tools.ts";
-import type { Rule } from "./rule-table.ts";
+import { RULE_TIERS, type Rule } from "./rule-table.ts";
 import { buildToolEnvironment, UnsafeAgentHomeError } from "./tool-environment.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
 import { resolveRuntimePaths, assertSafeStateDirectory } from "./security-config.ts";
@@ -1024,6 +1024,12 @@ export class AgentRuntime {
       toolEnvironment: this.toolEnvironment,
       protectedRoots: this.protectedRoots,
       protectedStateRoots: this.protectedStateRoots,
+      // Derived here, never passed in by a caller. The only rule shape that means
+      // "the operator chose the widest tier" is an ADMIN-tier allow on every tool,
+      // which is exactly what `tiers.ts` pins `full-access.allow-all` to. Config
+      // rules are pinned to WORKSPACE and a `tier` key in JSON is a hard error
+      // (`config.ts`), so neither the model nor a cloned repository can reach this.
+      unrestrictedWrites: (this.rules ?? []).some((rule) => rule.tier === RULE_TIERS.ADMIN && rule.tool === "*" && rule.decision === "allow"),
       readableRoots: this.readableRootsCache,
       ...(signal ? { signal } : {}),
       ...(this.approve ? { approve: this.approve } : {}),
