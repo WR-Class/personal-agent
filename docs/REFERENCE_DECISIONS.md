@@ -2933,7 +2933,55 @@ const manifest: DshPackageManifest = {
 
 **⑩ ⚠️ 蜂群纪律连续第十二轮无法执行**：工具清单里仍无任何 `swarm_*`。**但本轮把归因理由改成了 ② (a) 的实测因果，不再写"被卸载"。** 三条后果不变：无 PDRI 周期、无 harness 写闸门、连"放弃"都只能写在文档里。**⚠️ 而本轮恰好证明了 ① 那条规矩的必要性**：替代物里真正拦住错误的是**测试与变异**（机器检查），不是那两张清单（断言）。
 
+### D106 — EvoMap v2 的基因评分与淘汰设计（实读 npm 包源码，回答操作者"有分数机制就不能只看落选次数"）
+
+**⚠️ 材料来源与可信度分级（这轮的方法论本身就是一条记录）**：磁盘上原有的 `_evomap_ref/evolver-README.zh-CN.md`（28,939 B，在 `D:\DSHXM\ZYZNT\`）**描述的是 v1**（`src/gep/selector.js`、`src/ops/lifecycle.js`），而 npm 上现在是 **v2.0.40** ⇒ **那份 README 已不代表当前设计，本轮不以它为据**。真源码取自 `@evomap/evolver-core@2.0.40`（npm，1,435,825 B，解出到 `D:\DSHXM\evo-src\core\`）。**⚠️ 两个坑，都实测过**：**(a)** `npm view evolver` 返回的是**另一个同名无关包**（0.3.7），README 写的是 `@evomap/evolver`，**差点下错**；**(b)** `@evomap/evolver` 本体是**薄壳**（`index.js` 仅 37 字节），真代码在 7 个子包里；**(c) `.js` 全部混淆**（`const _0x327552=_0x198a(…)` 那套），**但 `.d.ts` 声明文件没有混淆，而且注释异常详尽 —— 设计意图、公式、以及【被删掉的设计连同删它的理由】都在里面。** ⇒ **本轮所有结论都出自 `.d.ts` 的签名与文档注释，未读实现（读不了）；公式是注释里逐字给出的，所以形状可靠，具体代码路径未验证。**
+
+**⚠️ 核心结论：EvoMap 根本不是"没被选中 N 次就退休"，而是四层，每层解决不同问题。**
+
+| 层 | 机制 | 出处 |
+| :--- | :--- | :--- |
+| 连续量排序 | **健康分** = `successRate·(w1 + w2·reuse归一) − w3·antiPattern密度`；权重版本化（`HEALTH_WEIGHTS_VERSION = "gh-2"`）；原始分**上限 0.7、下限 −0.4** | `algo/geneHealth.d.ts` |
+| 硬排除 | **封禁** = `≥2 次【独立】失败的 capsule，且其 trigger 覆盖当前信号的 ≥60%` | `algo/bans.d.ts` |
+| 选择时探索 | **UCB1**：`score = reward + confidence + freshness + UCB1`，**没拉过的臂置信度 = +Infinity** | `algo/ucb1.d.ts` |
+| 隔离区出口 | **晋升** = `≥minSuccess（默认 2）次真实成功 且 0 失败`，自动批准 | `algo/genePromotion.d.ts` |
+
+**⚠️ 三条直接否掉"落选计数退休"的实测证据：**
+
+1. **UCB1 的方向与"落选该退休"完全相反。** `ucb1.d.ts` 逐字记着一个**被删掉的设计及其删除理由**：*"the original `UCB1_DEFAULTS` were tuned for a 26-arm test rig; on a real library they over-explored, because `explorationFactor` was large enough that **a never-pulled gene's +Infinity confidence beat an established winner outright**"* ⇒ 改成 `UCB1_DEFAULTS_FLAT_EXPLORATION`（`DEFAULT_EXPLORATION_FACTOR: 0`、`DEFAULT_CONFIDENCE: 10`，*"large enough to be tried first when everything is untried"*）。**⇒ 在老虎机框架里，"没被选中"意味着"下一个就该试它"，是加分项不是扣分项。** 而且它明写这个平坦版**是基准的对照组、不是推荐策略**：*"the benchmark's own hypothesis is that the ranking term is noise, so shipping it as a default would pre-judge that result"* ⇒ **他们不假设自己的排序有效，而是设了一个基准去检验它是不是噪声**（`benchmark/selectionFlatAbstention.js`）。
+2. **封禁是【信号相对】的，不是全局的。** `bannedGenesFromFailures(failures, signals)` 的判据里含 `signals` ⇒ **一条基因是"对这一类请求被封禁"，不是"从此出局"**。这正是操作者"竞争只存在同类基因中"那个直觉的正确实现方式。
+3. **"独立"被去重了四道，所以重试风暴不能封禁一条基因。** `FailedCapsuleRef` 带 `failureId`（*"duplicate deliveries of the same record count once"*）、`rootAttemptId`（*"Root attempt shared by automatic retries; sharing this id makes retry fan-out count once"*）、`executionId`（*"duplicate deliveries of one execution count once even if other metadata diverge"*）、以及 `verifierDigest`+`artifactDigest` 兜底。**⚠️ 我们的 `streak` 没有这个概念：同一次失败被重试三次就是三次连续失败，两轮就触发隔离。**
+
+**⚠️ 三条"防自欺"原则，每条都直接对应面板设计（操作者问的第三件事）：**
+
+- **"0 分"必须与"未评估"分开显示。** `isGeneHealthAssessable` 的注释：一条全是 inert 或从没跑过的基因会得出 `successRate = 0`、`score = 0`，**而那个 0 的意思是"什么都不知道"，不是"知道它坏"** ⇒ *"the two must not render the same: **showing 0% for an unproven gene is the same class of lie as showing a self-reported 98%**"*。
+- **归一化分数【只能用于显示】，绝不能喂回选择。** `normalizeGeneHealthScore` 的注释：*"**Never feed this back into selection**: ranking consumes the raw score, and clamping there would make every penalized gene tie at 0."* 且负分**夹到 0 而不是把 [−0.4, 0.7] 线性映射到 [0,1]**，因为线性映射会把"毫无证据"（原始 0）放到进度条中间，*"which reads as a passing grade for a gene that has proven nothing"*。
+- **显示与决策读同一个函数。** `scanProbationGenes` 的注释：*"The **single source of truth** for the promote predicate — `autoPromoteProbationGenes` acts on exactly this, and `reuse-report --promote` displays it. **Never mutates the ledger.**"* ⇒ **面板不该有自己的判断逻辑，它和自动晋升必须调用同一个只读扫描。**
+
+**⚠️ 与本项目的实测对照（右列全部有 `file:line`）：**
+
+| EvoMap v2 | 本项目现状 |
+| :--- | :--- |
+| 健康分含**复用项**与**反模式惩罚** | 只有 `reliability = (successes+1)/(attempts+2)`（`gene.ts:239`）—— **无复用项、无反模式惩罚** |
+| 封禁：≥2 独立失败 **且信号覆盖 ≥60%** | 只有 `streak ≥ 2` 的隔离（`gene.ts:237`），**全局的、与本轮请求信号无关** |
+| 未拉过的臂 = **最高**优先级 | `lastSuccessAt === null ? 0`（**`gene.ts:240`**）—— **从没成功过的基因 recency 得 0，比一条 100 天前成功过的（≈0.1）还低** |
+| 晋升：≥2 真实成功且 0 失败，独立扫描 | 隔离只能靠"一次新成功"解除，**没有独立的晋升扫描** |
+| "未评估"与"0 分"分开 | **⚠️ 没有这个区分：拉普拉斯平滑让一条从没跑过的基因 `reliability = 1/2 = 0.5`** |
+
+**⚠️ 由对照推出的一个真缺陷（本轮最重要的发现，此前未记录）：我们的评分有一个【饿死陷阱】。** 一条从没成功过的基因拿到 `reliability = 0.5`、`recency = 0`，所以 `score = overlap + 0.5`（`gene.ts:241`）；一条已被证明的基因拿到 `overlap + reliability + 0.5·recency`。**⇒ 新基因在起跑线上就被压住，而它永远拿不到能把自己救出来的证据 —— 因为要拿证据就得先被选中。** **这正好解释了为什么"5 次没被选中就退休"在我们这套评分下【不安全】：那条基因可能从来就没被给过机会，把"没机会"读成"不行"，是把系统的偏见记成了基因的失败。** EvoMap 用 UCB1 的探索项解决同一件事（`explorationWeight: 1` 是独立于 reward 的一项），我们连这一项都没有。
+
+**⚠️ 那条 0.5 也不是无害的**：EvoMap 明确说把未评估显示成 0% 与自报 98% 是**同一类谎言**，而我们把未评估显示成 **50%**，读起来像"中等可靠"—— **比 0% 更容易骗人，因为它不像缺失值。**
+
+**采用（下一步做，本轮无代码）**：① **给 `selectGene` 加一个探索项**，形状照 UCB1 但**不用 +Infinity**（EvoMap 自己实测过：真库只有几条臂、几次拉取，+∞ 会让新基因直接压倒已验证的赢家）—— 用有限的"未试优先"加分，并把 `lastSuccessAt === null` 从"得 0"改成"得探索加分"；② **把隔离改成信号相对的**（照 `bans.d.ts` 的 `≥60% 信号覆盖`），一条基因对某类请求被封不等于全局出局；③ **给 `streak` 加"独立失败"去重**（至少 `rootAttemptId` 一道），否则重试风暴两轮就隔离；④ **"未评估"与"低分"分开**：`attempts === 0` 时不报 `reliability`，报"未评估"。
+
+**明确不采用**：**(a)** `UCB1_DEFAULTS` 的原始 +Infinity 探索（EvoMap 自己删了，理由已实测记录在案）；**(b)** 把归一化分数喂回排序（它明令禁止，理由是会压平惩罚）；**(c)** GDI 社交评分／能力市场／Validator 共识／跨节点继承（`SWARM_LOOP.md:174` 早已记录不采用，本轮无新证据推翻）；**(d) 不做"落选 N 次退休"** —— 本轮的核心结论就是它不成立。
+
+**⚠️ 面板设计因此有一条硬约束（回答操作者"不能泡坏代码结构"）**：面板必须是 `scanProbationGenes` 那种**只读扫描的消费者**，**显示与自动决策调用同一个函数**；而**压缩是另一回事**，它是存储里唯一的破坏性写，必须与面板分开、且必须【聚合】不能【删除】（D105 ② 已实测：`attempts`/`successes`/`streak` 就是从 outcome 行折叠出来的）。**⇒ 一个"清理"按钮如果直接截断日志，会把所有基因的战绩清零，而界面上看不出来（数字变 0 看起来像新建的库）。**
+
+**⚠️ 如实记未做/未读**：`.js` 实现全部混淆未读 ⇒ 只知设计与公式形状，不知具体代码路径；`ops/valueLedger.d.ts`（11,777 B，名字直指"价值账本"）、`algo/confidence.d.ts`、`algo/exploration.d.ts`、`algo/epigenetics.d.ts`、`algo/antiDistill.d.ts`、`schema/evolutionGraph.d.ts` **都已解出但未读**；`geneSelection.d.ts`（13,860 B，主选择逻辑）**未读** ⇒ **本轮关于"四层"的结论出自四个专项模块，主选择器如何组合它们未经核实**；v1→v2 之间还有什么设计变了，未查。
+
 ## 3. 实际采用状态（当前）
+
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
 | DSH顺序提交/演进纪律 | 原则部分借鉴，机制独立实现 | runtime顺序工具结果、session-store版本/严格读/inspect；无并发池、exclusive调度、冻结历史codec迁移链 |
