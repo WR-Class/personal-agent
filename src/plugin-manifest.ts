@@ -25,10 +25,27 @@
  *   defence every reference product that had any file protection implemented.
  *
  * ponytail: no marketplace, no dependencies, no version ranges, no auto-update.
- * The ceiling is that a manifest is a name, a version, and a list of the
- * directories it contributes. Contribution *discovery* (skills/, tools/) is later
- * slices; this file stops at "the manifest is well-formed and its paths are
- * contained".
+ * The ceiling is that a manifest is a name, a version, and the MCP servers it
+ * declares; this file stops at "the manifest is well-formed", never spawning
+ * anything itself — that is 丙-4's runtime wiring (`mcp-plugin.ts`), which reads
+ * what this file parses.
+ *
+ * ⚠️ **D122 correction**: an earlier revision of this file (D118, 乙-1) had a
+ * `tools` / `toolsDir` field for a prose-skill "second SkillProvider" plan (路 乙).
+ * The operator chose to go straight to 路 丙 (`REFERENCE_DECISIONS.md` §12.5) and
+ * that field was never read by anything — 乙 was never built. Removed rather than
+ * left in place: a field with no reader is a promise the code does not keep, and
+ * `mcpServers` below is what the manifest actually needs to express for 丙.
+ *
+ * ⚠️ **A manifest that declares `mcpServers` is declaring what to *execute*, which
+ * is a step up from D118's pure-data-only claim.** This file still parses without
+ * running anything — spawning is 丙-4's job, not this file's — but it is worth
+ * being honest that `command`/`args` here name a program the runtime will later
+ * spawn unsandboxed (路 C's whole model, `mcp-client.ts`'s header). The mitigating
+ * fact is unchanged from D118: `plugin.json` lives in the agent home, which
+ * `protectedRoots` already keeps outside every write tool's reach (`runtime.ts`,
+ * D50) — a model cannot write itself a new MCP server to spawn, only an operator
+ * placing the file by hand can.
  */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -41,24 +58,39 @@ export const PLUGIN_MANIFEST_VERSION = 1;
 export const PLUGIN_MANIFEST_NAME = "plugin.json";
 
 /**
+ * One MCP server a plugin declares. `command` is resolved by the OS the same way
+ * any spawned program is (PATH lookup included) — this is not a path checked for
+ * containment, because it names a *program*, not a file inside the plugin
+ * directory. `cwd` is the one path-shaped field here, and it IS checked to stay
+ * inside the plugin's own root, for the same reason `tools` was in D118: a
+ * server's working directory is the one thing this manifest can place under the
+ * plugin's own tree rather than pointing anywhere on disk.
+ */
+export interface McpServerDeclaration {
+  readonly command: string;
+  readonly args?: readonly string[];
+  /** Absolute, canonical, and proven inside the plugin root. Optional. */
+  readonly cwd?: string;
+}
+
+/**
  * A parsed plugin manifest. Deliberately minimal (adoption ① — convention-first,
- * tiny manifest): only identity and the optional directories it contributes.
+ * tiny manifest): identity plus the MCP servers it declares.
  *
  * `root` is the absolute, canonical plugin directory, added by the loader rather
- * than read from the file — a manifest cannot name its own location. Contribution
- * directories are stored relative and validated to resolve inside `root`.
+ * than read from the file — a manifest cannot name its own location.
  */
 export interface PluginManifest {
   readonly name: string;
   readonly version: string;
   /** Absolute canonical directory this plugin lives in. Loader-supplied. */
   readonly root: string;
-  /** Directory of read-only tool definitions this plugin contributes (乙-2). */
-  readonly toolsDir?: string;
+  /** Keyed by the server's name within this plugin — see `parseMcpServers`. */
+  readonly mcpServers?: Readonly<Record<string, McpServerDeclaration>>;
 }
 
 /** Fields a manifest may carry. Anything else is refused, not ignored. */
-const MANIFEST_KEYS: readonly string[] = ["name", "version", "tools"];
+const MANIFEST_KEYS: readonly string[] = ["name", "version", "mcpServers"];
 
 /**
  * Keys that would be an attempt to widen permissions from a plugin manifest.
@@ -146,13 +178,64 @@ export function parsePluginManifest(text: string, file: string, root: string): P
   const version = requireString(record.version, `${file} 缺 version 或 version 不是字符串`);
   if (version.trim() === "") throw new Error(`${file} 的 version 是空字符串`);
 
-  let toolsDir: string | undefined;
-  if (record.tools !== undefined) {
-    const rel = requireString(record.tools, `${file} 的 tools 必须是字符串（相对插件目录的路径）`);
-    toolsDir = containedPath(root, rel, file, "tools");
+  const mcpServers = record.mcpServers === undefined ? undefined : parseMcpServers(record.mcpServers, file, root);
+
+  return mcpServers === undefined ? { name, version, root } : { name, version, root, mcpServers };
+}
+
+/**
+ * Parse the `mcpServers` object: a map of server name to declaration. Keyed by
+ * name (rather than an array) for the same reason `skills.json`'s duplicate-id
+ * refusal exists — a JSON object cannot itself carry two keys with the same
+ * string, so uniqueness within one manifest is a property of the format rather
+ * than a check this code has to perform.
+ */
+function parseMcpServers(value: unknown, file: string, root: string): Readonly<Record<string, McpServerDeclaration>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${file} 的 mcpServers 必须是一个对象，形如 {"服务名":{"command":"…"}}`);
+  }
+  const record = value as Record<string, unknown>;
+  const names = Object.keys(record);
+  if (names.length === 0) {
+    throw new Error(`${file} 的 mcpServers 是空对象；不声明服务器就删掉这个字段`);
+  }
+  const servers: Record<string, McpServerDeclaration> = {};
+  for (const serverName of names) {
+    if (serverName.trim() === "") throw new Error(`${file} 的 mcpServers 含空字符串键名`);
+    servers[serverName] = parseMcpServerDeclaration(record[serverName], file, root, serverName);
+  }
+  return servers;
+}
+
+function parseMcpServerDeclaration(value: unknown, file: string, root: string, serverName: string): McpServerDeclaration {
+  const where = `mcpServers[${JSON.stringify(serverName)}]`;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${file} 的 ${where} 必须是一个对象，形如 {"command":"…"}`);
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!["command", "args", "cwd"].includes(key)) {
+      throw new Error(`${file} 的 ${where} 含未知字段 ${JSON.stringify(key)}（只接受 command、args、cwd）`);
+    }
+  }
+  const command = requireString(record.command, `${file} 的 ${where} 缺 command 或 command 不是字符串`);
+  if (command.trim() === "") throw new Error(`${file} 的 ${where} 的 command 是空字符串`);
+
+  let args: readonly string[] | undefined;
+  if (record.args !== undefined) {
+    if (!Array.isArray(record.args) || record.args.some((item) => typeof item !== "string")) {
+      throw new Error(`${file} 的 ${where} 的 args 必须是字符串数组`);
+    }
+    args = record.args as readonly string[];
   }
 
-  return toolsDir === undefined ? { name, version, root } : { name, version, root, toolsDir };
+  let cwd: string | undefined;
+  if (record.cwd !== undefined) {
+    const rel = requireString(record.cwd, `${file} 的 ${where} 的 cwd 必须是字符串（相对插件目录的路径）`);
+    cwd = containedPath(root, rel, file, `${where}.cwd`);
+  }
+
+  return { command, ...(args === undefined ? {} : { args }), ...(cwd === undefined ? {} : { cwd }) };
 }
 
 /**

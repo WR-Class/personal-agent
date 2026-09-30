@@ -1,5 +1,5 @@
 /**
- * Plugin discovery and manifest parsing (M4, D118 — 乙-1).
+ * Plugin discovery and manifest parsing (M4, D118 — 乙-1; `mcpServers` added D123 — 丙-4).
  *
  * Two kinds of assertion, the same split as skill-catalogue.test.ts:
  * - Parse-level: every refusal branch of parsePluginManifest, because a loader
@@ -48,12 +48,32 @@ describe("plugin manifest", () => {
     assert.equal(m.name, "demo");
     assert.equal(m.version, "1.0.0");
     assert.equal(m.root, ROOT);
-    assert.equal(m.toolsDir, undefined);
+    assert.equal(m.mcpServers, undefined);
   });
 
-  it("resolves a contained tools directory to an absolute path inside the plugin", () => {
-    const m = parses({ name: "demo", version: "1.0.0", tools: "tools" });
-    assert.equal(m.toolsDir, join(ROOT, "tools"));
+  it("parses a single MCP server declaration with command only", () => {
+    const m = parses({ name: "demo", version: "1.0.0", mcpServers: { main: { command: "node" } } });
+    assert.deepEqual(m.mcpServers, { main: { command: "node" } });
+  });
+
+  it("parses args and a contained cwd", () => {
+    const m = parses({
+      name: "demo",
+      version: "1.0.0",
+      mcpServers: { main: { command: "node", args: ["server.js", "--flag"], cwd: "server" } },
+    });
+    assert.deepEqual(m.mcpServers?.main?.args, ["server.js", "--flag"]);
+    assert.equal(m.mcpServers?.main?.cwd, join(ROOT, "server"));
+  });
+
+  it("parses multiple named servers, keyed by name", () => {
+    const m = parses({
+      name: "demo",
+      version: "1.0.0",
+      mcpServers: { a: { command: "node" }, b: { command: "python" } },
+    });
+    assert.deepEqual(Object.keys(m.mcpServers ?? {}).sort(), ["a", "b"]);
+    assert.equal(m.mcpServers?.b?.command, "python");
   });
 
   it("refuses non-object, non-JSON, and array top levels", () => {
@@ -68,8 +88,8 @@ describe("plugin manifest", () => {
     }
   });
 
-  it("refuses an unknown field rather than ignoring it", () => {
-    refuses({ name: "demo", version: "1.0.0", mcpServers: {} }, /含未知字段/);
+  it("refuses an unknown top-level field rather than ignoring it", () => {
+    refuses({ name: "demo", version: "1.0.0", tools: "tools" }, /含未知字段/);
   });
 
   it("refuses a missing or blank name and version", () => {
@@ -84,9 +104,35 @@ describe("plugin manifest", () => {
     refuses({ name: "other", version: "1.0.0" }, /与所在目录名.*不一致/);
   });
 
-  it("refuses a tools path that escapes the plugin directory", () => {
-    refuses({ name: "demo", version: "1.0.0", tools: "../elsewhere" }, /指向插件目录之外/);
-    refuses({ name: "demo", version: "1.0.0", tools: join("C:", "abs") }, /必须是相对路径/);
+  it("refuses mcpServers that is not an object, or is empty", () => {
+    refuses({ name: "demo", version: "1.0.0", mcpServers: [] }, /必须是一个对象/);
+    refuses({ name: "demo", version: "1.0.0", mcpServers: "x" }, /必须是一个对象/);
+    refuses({ name: "demo", version: "1.0.0", mcpServers: {} }, /是空对象/);
+  });
+
+  it("refuses a server declaration missing or blank command", () => {
+    refuses({ name: "demo", version: "1.0.0", mcpServers: { main: {} } }, /缺 command/);
+    refuses({ name: "demo", version: "1.0.0", mcpServers: { main: { command: "  " } } }, /command 是空字符串/);
+  });
+
+  it("refuses an unknown field inside a server declaration", () => {
+    refuses({ name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", url: "x" } } }, /含未知字段/);
+  });
+
+  it("refuses args that is not a string array", () => {
+    refuses({ name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", args: "x" } } }, /args 必须是字符串数组/);
+    refuses({ name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", args: [1] } } }, /args 必须是字符串数组/);
+  });
+
+  it("refuses a server cwd that escapes the plugin directory", () => {
+    refuses(
+      { name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", cwd: "../elsewhere" } } },
+      /指向插件目录之外/,
+    );
+    refuses(
+      { name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", cwd: join("C:", "abs") } } },
+      /必须是相对路径/,
+    );
   });
 
   it("treats a missing plugins directory as no plugins", async () => {
@@ -97,12 +143,16 @@ describe("plugin manifest", () => {
   it("discovers plugins and skips directories without a manifest", async () => {
     const fixture = await createTestFixture("plugin-discover");
     await writePlugin(fixture.home, "alpha", { name: "alpha", version: "1.0.0" });
-    await writePlugin(fixture.home, "beta", { name: "beta", version: "2.1.0", tools: "tools" });
+    await writePlugin(fixture.home, "beta", {
+      name: "beta",
+      version: "2.1.0",
+      mcpServers: { main: { command: "node", args: ["server.js"] } },
+    });
     // A directory with no plugin.json is not a plugin.
     await mkdir(join(pluginsDir(fixture.home), "not-a-plugin"), { recursive: true });
     const found = await discoverPlugins(fixture.home);
     assert.deepEqual(found.map((p) => p.name), ["alpha", "beta"], "按名字排序，跳过无清单的目录");
-    assert.equal(found[1]?.toolsDir, join(pluginsDir(fixture.home), "beta", "tools"));
+    assert.deepEqual(found[1]?.mcpServers?.main, { command: "node", args: ["server.js"] });
   });
 
   it("name uniqueness comes from name-equals-directory, so a mismatched copy is refused", async () => {

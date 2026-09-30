@@ -20,7 +20,9 @@ import { GeneStore } from "./gene-store.ts";
 import { CycleStore } from "./cycle-store.ts";
 import { distillGuards, unmintedDrafts } from "./distill.ts";
 import { inductGenes, uncoveredCandidates } from "./induct.ts";
-import { agentHomeProblem } from "./tool-environment.ts";
+import { agentHomeProblem, buildToolEnvironment } from "./tool-environment.ts";
+import { loadMcpPlugins } from "./mcp-plugin.ts";
+import type { LoadedMcpPlugins } from "./mcp-plugin.ts";
 import { configuredContextWindows, configuredProtectedRoots, resolveRuntimePaths } from "./security-config.ts";
 import { configureProvider, loadProvider } from "./cli-config.ts";
 import { configRules, loadAgentConfig, wideningRules } from "./config.ts";
@@ -334,6 +336,11 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
   const interactive=options.prompt===undefined;
   let io=providedIO;
   if(interactive&&!io)io=createTerminal();
+  // Declared here, outside the try block below, so the outer finally can close
+  // every spawned MCP server even if something inside the try throws before
+  // reaching its own end — a try-scoped `const` would not be visible there
+  // (this was caught by `tsc`, not by reading: TS2304 "Cannot find name").
+  let mcpPlugins: LoadedMcpPlugins = { tools: [], rules: [], errors: [], close() {} };
   try {
     let adapter:ModelAdapter;
     if(options.echo)adapter=createEchoAdapter();
@@ -385,7 +392,27 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
         reason:`configuration allows "${widened.tool}" without asking${widened.reason?`: ${widened.reason}`:""}`,
         rule:"config:widen"});
     }
-    const rules=[...configuredRules,...tier.rules];
+    // M4 路 C (丙-4): MCP-bridged tools, loaded once per process before any
+    // runtime exists — `AgentRuntime.tools`/`.rules` are constructor arguments,
+    // not something grown afterward (`runtime.ts`), and spawning a server plus
+    // asking it for its tools is inherently async while `createRuntime` below is
+    // a synchronous factory. `read-only` never loads plugins at all, rather than
+    // loading them and filtering the result: every MCP-bridged tool is
+    // `readOnly: false` (`mcp-bridge.ts`'s header — never trusting a server's own
+    // claim), so admitting one into a tier that promises "writing is not
+    // available in this session" would make that promise false the moment a
+    // plugin is installed. Not spawning the server at all is the stronger
+    // guarantee — an untrusted child process that never starts cannot matter,
+    // where one started and merely hidden from `available` still ran.
+    if (tier.name !== "read-only") {
+      mcpPlugins = await loadMcpPlugins(paths.agentHome, buildToolEnvironment({
+        workspaceRoot: paths.workspaceRoot, agentHome: paths.agentHome, protectedRoots: extraRoots,
+      }));
+    }
+    for (const failure of mcpPlugins.errors) {
+      write(`[MCP 插件 ${failure.pluginName}.${failure.serverName} 未能启动：${failure.message}]\n`);
+    }
+    const rules=[...configuredRules,...mcpPlugins.rules,...tier.rules];
     // Built from the tier's tool list, so a posture that does not offer a tool
     // makes it genuinely absent rather than merely refused (D28/D32). Configuration
     // cannot add a tool back: it reaches the rule table, never the registry.
@@ -416,9 +443,15 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
         if(!factory) throw new Error(`档位声明了工具 ${JSON.stringify(name)}，但没有对应的工厂；表里有的是 ${Object.keys(allTools).join(", ")}`);
         return factory();
       });
+      // MCP-bridged tools are folded in alongside the tier's own, and their
+      // names are added to the `available` list `ToolRegistry` is given below —
+      // a tool present in the registry but absent from `available` is refused
+      // exactly like one the tier never named (tools.ts), so skipping this would
+      // leave every bridged tool registered yet permanently unreachable.
+      const allAvailableNames=[...tier.tools,...mcpPlugins.tools.map(t=>t.name)];
       return new AgentRuntime({adapter,store,sessionId,
       workspaceRoot:paths.workspaceRoot,home:paths.agentHome,protectedRoots:extraRoots,geneStore,cycleStore,
-      tools:new ToolRegistry(tierTools,tier.tools),rules,maxSteps:options.maxSteps,
+      tools:new ToolRegistry([...tierTools,...mcpPlugins.tools],allAvailableNames),rules,maxSteps:options.maxSteps,
       maxToolCallsPerStep:options.maxToolCallsPerStep,maxToolCallsPerRun:options.maxToolCallsPerRun,deadlineMs:options.deadlineMs,maxContextBytes:options.maxContextBytes,maxContextTokens:options.maxContextTokens,
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
@@ -471,6 +504,11 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     // count is visible rather than the silence being ambiguous.
     const stopped = shutdownJobs();
     if (stopped > 0) write(`[已停止 ${stopped} 个后台作业]\n`);
+    // Every spawned MCP server is a real child process outliving this function
+    // otherwise — the same reasoning as `shutdownJobs` above, applied to 丙-4's
+    // own children. `mcpPlugins` always exists here (the read-only branch assigns
+    // the no-op EMPTY-shaped value, not undefined), so this runs unconditionally.
+    mcpPlugins.close();
     if(interactive&&!providedIO)io?.close();
   }
 }
