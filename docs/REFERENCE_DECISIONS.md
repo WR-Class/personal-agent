@@ -3127,3 +3127,42 @@ const manifest: DshPackageManifest = {
 | D45 | **把真机验证做成常规动作：`npm run test:live`（用户选 B："不能一直欠着"；本片有代码，真机 5/5 通过）**。**为什么需要它**：本项目近几轮**三个真 bug 全部 typecheck 干净、单测全绿，只在真跑时才现形**（工具注册错档位、列出却被规则拒绝、额度问题被报成能力问题）。**它们的共同点**是"**项目内部两处不一致**"，而**注入 `fetch` 的测试恰好与这两处都一致**，所以照不出来。**这类 bug 的可信验证单位就是真机**，故把真机做成一条命令而不是一个挂账意图。**(1) 形态（用户选的）**：`npm test` 保持快、免凭据（416 过）；`npm run test:live` 跑真机（本轮 **180 秒**）。**四条自律**：**① 跳过不等于通过**——无凭据时每条报 `skipped` 并写明"未测量不等于通过"，绝不报绿；**② 不许静默退化成单测**——全部走真 CLI；**③ 没有工具调用的答案不算证据**（早前真出过"答案对、`inspect_file` 一次没调"）；**④ 只碰自己的 fixture**。**(2) 覆盖的就是出过 bug 的四处**：预检能驱动 agent、工作区外文件的读（未授权拒绝 / 授权后可读且**必须真的调 `inspect_file`**）、写入路径、被拒时是否诚实。**(3) 命名反而要"无聊"——两个更聪明的方案都实测更差**：**命令行 glob 取反不被支持**，会**静默把 live 文件算进去**（快测悄悄长出网络依赖）；**`--experimental-test-tag-filter` 会破坏 hook 顺序**——**实测：异步 `before` + 读取其赋值状态的 `after`，`after` 会在 `before` 仍 await 时先跑并读到 `undefined`；同步 `before` 不受影响**。**这是实验性开关的 bug，而本套件恰好就是它破坏的形状**（异步建 fixture + `after` 清理）。故**改用文件名排除**：`live.e2e.ts` 不在 `test/*.test.ts` 的匹配内。**(4) 第一轮真机跑出 2 个失败，其中 1 个是我的测试错、产品是对的**——"**被拒路径泄漏了字节**"我报得很重，**但先查证后确认：`outside/` 目录已被前面那个"授权后可读"的用例授予过**，所以模型读的是**合法路径**、返回真字节**完全正确**。**测拒绝必须用一个别的用例从未授权的目录**，已改为独立的 `never-granted/`，并加断言"授权清单不得增长"。**另一个失败是步数上限**（6 步不够写完读回），改 12 步——**那个失败在测预算而不是测能力**。**教训：真机测试自己也会有 bug，"产品失败"的报警必须先证明不是测试的错。** **测试基线仍 417（416 过 / 0 失败 / 1 跳过）；真机 5/5** |
 
 | D46 | **给模型真正的手脚：`run_command` + 权限三档（用户认可"按成熟产品的形状做"；本片有代码，真机 7/7 通过）**。**为什么**：用户问"**我的 agent 不能跑命令,那他有什么意义?只是读文件?逆向、渗透、安全审查修改还能做吗?**"——**这个问题推翻了我前面几轮的方案**。我读了 9 个 agent 的源码对照：**crush 的 `BashParams.Command string`（一条完整命令字符串）、aider/claude-code/codex/gemini-cli/goose/grok-cli/opencode/qwen-code 全都有等价物**，**没有一个产品是"只能读文件"的**。**我之前的 argv 方案错在哪**：它把安全放在"**参数怎么传**"（结构化→危险字符写不出来），**代价是只能跑清单里的程序**，于是干不了活；而且它**把两件事混为一谈**——*命令怎么传*（可以做到安全）与*命令能不能跑*（做不到）。**不是"我拦住了 shell 注入",是"那种写法在 argv 世界里没有意义"**；我拿这个结构事实当安全承诺讲,是同一个错误的第二次犯。**成熟产品怎么做的（实测源码）**：**① 权限都是三档**——DSH(仅可查看/工作区内修改/完全权限)、Trae(手动审批/自动审批/完全访问)、goose(`Chat`/`Approve`/`SmartApprove`/`Auto`,定义最清楚)、claude-code(`default`/`acceptEdits`/`plan`/`dontAsk`/`auto`/`bypassPermissions`)、codex(沙箱档 `read-only`/`workspace-write`/`danger-full-access` × 审批档 `untrusted`/`on-request`/`granular`)、gemini-cli/qwen-code(`default`/`yolo`)。**② 手脚一律是 shell + 一个命令字符串**,配后台作业(crush 默认 60 秒转后台)/超时/输出上限(30000)。**③ 安全不靠"拦住",靠分档询问**：goose `permission_inspector.rs:159-196` 的五层顺序是——用户设置 → **工具自带 `read_only_hint` 标注**(MCP 标准字段) → 扩展管理必问 → 交 LLM 判只读 → **默认问(fail-closed)**。**本片实现**（**复用**已有 `tiers.ts` 三档与 `rule-table.ts`，未新造）：**① `src/shell-tool.ts`**——真 shell(`cmd.exe /d /s /c` 或 `/bin/sh -c`)，**不设 `shell: true`**（平台 shell 直接被 spawn，命令是它的*输入*而非二次引号层）；60KB 输出上限 + 120 秒超时 + 2000 行上限；**缓冲后一次性解码**（多字节跨块会碎，已实测过）；**非零退出码当正常结果返回**（`git log` 无提交就是非零，那是信息不是故障）。**② 环境必须来自 `requireToolEnvironment`**——`toolEnvironment` 把 `HOME`/`TMP`/`APPDATA` 都指向 agent home，**继承父进程就等于命令能读写操作员的 dotfiles，而文件工具仍报告工作区是边界**。**③ 档位真的管它**：`read-only` 档**不含**该工具（缺席而非拒绝）、`workspace-write` 规则为 `approve`、`full-access` 为 `allow`。**④ `run_command` 归入 `WRITE_TOOLS`**（虽然很多命令只读，但工具本身不做此承诺，假设它等于对任意输入瞎猜），并**从 `WRITE_TOOLS` 派生 `APPROVAL_TOOLS`**，避免"档位提供、规则表拒绝"那个缺陷重演。**真机跑出两个真 bug，都已修**：**①（我的 bug）`full-access` 档半残**——文件工具全部报 `no approval channel is configured`，因为**规则表的 `allow` 从未传到工具**（`registry` 只处理 `deny`），而写工具**无条件调用 `approveExact`**。修法：`ToolContext` 增 `preApproved`（**仅 `allow` 置位**，逐次传入以免泄漏到下一次调用），`approveExact` 见它即不问，`batch_files` 同步处理。**②（更要命）`workspace-write` 档下命令照跑**——实测 `echo hi > test.txt` 成功、文件真的出现，因为**我在 `run_command` 里忘了调用 `approveExact`，写了工具却没让档位管它**；这正是该档最需要管的能力。修后真机复验：该档 + 非交互 → **命令被拒、工作区为空**，且模型正确判断"是环境没有批准通道，不是命令的问题"。**测试 431 通过 / 0 失败**（新增 `test/shell-tool.test.ts` 13 项，**含两条专测"规则的 allow 要真的到达工具"**——这是本轮缺陷的形状，单测全绿而真机才现形）；**真机 7/7**（新增"真的构建并验证一个程序"与"该问而无人可问时必须拒绝"）。**教训：工具的档位属性不是写进列表就生效，必须真的在 `execute` 里查** |
+
+## 12. M4（Skill 与插件）跨产品取证 —— 三家实读，本轮
+
+**目的**：进入 M4 前记下读过什么、采用/拒绝什么。三家源码由子代理只读取证,全部带 `file:line`,未改任何参考仓库。**先行结论：业界 M4 没有真正的"插件代码沙箱";隔离几乎全部来自"插件代码跑在独立进程(MCP 子进程)或需显式同意的 hook",而不是能力沙箱。**
+
+### 12.1 三家形态对比（实读证据）
+
+| 维度 | claude-code | goose | gemini-cli |
+|---|---|---|---|
+| **清单** | `.claude-plugin/plugin.json`,**仅 `name` 必填**(`manifest-reference.md:13-40`) | `ExtensionConfig` Serde 标签枚举,四变体 stdio/builtin/platform/streamable_http(`extension.rs:154-255`) | `gemini-extension.json`(name/version/mcpServers/contextFileName/excludeTools/settings/themes/plan)(`extension.ts:24-49`);**磁盘类型与运行时类型刻意分离**(`config.ts:400-443`) |
+| **贡献什么** | 命令/子agent/skill/hooks/MCP(`plugins/README.md:5-9`) | **工具(经 MCP)**,available_tools allowlist(`extension.rs:361-378`) | **MCP 贡献工具** + skill/agent/policy/hook/context/theme;**扩展不能直接注册核心工具,只能 excludeTools 排除**(`config.ts:2445-2469`) |
+| **发现方式** | **约定目录自动发现**,清单只指路(`plugin-structure/SKILL.md:20-37`) | 配置声明式条目 | **约定目录**(skills/agents/policies/hooks),清单只放声明式要点(`extension-manager.ts:708-999`) |
+| **进程边界** | hooks=shell,MCP=子进程 | stdio=子进程 / builtin=进程内 / platform=进程内+直接访问 agent(**四档信任**) / http=远程 | 扩展代码=MCP 子进程或被同意的 hook,**无进程内插件** |
+| **能力/权限门** | 组件级(命令 allowed-tools)+ hook allow/deny/ask;无清单级能力清单 | available_tools(空=全部)+ 工具级 AlwaysAllow/AskBefore/NeverAllow | **粗粒度:安装 consent + workspace 信任 + 管理员 allowlist**,非能力令牌;**MCP 的 trust 自声明被剥离**(`extension-manager.ts:1245-1249`) |
+| **供应链检查** | 无(路径包含 + 组织策略) | **stdio 启动前查 npx/uvx 包名 → OSV,只拦 MAL-*,蓄意 fail-open**(`extension_malware_check.rs:44-48`) | **完整性哈希**:更新前 verifyExtensionIntegrity INVALID 即拒(`extensions/update.ts:56-73`) |
+| **沙箱** | **无**(含 hooks/MCP=受信任代码) | **无**(env 过滤 31 高危变量 `extension.rs:88-151`,非沙箱) | **无代码沙箱**(consent.ts:21-23 明写不审查);有**路径包含强制**(禁绝对/`..`/符号链接逃逸 `extension-manager.ts:1305-1367`) |
+
+### 12.2 三家各自最值得学的一条
+
+- **claude-code**:约定优先、清单极简;丰富贡献靠标准目录自动发现;`${CLAUDE_PLUGIN_ROOT}` 令牌让包可重定位。
+- **goose**:信任分档(进程内直接访问 agent vs 远程 MCP 明确分开)+ 供应链风险信号(OSV 是风险门非沙箱,fail-open);env 过滤 31 高危变量 —— **我们 `tool-environment.ts` 已有等价物**。
+- **gemini-cli**:**diff-based 重同意 + 每配置 SHA-256 签名**(风险面真变化才重弹);磁盘清单类型与运行时类型分离。
+
+### 12.3 我们的地基（实读现状）
+
+- **skill 缝已建成**:`skill-catalogue.ts:257-350` 有 `SkillProvider`(三角色 + token 所有权 + `order` 优先级 + **拒绝合并语义**:最近 provider 全盘 shadow)。内置 provider = agent home 的 `skills.json`(`order:100`)。
+- **现有 skill = prompt-only**:`{id, scenarios, prompt, priority}`,严格校验、**拒绝权限字段**、**只读不可写**(agent home 在 protectedRoots 内)、**最低权威**(五块系统提示最底层)。
+- **工具契约**:`Tool.readOnly: boolean`,注释明写 **"Non-readOnly tools are currently denied by the registry"**(`tools.ts:145-146`)⇒ **插件若要贡献可写工具,这是第一道硬门**。
+- **⇒ 根本差异**:我们只有"prose skill"流派(= claude/crush/qwen 的 SKILL.md 同类),**没有"MCP/进程工具"流派**;且我们**刻意拒绝 workspace 级来源**(`skill-catalogue.ts:10-17`,拒 WorkBuddy 第二级)——比三家都严。
+
+### 12.4 采用 / 拒绝（进入实现前的取舍，带触发条件）
+
+- **采用①(约定优先的清单)**:插件 = 目录 + 极简 manifest(`name` 必填),贡献靠约定子目录发现。理由:三家一致,且 `skill-catalogue.ts:42-45` 早写过同样天花板。
+- **采用②(diff-based 重同意 + 配置签名)**:插件风险面变化时才需操作员重新批准。理由:gemini 独有、最省打扰;与本项目"放宽项逐条审计"同源。
+- **采用③(路径包含强制)**:插件贡献的任何路径禁绝对/`..`/符号链接逃逸。理由:三家里有防护的都做了,与 agent home 位置保护(D50)同思路。
+- **⚠️ 待裁决核心决策(交操作员)**:**要不要迈进"插件贡献真实工具"流派**。三形状:**(甲)** 只扩展 prose skill(第二个 SkillProvider,插件目录里的 SKILL.md)——**零新信任面、纯声明式**;**(乙)** 插件贡献**只读工具**(过 `Tool.readOnly` 那道门)——有能力面但受现有档位/规则表约束;**(丙)** 完整 MCP 子进程流派——能力最强,但引入进程管理 + 供应链信任,最大一步。
+- **明确拒绝(带理由)**:**不做插件代码沙箱**(三家都没有,自建无先例支撑且投入巨大;本项目隔离一贯来自位置保护 + 最低权威);**不采纳 workspace 级插件来源**(`skill-catalogue.ts:10-17` 已拒同一威胁);**不让插件自声明 trust**(gemini 剥离 MCP trust 是对的)。
+
+**⚠️ 蜂群纪律连续第三十轮无法执行**,归因同 D102 ⑤(a)。**本节纯取证 + 取舍,零产品代码改动**。
