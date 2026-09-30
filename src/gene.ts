@@ -253,5 +253,11 @@ export function selectGene(
   const ranked = scored
     .filter((candidate) => candidate.excluded === null)
     .sort((a, b) => b.score - a.score || a.address.localeCompare(b.address));
-  return { selection: ranked[0] ?? null, ranked };
+  const selection = ranked[0] ?? null;
+  // Equal scores mean the line above chose by address order, i.e. by the
+  // alphabetical position of a content hash. Kept, because a selector that is not
+  // deterministic stops being auditable; reported, because a choice made by an
+  // arbitrary string must not look like one made by evidence (D107).
+  const runnerUp = ranked[1];
+  return { selection, ranked, tieBrokenByAddress: selection !== null && runnerUp !== undefined && runnerUp.score === selection.score };
 }

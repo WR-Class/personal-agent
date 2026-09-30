@@ -151,6 +151,24 @@ export interface GeneSelection {
   readonly selection: ScoredCandidate | null;
   /** Live candidates, best first. */
   readonly ranked: readonly ScoredCandidate[];
+  /**
+   * True when the winner and the runner-up scored identically, so the ordering
+   * that actually chose between them was `address.localeCompare` — a content hash's
+   * alphabetical order, which has nothing to do with capability (D107).
+   *
+   * The tie-break itself is not the defect and is deliberately kept: a selector
+   * must be deterministic, or the same library stops giving the same answer. What
+   * was wrong is that it decided *silently*, so a choice made by an arbitrary
+   * string order was indistinguishable from one made by evidence. EvoMap states the
+   * same rule for its own selector — 「可解释的选择决策（禁黑盒）」 — and abstains
+   * outright when the spread cannot discriminate (`plateau_flat_match`).
+   *
+   * Reporting it is the minimal honest step and a prerequisite for the next one:
+   * the drift stage D107 adopts needs to know when the ranking cannot tell
+   * candidates apart, and this flag is exactly that fact. Callers that must not
+   * act on an arbitrary choice can now check it; nothing is forced to.
+   */
+  readonly tieBrokenByAddress: boolean;
 }
 
 export interface TaskStateStep {
