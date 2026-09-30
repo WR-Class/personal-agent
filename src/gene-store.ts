@@ -16,6 +16,8 @@ import { dirname } from "node:path";
 
 import {
   DEFAULT_SELECTION_POLICY,
+  computeDriftIntensity,
+  driftIndex,
   selectGene,
   type Gene,
   type GeneExpression,
@@ -51,6 +53,22 @@ export type GeneStoreRecord =
      * not what a strategy should be (D17).
      */
     readonly tools?: readonly string[];
+    /**
+     * Whether drift, not the score, chose the gene this outcome belongs to (D108).
+     *
+     * Optional, and it stays optional rather than becoming required: every outcome
+     * row already written predates drift, and an append-only log cannot be
+     * back-filled without rewriting it — which would destroy exactly the property
+     * that makes crash recovery here a truncated-tail check instead of a repair
+     * procedure. A missing field therefore reads as "chosen by score", which was
+     * true of every round before this one.
+     *
+     * ⚠️ It is folded into the outcome row rather than written as a separate record
+     * because a second row per round would roughly double log growth (measured at
+     * 232–560 B per outcome row), and unbounded growth is the question that started
+     * this whole line of work.
+     */
+    readonly drifted?: boolean;
   }
   /**
    * A gene taken out of selection (D105). Append-only like everything else here:
@@ -104,14 +122,39 @@ export interface AppliedGene {
    * prompt says what to prove, this decides whether it was proven.
    */
   readonly validation: Gene["validation"];
+  /**
+   * Whether drift, not the score, chose this gene (D108).
+   *
+   * Carried rather than inferred, and it must reach the outcome row: a round whose
+   * gene was picked at random from the top-N is not the same evidence as one whose
+   * gene won on score, and a log that cannot tell them apart would credit or blame
+   * the gene for a choice the selector made. That is precisely the silence D107
+   * removed for tie-breaks, and wiring drift without this field would rebuild it one
+   * stage later.
+   */
+  readonly drifted: boolean;
 }
 
 export class GeneStore {
   private records: GeneStoreRecord[] | null = null;
   private readonly path: string;
+  /**
+   * The entropy source for drift selection (D108). Injectable so a test can pin it,
+   * because `driftIndex` promises `rng()` is called at most twice and a test that
+   * cannot predict the draws cannot tell which branch it exercised.
+   *
+   * ⚠️ It defaults to `Math.random` rather than to "no drift". The alternative —
+   * drift off unless a caller opts in — is how a mechanism ends up shipped and dead,
+   * which is the defect class this project has now hit three times
+   * (`forbiddenPaths`, `retire`, and the overrun signal with no consumer). Tests that
+   * need determinism inject a seeded rng; that is the correct fix, and it is the same
+   * shape EvoMap documents for its own `driftSelect`.
+   */
+  private readonly rng: () => number;
 
-  constructor(path: string) {
+  constructor(path: string, options: { rng?: () => number } = {}) {
     this.path = path;
+    this.rng = options.rng ?? Math.random;
   }
 
   /** Parse the log once; later appends update the in-memory fold. */
@@ -165,6 +208,7 @@ export class GeneStore {
       signals?: readonly string[];
       evidence?: readonly string[];
       tools?: readonly string[];
+      drifted?: boolean;
     },
     at: number = Date.now(),
   ): Promise<void> {
@@ -298,9 +342,21 @@ export class GeneStore {
     const candidates = [...state.genes.entries()]
       .filter(([address]) => !state.retired.has(address))
       .map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression }));
-    const { selection } = selectGene(candidates, request, DEFAULT_SELECTION_POLICY, now);
-    if (!selection) return undefined;
-    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection) };
+    const { ranked } = selectGene(candidates, request, DEFAULT_SELECTION_POLICY, now);
+    if (ranked.length === 0) return undefined;
+    // Drift runs after scoring and picks an index into the ranked list, so
+    // `selectGene` itself stays deterministic — the same library still gives the
+    // same ranking, and only the choice from it can vary (D107).
+    //
+    // Intensity is computed from the live pool, not the whole library: a retired
+    // gene is not a candidate, so counting it would understate how often the
+    // remaining ones get tried. Maturity is total attempts across that pool, so an
+    // old but idle library has not earned the low-intensity floor.
+    const totalAttempts = candidates.reduce((sum, candidate) => sum + candidate.expression.attempts, 0);
+    const intensity = computeDriftIntensity(ranked.length, totalAttempts);
+    const { index, drifted } = driftIndex(ranked.length, intensity, this.rng);
+    const selection = ranked[index] ?? ranked[0]!;
+    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection), drifted };
   }
 }
 

@@ -574,6 +574,15 @@ export class AgentRuntime {
   private outcomeSpec: { intent: TaskIntent; signals: readonly string[] } | undefined;
   /** Tools this round actually called, in order (D17). */
   private outcomeTools: string[] | undefined;
+  /**
+   * Whether drift, not the score, chose this round's gene (D108).
+   *
+   * Carried alongside the address for the same reason the address is: the outcome
+   * row is the only place a round's provenance survives, and a gene picked at random
+   * from the top-N must not be credited or blamed as though it had won on evidence.
+   * `false` when no gene was applied, so the field never reads as "unknown".
+   */
+  private outcomeDrifted: boolean | undefined;
   /** Cumulative writes for the cycle in flight (D18). */
   private writeLedger: LedgerState = { files: [], lines: 0 };
   private writeBudget: WriteBudget;
@@ -719,9 +728,11 @@ export class AgentRuntime {
     const address = this.outcomeAddress;
     const spec = this.outcomeSpec;
     const tools = this.outcomeTools;
+    const drifted = this.outcomeDrifted;
     this.outcomeAddress = undefined;
     this.outcomeSpec = undefined;
     this.outcomeTools = undefined;
+    this.outcomeDrifted = undefined;
     if (address === undefined || !this.geneStore) return;
     await this.geneStore.appendOutcome({
       address,
@@ -732,6 +743,10 @@ export class AgentRuntime {
       ...(spec ? { intent: spec.intent, signals: spec.signals } : {}),
       // The proven tool order is what induction may build on — and nothing more.
       ...(tools ? { tools } : {}),
+      // Only written when true, so rows from before drift keep their exact bytes and
+      // a log reader can still tell "chosen by score" from "field did not exist yet"
+      // by the absence of the key rather than by a value that was never recorded.
+      ...(drifted ? { drifted } : {}),
       evidence: evaluation.evidence,
     });
   }
@@ -810,6 +825,7 @@ export class AgentRuntime {
     // ends, an attempted round journals an outcome. A refused spec (above)
     // never reaches here, so a hard refusal still leaves no trace.
     this.outcomeAddress = applied?.address ?? null;
+    this.outcomeDrifted = applied?.drifted ?? false;
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
     this.outcomeTools = [];
     // A fresh cycle starts with an empty ledger. A gene's constraints bound the

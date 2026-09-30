@@ -189,6 +189,62 @@ describe("gene store", () => {
     assert.equal(text.split("\n").filter((line) => line !== "").length, 2, "追加式：一条基因加一条退休，没有重写任何旧行");
   });
 
+  // D108: drift wired into selectFor, and the choice recorded. Two tests, because
+  // the two halves fail differently — drift that never fires is a dead mechanism,
+  // while drift that fires unrecorded rebuilds exactly the silence D107 removed for
+  // tie-breaks.
+  it("lets an injected rng drive drift, and reports that drift chose", async () => {
+    const store = new GeneStore(join(fixture.root, "drift-wired.jsonl"), {
+      // intensity for a 2-gene pool with no attempts is 1/sqrt(2) + 0.3, clamped to
+      // 1, so the first draw always drifts and the second picks the window slot.
+      rng: (() => { const draws = [0.5, 0.9]; let n = 0; return () => draws[n++] ?? 0; })(),
+    });
+    const request = { intent: "build" as const, signals: ["snippet"], text: "用 snippet 替换" };
+    const first = mintGene(draft({ name: "drift-first" }));
+    const second = mintGene(draft({ name: "drift-second" }));
+    assert.notEqual(first.address, second.address, "前提：两条基因内容不同，否则地址相同、池里只有一条");
+    await store.appendGene(first, NOW);
+    await store.appendGene(second, NOW + 1);
+    const ranked = selectGene(
+      [...(await store.state()).genes.entries()].map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression })),
+      request, DEFAULT_SELECTION_POLICY, NOW + 2,
+    ).ranked;
+    assert.equal(ranked.length, 2, "前提：两条都过了硬门，否则漂移无处可漂");
+    const applied = await store.selectFor(request, NOW + 2);
+    assert.ok(applied !== undefined);
+    assert.equal(applied.drifted, true, "rng 的第一个数低于强度 ⇒ 必须漂移，并且必须【报出来】");
+    assert.notEqual(applied.address, ranked[0]!.address, "漂移必须真的换了人，否则这个字段在说谎");
+
+    // ⚠️ A fresh 2-gene pool has intensity 1/sqrt(2) + 0.3 = 1.007, clamped to 1,
+    // so drift is certain and no draw can avoid it. That is the intended
+    // anti-starvation behaviour rather than a bug, and pinning it here is what stops
+    // someone "fixing" the clamp later without noticing that small pools would stop
+    // exploring at all. The only draw that does not drift is exactly 1, which
+    // `Math.random` never returns — so this asserts the operator `!(roll < clamped)`
+    // at its boundary rather than a coincidence of tuning.
+    assert.equal(computeDriftIntensity(2, 0), 1, "前提：新鲜的双基因池强度已被夹到 1，任何掷点都会漂移");
+    const calm = new GeneStore(join(fixture.root, "drift-calm.jsonl"), { rng: () => 1 });
+    await calm.appendGene(first, NOW);
+    await calm.appendGene(second, NOW + 1);
+    const calmApplied = await calm.selectFor(request, NOW + 2);
+    assert.ok(calmApplied !== undefined);
+    assert.equal(calmApplied.drifted, false, "掷点不低于强度 ⇒ 取第一名，且不得谎报漂移");
+    assert.equal(calmApplied.address, ranked[0]!.address, "不漂移时必须就是分数第一名");
+  });
+
+  it("journals drifted on the outcome row, and writes no key at all when it was score-chosen", async () => {
+    const path = join(fixture.root, "drift-journaled.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true, drifted: true }, NOW + 10);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 20);
+    const lines = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "");
+    assert.equal(lines.length, 3);
+    assert.match(lines[1]!, /"drifted":true/, "漂移选择的轮次必须在账本里看得出来");
+    assert.ok(!(lines[2]!).includes("drifted"), "分数选择的轮次不写这个键 —— 追加式日志无法回填，缺键即'本轮之前漂移还不存在'，这比写一个从未记录过的 false 诚实");
+  });
+
   // D107: the address tie-break at gene.ts was a real decision-maker and a silent
 // one. The break stays (a selector must be deterministic); the silence is what
 // these tests remove. Without them the flag added last round is write-only, and
@@ -357,6 +413,41 @@ describe("runtime applies and journals genes", () => {
     const state = await geneStore.state();
     assert.equal(state.genes.get(minted.address)?.expression.attempts, 1);
     assert.equal(state.genes.get(minted.address)?.expression.successes, 1);
+  });
+
+  // D108: the seam between selectFor and the ledger. Mutation-verified as a real
+  // gap first — deleting `...(drifted ? { drifted } : {})` from runtime.ts left the
+  // whole suite green, so nothing covered the passthrough. This is the test that
+  // makes that mutation red, and it is the one that matters most: drift that is not
+  // journaled is indistinguishable from a score-based choice, which is exactly the
+  // silence D107 existed to remove.
+  it("journals that drift chose, end to end through the runtime", async () => {
+    const path = join(fixture.root, "runtime-drift.jsonl");
+    const store = new SessionStore({ root: fixture.storeRoot });
+    // Two genes ⇒ intensity clamps to 1 ⇒ drift is certain, so this does not depend
+    // on a lucky draw. The rng is still injected, because a test that reads the log
+    // must know which gene to expect.
+    const geneStore = new GeneStore(path, { rng: (() => { const d = [0.5, 0.9]; let n = 0; return () => d[n++] ?? 0; })() });
+    const first = mintGene(draft({ name: "runtime-drift-first" }));
+    const second = mintGene(draft({ name: "runtime-drift-second" }));
+    await geneStore.appendGene(first, NOW);
+    await geneStore.appendGene(second, NOW + 1);
+    const runtime = new AgentRuntime({
+      adapter: createEchoAdapter(), store, sessionId: "gene-drift",
+      home: fixture.home, workspaceRoot: fixture.workspaceRoot, geneStore,
+    });
+    const result = await runtime.send("用 snippet 方式替换这段代码");
+    assert.ok(result.appliedGene !== undefined, "前提：这一轮确实选中了基因，否则账本里不会有 drifted");
+    // ⚠️ `result.appliedGene` is typed `{ address; name }` by the runtime's result,
+    // so `drifted` is not readable from the return value — only from the ledger.
+    // Recorded as owed rather than widened here: widening the result type shifts
+    // every line below it in a file whose line numbers the citation gate has already
+    // caught going stale three times. The durable record is the ledger, and that is
+    // what the assertion below checks. Trigger for widening: a consumer that needs
+    // to know within the same turn, such as the operator panel.
+    const outcome = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
+    assert.match(outcome, /"type":"outcome"/, "最后一行必须是本轮的账");
+    assert.match(outcome, /"drifted":true/, "漂移这个事实必须落到账本里，不能只活在返回值里");
   });
 
   it("records a gene-less baseline row when nothing matches", async () => {
