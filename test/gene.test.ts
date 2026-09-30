@@ -188,6 +188,53 @@ describe("gene store", () => {
     const text = await readFile(path, "utf8");
     assert.equal(text.split("\n").filter((line) => line !== "").length, 2, "追加式：一条基因加一条退休，没有重写任何旧行");
   });
+
+  // D107: the address tie-break at gene.ts was a real decision-maker and a silent
+// one. The break stays (a selector must be deterministic); the silence is what
+// these tests remove. Without them the flag added last round is write-only, and
+// the drift stage planned next would read an unverified fact — inheriting exactly
+// the silence the flag exists to remove.
+describe("tie reporting", () => {
+  const request = { intent: "build" as const, signals: ["snippet"], text: "用 snippet 替换" };
+  // Same intent, same signals, same expression ⇒ same score. Only the name differs,
+  // and the name is inside the content hash, so the two addresses differ: that is
+  // what makes this a genuine tie rather than one gene listed twice.
+  const two = (ea: GeneExpression, eb: GeneExpression) => {
+    const a = mintGene(draft({ name: "tie-a" }));
+    const b = mintGene(draft({ name: "tie-b" }));
+    assert.notEqual(a.address, b.address, "前提不成立：两条基因地址相同，这就不是平局而是重复");
+    return selectGene([{ ...a, expression: ea }, { ...b, expression: eb }], request, DEFAULT_SELECTION_POLICY, NOW);
+  };
+
+  it("reports when the winner was chosen by address order rather than by evidence", () => {
+    const tied = two(expression(0, 0), expression(0, 0));
+    assert.equal(tied.ranked[0]!.score, tied.ranked[1]!.score, "前提不成立：分数不等就不是平局");
+    assert.equal(tied.tieBrokenByAddress, true);
+    assert.ok(tied.selection !== null, "平局仍然要选出一个，报出平局不等于弃权");
+  });
+
+  it("does not report a tie when one candidate actually scored higher", () => {
+    const clear = two(expression(3, 3), expression(0, 0));
+    // Asserted before the flag, because a flag that reads false is only meaningful
+    // if the scores genuinely differ — otherwise this test passes on a tie too.
+    assert.ok(clear.ranked[0]!.score > clear.ranked[1]!.score, "前提不成立：赢家没有真的分高");
+    assert.equal(clear.tieBrokenByAddress, false);
+  });
+
+  it("reports no tie when there was nothing to choose between", () => {
+    const empty = selectGene([], request, DEFAULT_SELECTION_POLICY, NOW);
+    assert.equal(empty.selection, null);
+    assert.equal(empty.tieBrokenByAddress, false, "没有候选时不存在'被地址决定的选择'");
+    const excluded = selectGene(
+      [{ ...mintGene(draft({ name: "tie-x" })), expression: expression(0, 0) }],
+      { intent: "fix" as const, signals: ["snippet"], text: "用 snippet 替换" },
+      DEFAULT_SELECTION_POLICY,
+      NOW,
+    );
+    assert.equal(excluded.selection, null, "意图不符应被硬门排除");
+    assert.equal(excluded.tieBrokenByAddress, false, "唯一候选被排除后没有第二名，也就没有平局");
+  });
+});
 });
 
 describe("selection", () => {
