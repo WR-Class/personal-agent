@@ -583,6 +583,8 @@ export class AgentRuntime {
    * `false` when no gene was applied, so the field never reads as "unknown".
    */
   private outcomeDrifted: boolean | undefined;
+  /** Addresses that competed this round, for the counterfactual-replay record (D113). */
+  private outcomeCandidates: readonly string[] | undefined;
   /** Cumulative writes for the cycle in flight (D18). */
   private writeLedger: LedgerState = { files: [], lines: 0 };
   private writeBudget: WriteBudget;
@@ -729,10 +731,12 @@ export class AgentRuntime {
     const spec = this.outcomeSpec;
     const tools = this.outcomeTools;
     const drifted = this.outcomeDrifted;
+    const candidates = this.outcomeCandidates;
     this.outcomeAddress = undefined;
     this.outcomeSpec = undefined;
     this.outcomeTools = undefined;
     this.outcomeDrifted = undefined;
+    this.outcomeCandidates = undefined;
     if (address === undefined || !this.geneStore) return;
     await this.geneStore.appendOutcome({
       address,
@@ -747,6 +751,10 @@ export class AgentRuntime {
       // a log reader can still tell "chosen by score" from "field did not exist yet"
       // by the absence of the key rather than by a value that was never recorded.
       ...(drifted ? { drifted } : {}),
+      // The competition record for replay. Only written when more than one gene
+      // competed: a single-candidate round has nothing to contrast, so recording a
+      // one-element list would be bytes with no replay value.
+      ...(candidates && candidates.length > 1 ? { candidates } : {}),
       evidence: evaluation.evidence,
     });
   }
@@ -826,6 +834,7 @@ export class AgentRuntime {
     // never reaches here, so a hard refusal still leaves no trace.
     this.outcomeAddress = applied?.address ?? null;
     this.outcomeDrifted = applied?.drifted ?? false;
+    this.outcomeCandidates = applied?.candidates;
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
     this.outcomeTools = [];
     // A fresh cycle starts with an empty ledger. A gene's constraints bound the

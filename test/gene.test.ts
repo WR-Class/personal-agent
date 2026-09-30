@@ -448,6 +448,31 @@ describe("runtime applies and journals genes", () => {
     const outcome = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
     assert.match(outcome, /"type":"outcome"/, "最后一行必须是本轮的账");
     assert.match(outcome, /"drifted":true/, "漂移这个事实必须落到账本里，不能只活在返回值里");
+    // D113: the same round had two competitors, so the competition record must land
+    // too, with both addresses — this is the losing-candidate data replay needs.
+    assert.match(outcome, /"candidates":\[/, "两条基因竞争 ⇒ 账本必须记下候选集");
+    assert.match(outcome, new RegExp(first.address), "候选集里必须有第一条");
+    assert.match(outcome, new RegExp(second.address), "候选集里必须有第二条（落选者），否则回放看不到它");
+  });
+
+  it("D113: writes no candidates key when only one gene competed", async () => {
+    // A single-candidate round has nothing to contrast, so recording a one-element
+    // list would be bytes with no replay value. Absence of the key is the correct
+    // record here, not an empty array.
+    const path = join(fixture.root, "runtime-solo.jsonl");
+    const store = new SessionStore({ root: fixture.storeRoot });
+    const geneStore = new GeneStore(path);
+    const only = mintGene(draft({ name: "runtime-solo-only" }));
+    await geneStore.appendGene(only, NOW);
+    const runtime = new AgentRuntime({
+      adapter: createEchoAdapter(), store, sessionId: "gene-solo",
+      home: fixture.home, workspaceRoot: fixture.workspaceRoot, geneStore,
+    });
+    const result = await runtime.send("用 snippet 方式替换这段代码");
+    assert.equal(result.appliedGene?.address, only.address, "前提：这一轮选中了唯一那条基因");
+    const outcome = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
+    assert.match(outcome, /"type":"outcome"/);
+    assert.ok(!outcome.includes("candidates"), "只有一条候选时不写 candidates 键 —— 没有竞争可记");
   });
 
   it("records a gene-less baseline row when nothing matches", async () => {

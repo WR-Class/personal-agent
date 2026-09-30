@@ -69,6 +69,16 @@ export type GeneStoreRecord =
      * this whole line of work.
      */
     readonly drifted?: boolean;
+    /**
+     * Addresses of every gene that competed this round, the winner included (D113).
+     *
+     * Optional and only written when a gene was applied, for the same append-only
+     * reason as `drifted`: old rows predate it and are not back-filled, so absence
+     * means "not recorded", not "no competition". Folded into this row rather than
+     * written as a separate record — a second row per round would roughly double log
+     * growth (232–560 B/row), which is the size concern that started this work.
+     */
+    readonly candidates?: readonly string[];
   }
   /**
    * A gene taken out of selection (D105). Append-only like everything else here:
@@ -133,6 +143,24 @@ export interface AppliedGene {
    * stage later.
    */
   readonly drifted: boolean;
+  /**
+   * The addresses of every gene that competed this round — all candidates that
+   * passed the hard gates and were scored, the winner included (D113).
+   *
+   * This is the losing-candidate record the counterfactual replay needs and has
+   * been owed for many rounds. Without it the ledger records who won and whether it
+   * worked, but not who it beat, so no later run can ask "would a different metric
+   * or weight have chosen better here" — the question every weight decision now
+   * defers to for lack of exactly this data.
+   *
+   * ⚠️ Addresses only, not scores. A score is a float computed under the current
+   * weights, so recording it would freeze one policy's numbers into the log and make
+   * a replay under different weights compare against stale values; the addresses let
+   * a replay re-fold each candidate's record to the moment of the choice and
+   * recompute. Addresses are also the whole of what a replay needs: the winner is
+   * already the outcome row's `address`, so the losers are this set minus that.
+   */
+  readonly candidates: readonly string[];
 }
 
 export class GeneStore {
@@ -209,6 +237,7 @@ export class GeneStore {
       evidence?: readonly string[];
       tools?: readonly string[];
       drifted?: boolean;
+      candidates?: readonly string[];
     },
     at: number = Date.now(),
   ): Promise<void> {
@@ -356,7 +385,12 @@ export class GeneStore {
     const intensity = computeDriftIntensity(ranked.length, totalAttempts);
     const { index, drifted } = driftIndex(ranked.length, intensity, this.rng);
     const selection = ranked[index] ?? ranked[0]!;
-    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection), drifted };
+    // Every scored candidate competed, so all of `ranked` is the competition, not
+    // just the runner-up. Excluded genes are already gone (selectGene drops them at
+    // the gates), so this is exactly "who was eligible and lost", which is what a
+    // replay contrasts the winner against.
+    const candidateAddresses = ranked.map((candidate) => candidate.address);
+    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection), drifted, candidates: candidateAddresses };
   }
 }
 
