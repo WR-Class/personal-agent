@@ -51,13 +51,40 @@ export type GeneStoreRecord =
      * not what a strategy should be (D17).
      */
     readonly tools?: readonly string[];
-  };
+  }
+  /**
+   * A gene taken out of selection (D105). Append-only like everything else here:
+   * retiring writes a record rather than removing one, so the library can still
+   * say what it once knew and why it stopped using it.
+   *
+   * Retirement is not deletion and not quarantine. Quarantine (`quarantineStreak`)
+   * is automatic and recoverable — one new success lifts it. Retirement is a
+   * decision, it persists, and the gene stays in the library: its address must
+   * keep resolving, because outcome rows already written against it are that
+   * gene's track record and `state()` folds them whether or not it is selectable.
+   *
+   * There is deliberately no `unretire`. A gene's address is its content hash, so
+   * "bring it back" is already expressible without a new record type: mint the
+   * same content again and `appendGene`'s idempotence makes it one gene, while a
+   * corrected strategy hashes to a different address and is simply a new gene.
+   * Adding an unretire would create a second way to answer the same question, and
+   * two answers to one question is how a library stops being auditable.
+   */
+  | { readonly schema: 1; readonly type: "retire"; readonly at: number; readonly address: string; readonly reason: string };
 
 export interface GeneLibraryState {
   /** Live genes with their folded expression counters. */
   readonly genes: ReadonlyMap<string, { gene: Gene; expression: GeneExpression }>;
   /** Gene-less baseline outcomes, the counterfactual for future gain pricing. */
   readonly baseline: { attempts: number; successes: number };
+  /**
+   * Retired address → the reason given, folded from `retire` records. Kept in the
+   * state rather than filtered out of `genes` so that "what does the library know"
+   * and "what may the library use" stay two separate questions: the first is
+   * audit, the second is selection. A gene retired twice keeps the later reason,
+   * because that is the one that explains its current status.
+   */
+  readonly retired: ReadonlyMap<string, string>;
 }
 
 export interface AppliedGene {
@@ -105,7 +132,7 @@ export class GeneStore {
     for (let index = 0; index < lines.length; index++) {
       try {
         const record = JSON.parse(lines[index] ?? "") as GeneStoreRecord;
-        if (record.schema !== SCHEMA || (record.type !== "gene" && record.type !== "outcome")) {
+        if (record.schema !== SCHEMA || (record.type !== "gene" && record.type !== "outcome" && record.type !== "retire")) {
           throw new Error(`unsupported record`);
         }
         parsed.push(record);
@@ -142,6 +169,24 @@ export class GeneStore {
     at: number = Date.now(),
   ): Promise<void> {
     await this.append({ schema: SCHEMA, type: "outcome", at, ...outcome });
+  }
+
+  /**
+   * Take a gene out of selection. Append-only, like every other mutation here.
+   *
+   * Both arguments are checked, and for the same reason: a retirement that
+   * silently did nothing would be indistinguishable from one that worked, and a
+   * retirement with no reason recorded is an attribution decision made by nobody.
+   * The non-empty-reason rule is the reference implementation's own
+   * (`dsh-swarm core/store.ts` refuses an empty thumbs reason the same way).
+   */
+  async retire(address: string, reason: string, at: number = Date.now()): Promise<void> {
+    if (reason.trim() === "") throw new Error("retire reason must be a non-empty string");
+    const records = await this.ensureLoaded();
+    if (!records.some((record) => record.type === "gene" && record.address === address)) {
+      throw new Error(`cannot retire a gene that is not in the library: ${address}`);
+    }
+    await this.append({ schema: SCHEMA, type: "retire", at, address, reason });
   }
 
   /**
@@ -200,10 +245,21 @@ export class GeneStore {
   async state(): Promise<GeneLibraryState> {
     const records = await this.ensureLoaded();
     const genes = new Map<string, { gene: Gene; expression: GeneExpression }>();
+    const retired = new Map<string, string>();
     const baseline = { attempts: 0, successes: 0 };
     for (const record of records) {
       if (record.type === "gene") {
         if (!genes.has(record.address)) genes.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0 } });
+        continue;
+      }
+      // Before the outcome branch, and the order is load-bearing rather than
+      // stylistic: a retire record carries an `address`, so falling through would
+      // charge the gene it retires with one more attempt. Retirement would then
+      // edit the track record it was only meant to stop consulting — the same
+      // class of bug as a mutation that changes the number it is supposed to
+      // merely read.
+      if (record.type === "retire") {
+        retired.set(record.address, record.reason);
         continue;
       }
       if (record.address === null) {
@@ -221,16 +277,27 @@ export class GeneStore {
       }
       else entry.expression.streak += 1;
     }
-    return { genes, baseline };
+    return { genes, baseline, retired };
   }
 
   /**
    * Select a gene for one request and render its injection block. Returns
    * undefined when no live candidate matches — an honest gene-less round.
+   *
+   * Retired genes are dropped here rather than in `state()`, so the fold still
+   * reports the whole library. That is the point of keeping the two apart: an
+   * operator asking "what has this agent learned" gets every gene including the
+   * retired ones with their reasons, while a round asking "what should I apply"
+   * never sees them. It also stops the cost the question that prompted this
+   * change was about — a gene that stopped being selected used to be parsed,
+   * folded and scored on every single round forever, and now it is folded but not
+   * scored.
    */
   async selectFor(request: GeneRequest, now: number = Date.now()): Promise<AppliedGene | undefined> {
     const state = await this.state();
-    const candidates = [...state.genes.entries()].map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression }));
+    const candidates = [...state.genes.entries()]
+      .filter(([address]) => !state.retired.has(address))
+      .map(([address, entry]) => ({ address, gene: entry.gene, expression: entry.expression }));
     const { selection } = selectGene(candidates, request, DEFAULT_SELECTION_POLICY, now);
     if (!selection) return undefined;
     return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection) };

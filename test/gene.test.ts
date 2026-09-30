@@ -119,6 +119,75 @@ describe("gene store", () => {
     const store = new GeneStore(join(fixture.root, "empty.jsonl"));
     assert.equal(await store.selectFor({ intent: "build", signals: ["snippet"], text: "用 snippet 替换" }), undefined);
   });
+
+  // D105: retirement. The question that prompted it was whether a gene that
+  // stopped being selected just hangs there forever. It did — parsed on every
+  // load, folded on every round, and still handed to selectGene for scoring even
+  // when quarantine or recency had already ruled it out. Retirement is a record,
+  // not a deletion: the address must keep resolving, because outcome rows already
+  // written against it are that gene's track record.
+  it("keeps a retired gene in the library but out of selection", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-selection.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    const request = { intent: "build" as const, signals: ["snippet"], text: "用 snippet 替换" };
+    // The positive case first, and it is the load-bearing half. Without it the
+    // assertion below would also pass if the request simply never matched this
+    // gene — which is exactly how a seam test goes green while proving nothing
+    // (D90's mutation was green for that reason).
+    assert.equal((await store.selectFor(request, NOW))?.address, minted.address);
+    await store.retire(minted.address, "被同意图的新基因取代", NOW + 40);
+    assert.equal(await store.selectFor(request, NOW + 50), undefined);
+    const state = await store.state();
+    assert.ok(state.genes.has(minted.address), "退休不是删除：基因仍在库里，地址仍要能解析");
+    assert.equal(state.retired.get(minted.address), "被同意图的新基因取代");
+  });
+
+  it("does not let retirement edit the track record it only stops consulting", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-ledger.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
+    await store.appendOutcome({ address: minted.address, succeeded: false }, NOW + 20);
+    const before = (await store.state()).genes.get(minted.address)?.expression;
+    await store.retire(minted.address, "连续失败", NOW + 30);
+    // A retire record carries an `address`, so a fold that handled it after the
+    // outcome branch would charge this gene one more attempt: retirement would
+    // change the history it was only meant to stop reading. The branch order in
+    // `state()` is what prevents that, and this is the assertion that would go red
+    // if it were ever reordered.
+    const after = (await store.state()).genes.get(minted.address)?.expression;
+    assert.deepEqual(after, before);
+    assert.equal(after?.attempts, 2);
+    assert.equal(after?.streak, 1);
+    // Outcomes written after retirement still fold. Retirement stops selection,
+    // not bookkeeping, so a retired gene's record stays complete and auditable.
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 60);
+    const later = (await store.state()).genes.get(minted.address)?.expression;
+    assert.equal(later?.attempts, 3);
+    assert.equal(later?.streak, 0);
+  });
+
+  it("refuses to retire without a reason, or a gene that is not in the library", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-refusals.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await assert.rejects(() => store.retire(minted.address, "   ", NOW), /non-empty string/, "没有理由的退休是由 nobody 做出的归因决定");
+    await assert.rejects(() => store.retire("not-an-address", "写错了地址", NOW), /not in the library/, "静默退休一条不存在的基因，与真的退休了无法区分");
+    assert.equal((await store.state()).retired.size, 0, "两次被拒的退休都没有留下记录");
+  });
+
+  it("survives reload, because retirement is a record and not a flag in memory", async () => {
+    const path = join(fixture.root, "retire-reload.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.retire(minted.address, "已过时", NOW + 10);
+    const reopened = new GeneStore(path);
+    assert.equal((await reopened.state()).retired.get(minted.address), "已过时");
+    const text = await readFile(path, "utf8");
+    assert.equal(text.split("\n").filter((line) => line !== "").length, 2, "追加式：一条基因加一条退休，没有重写任何旧行");
+  });
 });
 
 describe("selection", () => {
