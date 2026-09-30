@@ -622,6 +622,12 @@ export class AgentRuntime {
     this.writeBudget = {
       maxFiles: positiveInt("maxWriteFiles", options.maxWriteFiles, DEFAULT_WRITE_MAX_FILES),
       maxLines: positiveInt("maxWriteLines", options.maxWriteLines, DEFAULT_WRITE_MAX_LINES),
+      // Empty by design, and deliberately not an `options.*` knob. Forbidden paths
+      // come from the applied gene, which is the layer that knows what this kind of
+      // work must not touch; the runtime's defaults are arithmetic ceilings that
+      // hold when no gene applies. A gene-less round therefore forbids nothing,
+      // which is the behaviour every existing test pins.
+      forbiddenPaths: [],
     };
     this.defaultWriteBudget = this.writeBudget;
     this.deadlineMs = positiveInt("deadlineMs", options.deadlineMs, DEFAULT_DEADLINE_MS);

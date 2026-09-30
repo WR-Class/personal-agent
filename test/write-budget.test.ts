@@ -63,7 +63,7 @@ describe("the ledger", () => {
 
   it("refuses the write that would exceed the file budget, and names it", () => {
     const state = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 1 }, 0);
-    const decision = checkWrite(state, { tool: "edit_file", path: "b.ts", lines: 1 }, { maxFiles: 1, maxLines: 10 });
+    const decision = checkWrite(state, { tool: "edit_file", path: "b.ts", lines: 1 }, { maxFiles: 1, maxLines: 10, forbiddenPaths: [] });
     assert.equal(decision.allowed, false);
     assert.match(decision.reason!, /file budget exhausted/);
     assert.match(decision.reason!, /b\.ts/);
@@ -71,28 +71,98 @@ describe("the ledger", () => {
 
   it("refuses the write that would exceed the line budget", () => {
     const state = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 8 }, 0);
-    const decision = checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 5 }, { maxFiles: 5, maxLines: 10 });
+    const decision = checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 5 }, { maxFiles: 5, maxLines: 10, forbiddenPaths: [] });
     assert.equal(decision.allowed, false);
     assert.match(decision.reason!, /line budget exhausted/);
   });
 
   it("allows exactly the budget and no more", () => {
     const state = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 10 }, 0);
-    assert.equal(checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 0 }, { maxFiles: 1, maxLines: 10 }).allowed, true);
-    assert.equal(checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 1 }, { maxFiles: 1, maxLines: 10 }).allowed, false);
+    assert.equal(checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 0 }, { maxFiles: 1, maxLines: 10, forbiddenPaths: [] }).allowed, true);
+    assert.equal(checkWrite(state, { tool: "edit_file", path: "a.ts", lines: 1 }, { maxFiles: 1, maxLines: 10, forbiddenPaths: [] }).allowed, false);
   });
 
   it("still charges an anonymous write, so malformed arguments cannot buy budget", () => {
     const state = chargeWrite(EMPTY, { tool: "edit_file", path: null, lines: null }, 0);
     assert.equal(state.files.length, 1);
-    const decision = checkWrite(state, { tool: "edit_file", path: null, lines: null }, { maxFiles: 1, maxLines: 10 });
+    const decision = checkWrite(state, { tool: "edit_file", path: null, lines: null }, { maxFiles: 1, maxLines: 10, forbiddenPaths: [] });
     assert.equal(decision.allowed, false);
     assert.match(decision.reason!, /no readable path/);
   });
 
+  // D103: forbiddenPaths was declared in `types.ts`, parsed in `gene.ts`, and
+  // written by both `distill.ts` and `induct.ts`, but `budgetFor`'s parameter type
+  // listed only `{ maxFiles; maxLines }`, so it never reached an enforcement path.
+  // These pin the rule that replaced the record.
+  describe("forbidden paths", () => {
+    const budgetWith = (forbiddenPaths: readonly string[]) => ({ maxFiles: 9, maxLines: 999, forbiddenPaths });
+    const write = (path: string | null) => ({ tool: "edit_file", path, lines: 1 });
+
+    it("refuses a write under a forbidden directory and names both the path and the entry", () => {
+      const decision = checkWrite(EMPTY, write("docs/SAFETY.md"), budgetWith(["docs"]));
+      assert.equal(decision.allowed, false);
+      assert.match(decision.reason!, /docs\/SAFETY\.md/, "the reason must say what was refused");
+      assert.match(decision.reason!, /under docs/, "and which entry refused it, so a gene can be debugged from the audit line alone");
+    });
+
+    it("matches by path SEGMENT, not by string prefix", () => {
+      // The load-bearing case. A naive `startsWith("docs")` refuses both, and the
+      // second is a different directory that merely begins with the same letters.
+      // A rule that forbids more than was written down is as wrong as one that
+      // forbids less: it makes the gene's declaration mean something else.
+      assert.equal(checkWrite(EMPTY, write("docs/a.md"), budgetWith(["docs"])).allowed, false);
+      assert.equal(checkWrite(EMPTY, write("docs2/a.md"), budgetWith(["docs"])).allowed, true, "docs2 is not docs");
+      assert.equal(checkWrite(EMPTY, write("docs"), budgetWith(["docs"])).allowed, false, "the forbidden path itself, not only what is under it");
+    });
+
+    it("refuses regardless of remaining budget, because it is a different kind of limit", () => {
+      // A budget says "this much and no more", so running out is an accounting
+      // fact. A forbidden path says "not here at all", so a full purse is
+      // irrelevant to it. maxFiles 9 and maxLines 999 are nowhere near spent here.
+      const decision = checkWrite(EMPTY, write("secret/x.ts"), budgetWith(["secret"]));
+      assert.equal(decision.allowed, false);
+      assert.doesNotMatch(decision.reason!, /budget exhausted/, "it must not be reported as a budget, or the operator reads the wrong cause");
+    });
+
+    it("refuses a write whose target cannot be read, rather than guessing", () => {
+      // Fail closed, on this module's own precedent: unparseable arguments are
+      // already charged as a write of unknown extent so malformed arguments cannot
+      // buy budget. A target that cannot be read cannot be shown to lie outside the
+      // forbidden set, and guessing would make the ban evadable by malforming the
+      // call. With no forbidden paths the same write is still allowed, so this
+      // costs nothing in the ordinary case.
+      assert.equal(checkWrite(EMPTY, write(null), budgetWith(["docs"])).allowed, false);
+      assert.equal(checkWrite(EMPTY, write(null), budgetWith([])).allowed, true);
+    });
+
+    it("forbids nothing when the list is empty, which is what every gene-less round runs under", () => {
+      assert.equal(checkWrite(EMPTY, write("docs/SAFETY.md"), budgetWith([])).allowed, true);
+      assert.equal(checkWrite(EMPTY, write("anything/at/all.ts"), budgetWith([])).allowed, true);
+    });
+
+    it("compares the way this platform's filesystem does: either separator, either case", () => {
+      // The product runs on Windows, where `Docs\A.md` and `docs/a.md` are the same
+      // file. A gene that writes one form must not be evaded by the other.
+      assert.equal(checkWrite(EMPTY, write("docs\\SAFETY.md"), budgetWith(["docs"])).allowed, false);
+      assert.equal(checkWrite(EMPTY, write("Docs/SAFETY.md"), budgetWith(["DOCS"])).allowed, false);
+      assert.equal(checkWrite(EMPTY, write("./docs/SAFETY.md"), budgetWith(["docs"])).allowed, false, "a leading ./ is the same path");
+      assert.equal(checkWrite(EMPTY, write("docs/SAFETY.md"), budgetWith(["docs/"])).allowed, false, "a trailing separator on the entry is the same root");
+    });
+
+    it("carries a gene's forbiddenPaths through budgetFor, and defaults to none when the gene omits them", () => {
+      const fromGene = budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: ["docs", "secrets"] }, { maxFiles: 3, maxLines: 200, forbiddenPaths: [] });
+      assert.deepEqual(fromGene.forbiddenPaths, ["docs", "secrets"]);
+      // `distill.ts` and `induct.ts` both mint guard genes with an explicit empty
+      // list, but a hand-written gene may omit the key; omission must mean "none",
+      // never "inherit the fallback's", or a gene would silently widen its own ban.
+      assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20 }, { maxFiles: 3, maxLines: 200, forbiddenPaths: ["docs"] }).forbiddenPaths, []);
+      assert.deepEqual(budgetFor(null, { maxFiles: 3, maxLines: 200, forbiddenPaths: ["docs"] }).forbiddenPaths, ["docs"], "no gene means the runtime default, which is what the fallback is for");
+    });
+  });
+
   it("takes the gene's constraints as the budget when there is a gene", () => {
-    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20 }, { maxFiles: 3, maxLines: 200 }), { maxFiles: 1, maxLines: 20 });
-    assert.deepEqual(budgetFor(null, { maxFiles: 3, maxLines: 200 }), { maxFiles: 3, maxLines: 200 });
+    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }, { maxFiles: 3, maxLines: 200, forbiddenPaths: [] }), { maxFiles: 1, maxLines: 20, forbiddenPaths: [] });
+    assert.deepEqual(budgetFor(null, { maxFiles: 3, maxLines: 200, forbiddenPaths: [] }), { maxFiles: 3, maxLines: 200, forbiddenPaths: [] });
   });
 });
 

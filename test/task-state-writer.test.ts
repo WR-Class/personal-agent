@@ -94,7 +94,7 @@ describe("gate coverage: offered and allowed must agree", () => {
     assert.notEqual(attempt, null);
     assert.equal(attempt!.path, null, "it names no file path");
     assert.equal(attempt!.lines, null, "so there are no lines to charge");
-    const budget = { maxFiles: 2, maxLines: 10 };
+    const budget = { maxFiles: 2, maxLines: 10, forbiddenPaths: [] };
     assert.equal(checkWrite({ files: [], lines: 0 }, attempt!, budget).allowed, true);
     const charged = chargeWrite({ files: [], lines: 0 }, attempt!, 0);
     assert.equal(charged.files.length, 1, "it occupies an anonymous slot");

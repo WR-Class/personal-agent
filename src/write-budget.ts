@@ -18,6 +18,24 @@ export interface WriteBudget {
   readonly maxFiles: number;
   /** Lines added plus changed across this cycle. */
   readonly maxLines: number;
+  /**
+   * Workspace-relative paths this cycle may not write, added by D103.
+   *
+   * The header of this module already states the principle: "A gene's
+   * `constraints` were a record, not a rule: `maxFiles` and `maxLines` were
+   * written down and nothing enforced them. A constraint that is only recorded is
+   * a suggestion." D18 turned two of the three members into rules and left the
+   * third a suggestion — `forbiddenPaths` was declared in `types.ts`, parsed in
+   * `gene.ts`, and written by both `distill.ts` and `induct.ts`, but this
+   * function's own signature was `{ maxFiles: number; maxLines: number } | null`,
+   * so it never reached an enforcement path. Nothing in `src/` refused a write on
+   * account of it.
+   *
+   * Declared-but-unenforced is worse than absent, which is why this came before
+   * the budget-derivation work: an absent limit is a debt anybody can see, while a
+   * recorded one reads as a guarantee to everyone who never checks.
+   */
+  readonly forbiddenPaths: readonly string[];
 }
 
 /** Tools that change the workspace. Reads are not writes. */
@@ -99,6 +117,36 @@ export class WriteBudgetError extends Error {
 }
 
 /**
+ * Compare paths the way the filesystem under this product does: separators are
+ * interchangeable and case is not significant. Comparison only — the ledger keeps
+ * recording the path exactly as the tool arguments gave it, because that string is
+ * what an operator reads back in an audit line.
+ */
+function normalizeForComparison(raw: string): string {
+  return raw.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * The forbidden entry that covers this path, or null. Matching is by path SEGMENT
+ * rather than by string prefix, so a gene forbidding `docs` refuses `docs/a.md`
+ * but not `docs2/a.md` — the second is a different directory that merely starts
+ * with the same letters, and refusing it would make the rule mean something other
+ * than what was written down.
+ */
+function forbiddenEntryFor(target: string, forbiddenPaths: readonly string[]): string | null {
+  const path = normalizeForComparison(target);
+  for (const entry of forbiddenPaths) {
+    const root = normalizeForComparison(entry);
+    // An empty entry forbids nothing. Silently treating "" as "everything" would
+    // turn a malformed gene into a total write ban, and a ban nobody asked for is
+    // as wrong as a gap nobody closed.
+    if (root === "") continue;
+    if (path === root || path.startsWith(`${root}/`)) return entry;
+  }
+  return null;
+}
+
+/**
  * Decide whether one more write fits, without performing it. Refusing here means
  * the write never happens, so a refusal cannot leave a half-written file behind.
  */
@@ -107,6 +155,24 @@ export function checkWrite(
   attempt: WriteAttempt,
   budget: WriteBudget,
 ): LedgerDecision {
+  // Forbidden paths are checked first, before either counter, because they are a
+  // different kind of limit: a budget says "this much and no more", so spending it
+  // down is normal and running out is an accounting fact. A forbidden path says
+  // "not here at all", so remaining budget is irrelevant to it.
+  if (budget.forbiddenPaths.length > 0) {
+    if (attempt.path === null) {
+      // Fail closed, and the precedent is this module's own: unparseable arguments
+      // are already treated as a write of unknown extent so that "malformed
+      // arguments cannot buy extra budget". The same reasoning applies here — a
+      // target that cannot be read cannot be shown to lie outside the forbidden
+      // set, and guessing would let the ban be evaded by malforming the call.
+      return refusal(`cycle forbids writing under ${budget.forbiddenPaths.join(", ")}; this write's target could not be read from its arguments, so it cannot be shown to lie outside them`);
+    }
+    const entry = forbiddenEntryFor(attempt.path, budget.forbiddenPaths);
+    if (entry !== null) {
+      return refusal(`cycle forbids this path: ${attempt.path} is under ${entry}`);
+    }
+  }
   if (attempt.path === null) {
     // A write whose target cannot be read from the arguments still consumes
     // budget: it is charged as its own anonymous slot rather than waved through.
@@ -135,11 +201,23 @@ export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: nu
   return { files, lines: state.lines + (attempt.lines ?? 0) };
 }
 
-/** The budget a round runs under: the applied gene's constraints, else the default. */
+/**
+ * The budget a round runs under: the applied gene's constraints, else the default.
+ *
+ * The parameter type names all three members of `GeneConstraints` rather than
+ * accepting the interface itself, so a caller holding something else cannot pass
+ * it by accident — and so that the omission D103 fixed is visible here: this
+ * signature used to list two of the three, which is how a declared constraint
+ * stayed unenforced while every producer kept writing it.
+ */
 export function budgetFor(
-  constraints: { maxFiles: number; maxLines: number } | null,
+  constraints: { maxFiles: number; maxLines: number; forbiddenPaths?: readonly string[] } | null,
   fallback: WriteBudget,
 ): WriteBudget {
   if (constraints === null) return fallback;
-  return { maxFiles: constraints.maxFiles, maxLines: constraints.maxLines };
+  return {
+    maxFiles: constraints.maxFiles,
+    maxLines: constraints.maxLines,
+    forbiddenPaths: constraints.forbiddenPaths ?? [],
+  };
 }
