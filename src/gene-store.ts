@@ -179,19 +179,47 @@ export class GeneStore {
    * shape EvoMap documents for its own `driftSelect`.
    */
   private readonly rng: () => number;
+  /**
+   * Where outcome rows go, split off from gene/retire rows (D116, growth-plan
+   * step 2). Derived from `path`, not a second constructor argument, so all 33 call
+   * sites keep passing one path and the split is a storage detail they do not see.
+   *
+   * ⚠️ Why split: outcome rows are the high-frequency stream (one per round, now
+   * carrying `candidates`), while gene/retire rows change only when the library's
+   * shape does. Keeping them apart lets the outcome stream be compacted or
+   * checkpointed later without touching the gene definitions — the growth concern
+   * that started this. A mixed legacy file is still read whole, so this is
+   * forward-only: old outcome lines in `path` still fold.
+   */
+  private readonly outcomesPath: string;
 
   constructor(path: string, options: { rng?: () => number } = {}) {
     this.path = path;
+    this.outcomesPath = path.replace(/\.jsonl$/, "") + ".outcomes.jsonl";
     this.rng = options.rng ?? Math.random;
   }
 
-  /** Parse the log once; later appends update the in-memory fold. */
+  /** Parse both logs once; later appends update the in-memory fold. */
   async load(): Promise<void> {
+    // Gene/retire rows come from `path`, outcome rows from the companion file. A
+    // legacy mixed file has outcome rows in `path` too, and those still parse and
+    // fold — the split only changes where NEW rows are written.
+    const main = await this.parseLog(this.path);
+    const outcomes = await this.parseLog(this.outcomesPath);
+    // ⚠️ Concatenation order is safe because `state()` does not depend on the
+    // relative order of gene vs outcome rows: a gene builds its map entry, an
+    // outcome folds into an entry that already exists (`if (!entry) continue`). Only
+    // outcomes' order relative to EACH OTHER matters (streak, lastSuccessAt), and
+    // those keep their append order within the companion file.
+    this.records = [...main, ...outcomes];
+  }
+
+  private async parseLog(file: string): Promise<GeneStoreRecord[]> {
     let text: string;
     try {
-      text = await readFile(this.path, "utf8");
+      text = await readFile(file, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.records = []; return; }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
     const lines = text.split("\n");
@@ -211,7 +239,7 @@ export class GeneStore {
         throw new Error(`gene store line ${index + 1} is not a valid v${SCHEMA} record: ${(error as Error).message}`);
       }
     }
-    this.records = parsed;
+    return parsed;
   }
 
   private async ensureLoaded(): Promise<GeneStoreRecord[]> {
@@ -309,8 +337,13 @@ export class GeneStore {
   }
 
   private async append(record: GeneStoreRecord): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    await appendFile(this.path, `${JSON.stringify(record)}\n`, "utf8");
+    // Outcome rows go to the companion file, gene/retire rows to the main one. The
+    // in-memory fold pushes onto one array either way, because a fresh append is
+    // always chronologically last and `state()`'s cross-type independence (see
+    // `load`) means its position among genes does not matter.
+    const file = record.type === "outcome" ? this.outcomesPath : this.path;
+    await mkdir(dirname(file), { recursive: true });
+    await appendFile(file, `${JSON.stringify(record)}\n`, "utf8");
     this.records?.push(record);
   }
 

@@ -23,6 +23,12 @@ before(async () => {
 });
 
 const T0 = 1_700_000_000_000;
+
+/** Where a GeneStore writes outcome rows (D116 split). Mirrors the constructor. */
+function outcomesFile(path: string): string {
+  return path.replace(/\.jsonl$/, "") + ".outcomes.jsonl";
+}
+
 const OK: CycleEvaluation = { status: "success", failureClass: null, evidence: ["steps=1"], reviewer: "mechanical" };
 const BAD: CycleEvaluation = { status: "failed", failureClass: "unknown", evidence: ["steps=0"], reviewer: "mechanical" };
 
@@ -164,7 +170,7 @@ describe("runtime runs a PDRI cycle", () => {
     const kinds = (await readFile(join(fixture.root, "e2e-happy-cycles.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line).event.type);
     assert.deepEqual(kinds, ["execute-start", "review-ready", "integrate-ready", "complete"]);
-    const outcome = JSON.parse((await readFile(join(fixture.root, "e2e-happy-genes.jsonl"), "utf8")).trim().split("\n")[1]!);
+    const outcome = JSON.parse((await readFile(outcomesFile(join(fixture.root, "e2e-happy-genes.jsonl")), "utf8")).trim().split("\n")[0]!);
     assert.equal(outcome.status, "success");
     assert.equal(outcome.succeeded, true);
     assert.equal(outcome.address, minted.address);
@@ -188,7 +194,7 @@ describe("runtime runs a PDRI cycle", () => {
     assert.equal(result.evaluation.status, "partial");
     assert.equal(result.evaluation.evidence.includes("toolErrors=1"), true);
     assert.equal((await cycleStore.states()).get(result.cycleId)?.phase, "completed");
-    const rows = (await readFile(join(fixture.root, "e2e-partial-genes.jsonl"), "utf8")).trim().split("\n");
+    const rows = (await readFile(outcomesFile(join(fixture.root, "e2e-partial-genes.jsonl")), "utf8")).trim().split("\n");
     assert.equal(JSON.parse(rows[0]!).succeeded, false);
     assert.equal(JSON.parse(rows[0]!).status, "partial");
   });

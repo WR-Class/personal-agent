@@ -21,6 +21,11 @@ before(async () => {
 
 const NOW = 1_700_000_000_000;
 
+/** Where a GeneStore writes outcome rows (D116 split). Mirrors the constructor. */
+function outcomesFile(path: string): string {
+  return path.replace(/\.jsonl$/, "") + ".outcomes.jsonl";
+}
+
 function draft(overrides: Partial<GeneDraft> = {}): GeneDraft {
   return {
     name: "snippet-edit-discipline",
@@ -98,6 +103,26 @@ describe("gene store", () => {
     assert.equal(entry?.expression.lastSuccessAt, NOW + 10);
     assert.equal(entry?.expression.streak, 1);
     assert.deepEqual({ ...state.baseline }, { attempts: 1, successes: 1 });
+  });
+
+  it("D116: writes outcomes to a companion file, gene/retire to the main file, and folds both", async () => {
+    const path = join(fixture.root, "split.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
+    await store.retire(minted.address, "被取代", NOW + 20);
+    // The split itself: gene + retire in the main file, outcome in the companion.
+    const mainLines = (await readFile(path, "utf8")).split("\n").filter((l) => l !== "");
+    const outLines = (await readFile(outcomesFile(path), "utf8")).split("\n").filter((l) => l !== "");
+    assert.equal(mainLines.length, 2, "主文件只装 gene 与 retire");
+    assert.ok(mainLines.every((l) => !l.includes('"type":"outcome"')), "主文件里不该有 outcome 行");
+    assert.equal(outLines.length, 1, "outcome 只装在伴生文件");
+    assert.match(outLines[0]!, /"type":"outcome"/);
+    // Reopening reads both files and folds them into one correct state.
+    const reopened = await new GeneStore(path).state();
+    assert.equal(reopened.genes.get(minted.address)?.expression.attempts, 1, "重载后仍从伴生文件折叠出这一次 outcome");
+    assert.equal(reopened.retired.get(minted.address), "被取代", "重载后仍从主文件折叠出退休");
   });
 
   it("tolerates a truncated tail and refuses a malformed middle line", async () => {
@@ -239,10 +264,11 @@ describe("gene store", () => {
     await store.appendGene(minted, NOW);
     await store.appendOutcome({ address: minted.address, succeeded: true, drifted: true }, NOW + 10);
     await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 20);
-    const lines = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "");
-    assert.equal(lines.length, 3);
-    assert.match(lines[1]!, /"drifted":true/, "漂移选择的轮次必须在账本里看得出来");
-    assert.ok(!(lines[2]!).includes("drifted"), "分数选择的轮次不写这个键 —— 追加式日志无法回填，缺键即'本轮之前漂移还不存在'，这比写一个从未记录过的 false 诚实");
+    // D116: outcome rows live in the companion file now, gene rows in `path`.
+    const lines = (await readFile(outcomesFile(path), "utf8")).split("\n").filter((line) => line !== "");
+    assert.equal(lines.length, 2);
+    assert.match(lines[0]!, /"drifted":true/, "漂移选择的轮次必须在账本里看得出来");
+    assert.ok(!(lines[1]!).includes("drifted"), "分数选择的轮次不写这个键 —— 追加式日志无法回填，缺键即'本轮之前漂移还不存在'，这比写一个从未记录过的 false 诚实");
   });
 
   // D107: the address tie-break at gene.ts was a real decision-maker and a silent
@@ -445,7 +471,7 @@ describe("runtime applies and journals genes", () => {
     // caught going stale three times. The durable record is the ledger, and that is
     // what the assertion below checks. Trigger for widening: a consumer that needs
     // to know within the same turn, such as the operator panel.
-    const outcome = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
+    const outcome = (await readFile(outcomesFile(path), "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
     assert.match(outcome, /"type":"outcome"/, "最后一行必须是本轮的账");
     assert.match(outcome, /"drifted":true/, "漂移这个事实必须落到账本里，不能只活在返回值里");
     // D113: the same round had two competitors, so the competition record must land
@@ -470,7 +496,7 @@ describe("runtime applies and journals genes", () => {
     });
     const result = await runtime.send("用 snippet 方式替换这段代码");
     assert.equal(result.appliedGene?.address, only.address, "前提：这一轮选中了唯一那条基因");
-    const outcome = (await readFile(path, "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
+    const outcome = (await readFile(outcomesFile(path), "utf8")).split("\n").filter((line) => line !== "").at(-1)!;
     assert.match(outcome, /"type":"outcome"/);
     assert.ok(!outcome.includes("candidates"), "只有一条候选时不写 candidates 键 —— 没有竞争可记");
   });
