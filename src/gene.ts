@@ -261,3 +261,83 @@ export function selectGene(
   const runnerUp = ranked[1];
   return { selection, ranked, tieBrokenByAddress: selection !== null && runnerUp !== undefined && runnerUp.score === selection.score };
 }
+
+/**
+ * Exploration intensity: how often selection should take something other than the
+ * top-ranked candidate (D107, shape from EvoMap's `computeDriftIntensity`).
+ *
+ * `1/sqrt(ne)` plus an offset that decays from `offsetStart` to `offsetFloor` as
+ * the pool matures, where maturity is `totalAttempts / (ne * attemptsPerGene)`.
+ * A pool of one or fewer gets a fixed high intensity.
+ *
+ * Two things about this shape are the point, and both are measured rather than
+ * tasteful. First, it is **self-tuning**: a library holding a handful of genes
+ * explores almost always, and exploration fades as evidence accumulates — so
+ * D106's starvation trap (a new gene scores low, is never selected, and therefore
+ * never earns the evidence that would raise it) is fixed without adding a weight
+ * that favours new genes. Second, the decay is by *total attempts across the pool*,
+ * not by age: a library that is old but barely used has not matured, and treating
+ * elapsed time as evidence would let an idle gene look proven.
+ *
+ * EvoMap's own numbers are `1/sqrt(Ne)`, offset `0.3 → 0.02`, maturity at
+ * `Ne * 10` attempts, and `0.7` for `Ne <= 1`. They are reproduced as defaults here
+ * rather than imported, because this project has zero production dependencies and
+ * because a constant whose provenance is a comment is auditable in a way a
+ * transitive dependency is not.
+ */
+export function computeDriftIntensity(
+  geneCount: number,
+  totalAttempts: number,
+  options: { offsetStart?: number; offsetFloor?: number; attemptsPerGene?: number; tinyPoolIntensity?: number } = {},
+): number {
+  const offsetStart = options.offsetStart ?? 0.3;
+  const offsetFloor = options.offsetFloor ?? 0.02;
+  const attemptsPerGene = options.attemptsPerGene ?? 10;
+  const tiny = options.tinyPoolIntensity ?? 0.7;
+  if (!Number.isFinite(geneCount) || geneCount <= 1) return tiny;
+  const budget = geneCount * attemptsPerGene;
+  // Clamped to [0,1] so a pool that has outrun its budget keeps the floor rather
+  // than driving the offset negative, which would make maturity *reduce*
+  // exploration below the floor it was designed to settle at.
+  const maturity = budget <= 0 ? 1 : Math.min(1, Math.max(0, totalAttempts / budget));
+  const offset = offsetStart + (offsetFloor - offsetStart) * maturity;
+  return Math.min(1, Math.max(0, 1 / Math.sqrt(geneCount) + offset));
+}
+
+/**
+ * Pick which ranked candidate to take (D107, shape from EvoMap's `driftSelect`).
+ *
+ * Returns an index into the ranked list, so the caller keeps owning the list and
+ * `selectGene` stays deterministic. That separation is deliberate and load-bearing:
+ * folding randomness into `selectGene` would break the property the tie-break was
+ * kept for — the same library giving the same answer — and would make every
+ * existing assertion about which gene was selected into a coin flip.
+ *
+ * With probability `intensity`, take a uniformly random candidate from the top
+ * `windowSize`; otherwise take index 0. `rng` is called **at most twice**, once for
+ * the decision and once for the pick, so a test can drive it with a fixed pair of
+ * numbers and know exactly which branch it exercised. A window that grows with
+ * intensity is what keeps a high-intensity pool from reaching the bottom of the
+ * ranking, where the candidates the hard gates admitted but the score rejected live.
+ *
+ * `ponytail:` the window is `1 + floor(intensity * (count - 1))` rather than
+ * EvoMap's separately-tuned `explorationWindowSize`, which is shared with its UCB1
+ * policy. We have one policy, so a second tuning surface would be a knob with
+ * nothing to turn.
+ */
+export function driftIndex(
+  rankedCount: number,
+  intensity: number,
+  rng: () => number,
+): { index: number; drifted: boolean; intensity: number; windowSize: number } {
+  if (rankedCount <= 1) return { index: 0, drifted: false, intensity, windowSize: Math.max(0, rankedCount) };
+  const clamped = Number.isFinite(intensity) ? Math.min(1, Math.max(0, intensity)) : 0;
+  const windowSize = Math.min(rankedCount, 1 + Math.floor(clamped * (rankedCount - 1)));
+  const roll = rng();
+  if (!(roll < clamped)) return { index: 0, drifted: false, intensity: clamped, windowSize };
+  const pick = rng();
+  // A malformed rng must not buy an out-of-range index: falling back to the top
+  // candidate is the same direction as every other fail-closed choice here.
+  const index = Number.isFinite(pick) ? Math.min(windowSize - 1, Math.max(0, Math.floor(pick * windowSize))) : 0;
+  return { index, drifted: index !== 0, intensity: clamped, windowSize };
+}

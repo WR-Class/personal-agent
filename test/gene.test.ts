@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DEFAULT_SELECTION_POLICY, canonicalize, geneAddress, mintGene, scoreCandidates, selectGene } from "../src/gene.ts";
+import { DEFAULT_SELECTION_POLICY, canonicalize, computeDriftIntensity, driftIndex, geneAddress, mintGene, scoreCandidates, selectGene } from "../src/gene.ts";
 import { GeneStore } from "../src/gene-store.ts";
 import type { Gene, GeneDraft, GeneExpression } from "../src/gene.ts";
 import { SessionStore } from "../src/session-store.ts";
@@ -233,6 +233,53 @@ describe("tie reporting", () => {
     );
     assert.equal(excluded.selection, null, "意图不符应被硬门排除");
     assert.equal(excluded.tieBrokenByAddress, false, "唯一候选被排除后没有第二名，也就没有平局");
+  });
+
+  // D107 drift. Two pure functions, tested with a fixed rng pair, because
+  // `driftIndex` promises rng() is called at most twice and a test that cannot
+  // predict the draws cannot tell which branch it exercised.
+  it("intensity is self-tuning: high for a tiny pool, fading as the pool matures", () => {
+    assert.equal(computeDriftIntensity(0, 0), 0.7, "空池走固定高强度");
+    assert.equal(computeDriftIntensity(1, 0), 0.7, "单基因池同理");
+    const fresh = computeDriftIntensity(4, 0);
+    const mature = computeDriftIntensity(4, 40);
+    assert.ok(fresh > mature, "同一个池，攒够尝试后强度必须下降");
+    assert.ok(mature > 0, "但不会降到 0，否则探索彻底停止、饿死陷阱回来");
+    // Maturity is total attempts, not elapsed time: an old but idle pool has not
+    // earned the floor.
+    assert.equal(computeDriftIntensity(4, 400), computeDriftIntensity(4, 40), "超出预算后停在地板，不会把偏移压成负数");
+    assert.ok(computeDriftIntensity(4, 0) > computeDriftIntensity(16, 0), "池越大探索越少");
+  });
+
+  it("drift takes the top candidate when the roll is above intensity", () => {
+    const calls: number[] = [];
+    const rng = () => { calls.push(1); return 0.99; };
+    const r = driftIndex(5, 0.4, rng);
+    assert.equal(r.index, 0);
+    assert.equal(r.drifted, false);
+    assert.equal(calls.length, 1, "没有漂移时只该掷一次");
+  });
+
+  it("drift picks inside the window, never below it", () => {
+    const r = driftIndex(10, 0.4, (() => { let n = 0; return () => (n++ === 0 ? 0.1 : 0.999); })());
+    assert.equal(r.drifted, true);
+    assert.ok(r.index > 0, "漂移必须真的换人，否则这个函数什么都没做");
+    assert.ok(r.index < r.windowSize, "不能越过窗口");
+    assert.equal(r.windowSize, 4, "1 + floor(0.4 * 9) = 4");
+    // The window grows with intensity, so a high-intensity pool can reach further
+    // down the ranking — but never to candidates the gates excluded, because this
+    // function only ever sees the ranked list.
+    assert.ok(driftIndex(10, 1, () => 0).windowSize === 10, "强度 1 时窗口覆盖整个已排序列表");
+  });
+
+  it("is deterministic under a seeded rng, and fails closed on a malformed one", () => {
+    const seeded = () => { let n = 0; const draws = [0.1, 0.5]; return () => draws[n++] ?? 0; };
+    const a = driftIndex(6, 0.5, seeded());
+    const b = driftIndex(6, 0.5, seeded());
+    assert.deepEqual(a, b, "同样的 rng 序列必须给同样的结果，否则选择不可审计");
+    const bad = driftIndex(6, 0.5, (() => { let n = 0; return () => (n++ === 0 ? 0.1 : Number.NaN); })());
+    assert.equal(bad.index, 0, "畸形的 rng 不能换来一个越界下标");
+    assert.equal(driftIndex(0, 0.5, () => 0).index, 0, "空列表不炸");
   });
 });
 });
