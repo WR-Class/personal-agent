@@ -226,6 +226,31 @@ export function scoreCandidates(
       const lower = signal.toLowerCase();
       return tokens.has(lower) || text.includes(lower);
     }).length;
+    // ⚠️ D110: `overlap` is normalized by the *gene's own* breadth, not by the
+    // request's signals and not by a union. That makes it asymmetric, and the
+    // asymmetry has a direction: a gene listing one signal that matches scores 1.0
+    // and cannot lose on this term, while a gene listing ten signals of which three
+    // match scores 0.3. Strictly more knowledge about when a gene applies therefore
+    // scores *lower* for the same hit, so this term rewards writing narrow
+    // `signalsMatch` lists.
+    //
+    // Measured, not argued (test/weight-ablation.test.ts): with `signalWeight: 1`,
+    // that 1.0-against-0.5 gap outweighs a reliability gap of 6/10 against 8/10, so
+    // a gene wins for listing fewer words rather than for working better. The
+    // crossover is at `signalWeight` 0.25 or below.
+    //
+    // ⚠️ Imitating EvoMap does not fix this by changing the weight. Their ratio is
+    // health 0.6 to signal-match 0.4 (`geneSelection.d.ts:194-195`), i.e. about 1.5
+    // to 1, which sits *above* that crossover; and their overlap is a different
+    // metric anyway — symmetric and IDF-weighted, via `bagCosine` /
+    // `idfTagOverlapScore` (`geneSelection.js` importing from `signals/expand.js`).
+    // ⚠️ The 0.04 figure D107 cited as "signals_match is weak evidence" is the
+    // separate `TASK_DOMAIN_WEIGHT` factor, not this term (corrected in D110).
+    //
+    // Left as-is deliberately rather than fixed here, because changing it moves every
+    // score in every existing ledger row and is a change of metric rather than of
+    // tuning. Recorded so the next person does not have to rediscover it: this
+    // property was unknown until an ablation built to test something else failed.
     const overlap = gene.signalsMatch.length === 0 ? 0 : matched / gene.signalsMatch.length;
     if (overlap === 0) {
       return { address, gene, score: 0, overlap, reliability: 0, recency: 0, excluded: "no signal overlap" };

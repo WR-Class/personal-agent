@@ -148,6 +148,38 @@ describe("weight ablation", () => {
     }
   });
 
+  it("rewards knowing less: the same single hit scores lower on a broader gene", () => {
+    // The sharpest form of the asymmetry pinned above, and the reason it is worth a
+    // test of its own rather than a sentence in a comment. Two genes each match
+    // exactly one request signal — identical evidence about this request — and the
+    // one that also declares four other situations it applies in is scored lower for
+    // having declared them. The incentive that creates is to write narrow
+    // `signalsMatch` lists, which makes genes apply in more places than they were
+    // validated for. That is the opposite of what the field is for.
+    const narrow = mintGene(draft("same-hit-narrow", ["snippet"]));
+    const broad = mintGene(draft("same-hit-broad", ["snippet", "重构", "部署", "回滚", "监控"]));
+    const scored = scoreCandidates(
+      [
+        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+      ],
+      { intent: "build" as const, signals: ["snippet"], text: "改一下 snippet" },
+      DEFAULT_SELECTION_POLICY,
+      NOW,
+    );
+    const byName = new Map(scored.map((c) => [c.gene.name, c]));
+    assert.equal(byName.get("same-hit-narrow")?.overlap, 1);
+    assert.equal(byName.get("same-hit-broad")?.overlap, 0.2, "多声明的四个信号变成分母");
+    // ⚠️ Identical records, identical hits, identical recency — so the score
+    // difference is entirely the breadth penalty, which is what makes this a
+    // measurement of the metric rather than of the weights.
+    assert.equal(byName.get("same-hit-narrow")?.reliability, byName.get("same-hit-broad")?.reliability);
+    assert.ok(
+      (byName.get("same-hit-narrow")?.score ?? 0) > (byName.get("same-hit-broad")?.score ?? 0),
+      "同样只命中一个信号，声明得更少的那条反而分更高 —— 这就是那个反向激励",
+    );
+  });
+
   it("recency stays the weakest term, because it decays confidence and not the record", () => {
     // gene.ts:186 already states the semantics; this pins the ordering that follows
     // from them. Raising recency above reliability would let a gene that succeeded
