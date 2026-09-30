@@ -180,6 +180,44 @@ describe("weight ablation", () => {
     );
   });
 
+  it("LOCK (D112): overlap is normalized on the gene side, and changing that is option 丙", () => {
+    // ⚠️ This is a lock, not a preference. gene.ts:229 divides by the gene's own
+    // signalsMatch length, so a gene declaring more situations scores lower for the
+    // same hit (pinned in the "rewards knowing less" test above). D111 established
+    // that EvoMap normalizes on the query side instead (expand.d.ts:24-25), and that
+    // flipping our side is option 丙 — a change to the metric that moves every score
+    // in every ledger row.
+    //
+    // We chose NOT to make that change yet: the evidence does not exist. A real test
+    // needs multiple same-intent genes, a real request stream, and a non-model
+    // verdict for "which gene should have won" — and the only honest verdict is
+    // counterfactual replay over accumulated outcome rows, which the ledger cannot
+    // support until it records the losing candidates (owed).
+    //
+    // So this asserts the CURRENT direction on purpose. If someone flips the
+    // normalization to the query side, this test goes red — that is the point. The
+    // red is the signal to (a) confirm the ledger now records candidates, (b) rerun a
+    // real replay ablation, and (c) rewrite this lock to assert the new direction. A
+    // silent flip of a metric that touches every selection is exactly what this red
+    // exists to prevent.
+    const narrow = mintGene(draft("lock-narrow", ["snippet"]));
+    const broad = mintGene(draft("lock-broad", ["snippet", "重构", "部署", "回滚", "监控"]));
+    const scored = scoreCandidates(
+      [
+        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+      ],
+      { intent: "build" as const, signals: ["snippet"], text: "改一下 snippet" },
+      DEFAULT_SELECTION_POLICY,
+      NOW,
+    );
+    const byName = new Map(scored.map((c) => [c.gene.name, c]));
+    // The load-bearing assertion: gene-side normalization is still in force. Flip
+    // gene.ts:229 to divide by the request's signal count and both of these break.
+    assert.equal(byName.get("lock-narrow")?.overlap, 1, "⚠️ 归一方向变了：这条锁定测试必须与丙的改动一起改，不能单独放宽");
+    assert.equal(byName.get("lock-broad")?.overlap, 0.2, "⚠️ 归一方向变了：分母不再是基因自身的信号数了");
+  });
+
   it("recency stays the weakest term, because it decays confidence and not the record", () => {
     // gene.ts:186 already states the semantics; this pins the ordering that follows
     // from them. Raising recency above reliability would let a gene that succeeded
