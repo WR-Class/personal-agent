@@ -2980,7 +2980,53 @@ const manifest: DshPackageManifest = {
 
 **⚠️ 如实记未做/未读**：`.js` 实现全部混淆未读 ⇒ 只知设计与公式形状，不知具体代码路径；`ops/valueLedger.d.ts`（11,777 B，名字直指"价值账本"）、`algo/confidence.d.ts`、`algo/exploration.d.ts`、`algo/epigenetics.d.ts`、`algo/antiDistill.d.ts`、`schema/evolutionGraph.d.ts` **都已解出但未读**；`geneSelection.d.ts`（13,860 B，主选择逻辑）**未读** ⇒ **本轮关于"四层"的结论出自四个专项模块，主选择器如何组合它们未经核实**；v1→v2 之间还有什么设计变了，未查。
 
+### D107 — EvoMap v2 主选择器与探索机制实读（补 D106 未读的两项，并推翻 D106 的一个采用项）
+
+**材料**：`@evomap/evolver-core@2.0.40` 的 `algo/geneSelection.d.ts`（13,860 B / 254 行，**全读**）与 `algo/exploration.d.ts`（2,348 B / 41 行，**全读**）。仍是声明文件与文档注释，`.js` 混淆未读。
+
+**⚠️ 组合方式（D106 明记"未核实"的那一项，现已核实）：五个阶段，硬门在最前，探索在最后，而【探索不是分数项】。**
+
+1. **硬门在装配阶段跑，在打分之前** —— trust / review / ban。`:47` *"can NEVER override the hard gates (**trust/review/ban run in assembly, before scoring**)"*；`:54-55` *"it re-orders near-ties among **already-admitted** candidates and can NEVER resurrect a gene excluded by trust/review/ban"*。**⚠️ 连 `forcedGeneId`（外部显式指定）也不能越过门**：`:81-84` *"a hard selection **only within the already assembled** candidate/fallback pools: it cannot resurrect a gene filtered by trust/review/ban upstream"*。
+2. **软打分（加权和）**：`:194-195` 逐字给出 —— `health 0.6 + 信号匹配 0.4 − epigeneticPenalty + 0.15·confidence + 0.12·memoryGraph + 0.1·reuseAdjust + 0.08·taskDomain + 0.05·kautoMember`。**⚠️ 权重按【证据强度】排序，而且每个都写了理由**：`REUSE_WEIGHT = 0.1` *"Deliberately SMALLER than CONFIDENCE_WEIGHT: **a self-reported reuse outcome is weaker evidence than the confidence sidecar (which is built from verified cycle history)**"*；`KAUTO_WEIGHT = 0.05` *"membership is a **writer-side property**, not verified cycle history"*。**⚠️ 整个权重向量编码进一个版本串**：`SELECTION_WEIGHTS_VERSION = "sel-7-idf-domain(gh-2,conf=0.15,memory=0.12,reuse=0.1,domain=0.08)"`，*"Bumped whenever a factor is added so golden weight snapshots track the change"*。**⚠️ 而且它把 `signals_match` 当【弱证据】**：`TASK_DOMAIN_SIGNAL_EVIDENCE = 0.5`，注释算出 *"its maximum score contribution is 0.08 * 0.5 = 0.04"*。
+3. **底线 + 弃权**：`floor` *"低于此分则不选(→ 走 innovate 新基因), 默认 0"*（`:76-77`）；`assessSelectionGuard(scored, plateauActive)` 在两种情况下弃权 —— `no_match` 与 **`plateau_flat_match`**（`:160`），后者是"分差太小、区分不出来"（`matchSpread`）。**⚠️ 三段式灰度**：`SelectionGuardMode = 'legacy' | 'shadow' | 'enforce'`（`:158`）。
+4. **回退池**：`distilledFallback`（`:89-98`）—— 不匹配当前信号但普适的蒸馏基因，**"never compete in the normal scored set"**，只在正常选择没有正向结果时用，*"**instead of falling through to a blind innovate**, selection reuses a known distilled strategy"*。
+5. **⚠️ 探索在最后，而且【不是加分项，是"以某个概率从 top-N 里随机挑一个"】**：`driftSelect` 的注释 —— *"No exploration → deterministic top (index 0). With exploration → compute intensity (an active plateau forces it to 0.7/1.0); **with probability = intensity, pick a random candidate from the top-N** (N grows with intensity). **rng() is called at most twice; pass a seeded rng for deterministic tests.**"* 强度公式：`computeDriftIntensity(ne, totalAttempts)` = *"**1/sqrt(Ne)** + an offset that **decays from 0.3 → 0.02 as the pool matures** (totalAttempts approaches Ne * 10). **Tiny pools (Ne <= 1) get a fixed high 0.7 to force exploration.**"* 平台期由 `detectPlateau` 从近期结果里数"末尾连续非成功"得出。
+
+**⚠️ 另外四条设计，每条都独立成立：**
+
+- **`antiWarnings` 永不进打分**：`:99-103` *"carried into the decision **for prompt rendering only; they never enter scoring, fallback, or forced selection**"*；`:131-132` *"**never selected, executed, or attributed as used genes**"*。**⇒ "该做什么"与"别做什么"在结构上分开，负面记忆只渲染进提示词。**
+- **可解释是强制的**：`:125` *"可解释的选择决策(**禁黑盒**): 带 candidates/scores/reasons/weightsVersion"*。`GeneDecision` 携带 `selectedReason`、`weightsVersion`、`strategyName`、`selectionPolicy` 追踪、`selectionGuard` 追踪。
+- **⚠️ UCB1 是【影子运行】的**：`SelectionPolicyTrace` 带 `shadowArmId` / `shadowDisagrees`（`:154-155`）⇒ **老虎机臂与默认策略并行计算、只记录分歧、不拿它下注。** 配合 D106 那条"平坦探索是对照组"，这是同一个纪律：**新排序机制先进影子，用分歧数据说话。**
+- **⚠️ 权重上线前先做消融**：`ablateKautoLambda`（`:229-237`）离线扫 λ，报 `rankChangesByLambda` / `selectedChangesByLambda` / `topKChangesByLambda`，*"Pure ranking sensitivity for `score_T2 = score_base + λ · 1[k_a ∈ K_auto]`"*。**⇒ 一个因子如果改不动任何排序，就不该上线；这是把变异测试用在了评分权重上。**
+- **⚠️ 三种可互换策略，第二种是刻意保留的对照基线**：`engineHealthSelection`（默认）／`signalMatchSelection` *"纯信号匹配采样(**忽略 health**, 对照基线 — **经验主义要可对比**)"*／`agentLedSelection(pick)` *"engine 只给候选+分, agent 拍板"*，由 `makeGeneSelectionPoint()` 挂成一个 `StrategyPoint`。**⚠️ 这个接缝形状与本项目 D90 工具工厂、D101 `SkillProvider`、`SessionProjectionUnit` 同构。**
+- **⚠️ 一条安全性质**：`explorationEligible` 是 *"**Assembly-owned**… Injected callers must not self-assert this bit; candidateAssembly overwrites Hub candidates to false"* ⇒ **外部注入的候选不能给自己发探索资格。**
+
+**⚠️ 推翻 D106 的一个采用项（这是本轮最重要的自我更正）**：D106 写的采用①是"给 `selectGene` 加一个**探索项**"。**实读证明形状错了** —— EvoMap 的探索**不是分数里的一项**，而是**打分之后、以 `intensity` 的概率从 top-N 随机取一个**；UCB1（那才是加分项）是**另一条策略**，而且**在影子模式跑、不是默认**。**⇒ 采用①改为：加一个"打分后按概率在 top-N 内漂移"的阶段，强度用 `1/sqrt(Ne)` + 随成熟度衰减的偏移，而不是给新基因加分。** 好处是**自调节、不需要新权重**：库只有几条基因时几乎总在探索（`Ne <= 1` 固定 0.7），库长大了自动收敛到 0.02。
+
+**⚠️ 与本项目的实测对照（右列有 `file:line`）**：
+
+| EvoMap v2 | 本项目 |
+| :--- | :--- |
+| 硬门在装配阶段、打分之前，连显式指定也越不过 | `gene.ts:221/231/237` 三道 `excluded`（intent 不符／零重叠／连续失败）**也在打分前** ⇒ **这一层形状一致** ✅ |
+| 主权重 `health 0.6 / 信号匹配 0.4`，且 `signals_match` 被当弱证据（贡献上限 0.04） | **`signalWeight: 1 / reliabilityWeight: 1 / recencyWeight: 0.5`（`gene.ts:197-198`）—— 信号重叠与可靠性【同权且都是最高】** ⚠️ |
+| 权重向量编码进版本串，加一个因子就升版 | **无版本号**，权重是裸字面量 ⚠️ |
+| 每个软因子都写了"为什么是这个权重"（按证据强度排序） | **三个权重无任何理由记录** ⚠️ |
+| 探索 = 打分后按概率在 top-N 内漂移，强度 `1/sqrt(Ne)` 自调节 | **无探索阶段**；`recency` 反而惩罚未成功者（`gene.ts:240`） ⚠️ |
+| 底线以下 ⇒ 不选 ⇒ 去 innovate 新基因 | **有对应物**：`selectFor` 返回 `undefined` 即"诚实的无基因轮"，且 `induct` 消费它 ✅ |
+| 分差太小 ⇒ 弃权（`plateau_flat_match`） | **无**：平局用 `a.address.localeCompare(b.address)` 硬判（`gene.ts:255`）⚠️ **⇒ 地址字典序成了实质决策者，而它与能力无关** |
+| 负面记忆只渲染、永不打分 | **`avoid` 字段进 `renderGeneBlock`（`gene-store.ts:240-250`）、不进打分** ⇒ **形状一致** ✅ |
+| 决策带 `reasons` / `weightsVersion` / 策略名 | 带四个数与 `excluded` 串，**无权重版本、无赢家的 reasons** ⚠️ |
+| 新排序机制先影子运行、记分歧 | **无影子机制** ⚠️ |
+| 权重上线前做 λ 消融 | **无**（但本项目有变异测试纪律，形状可复用） |
+
+**采用（下一轮，本轮无代码）**：① **探索改成"打分后按概率在 top-N 内漂移"**（照 `driftSelect` 的形状，强度 `1/sqrt(Ne)` + 成熟度衰减偏移，`rng` 可注入以便确定性测试）；② **给权重加版本串并把理由写进注释**（照 `SELECTION_WEIGHTS_VERSION` 的形状）；③ **重新审视 `signalWeight: 1`** —— EvoMap 把信号匹配当弱证据，我们把它与可靠性同权并列最高，**这个差别要么找到理由、要么改**；④ **平局不再用地址字典序硬判**，改成"分差低于阈值即弃权/漂移"（同时解决 D106 的饿死陷阱：漂移会给新基因真实机会，而不是给它加分）。
+
+**明确不采用**：UCB1 作为默认策略（EvoMap 自己把它放影子模式，且 D106 已记录它删掉 +Infinity 的实测理由）；`epigeneticPenalty`／`memoryBoost`／`reuseAdjust`／`kautoMember`／`taskDomain` 五个软因子（**本项目没有对应的数据来源，加进来就是永远为 0 的死权重** —— 触发条件：出现相应数据源时再议）；`distilledFallback` 回退池（触发：库里出现"普适但不匹配当前信号"的基因类别时）；hub／跨运行时相关的一切（`assetId`、`hubAsset`、`reuseAdjust`，与 `SWARM_LOOP.md:174` 已记录的不采用一致）。
+
+**⚠️ 如实记未读**：`ops/valueLedger.d.ts`（11,777 B，D106 已点名，**本轮仍未读** ⇒ **"反事实增益"的成熟实现还没看到，D106 采用清单里那一项仍无依据**）；`algo/confidence.d.ts`（7,238 B）；`algo/candidateAssembly.d.ts`（5,979 B，**硬门究竟怎么跑就在这里，本轮只从注释推断、未读实现**）；`algo/epigenetics.d.ts`、`algo/antiDistill.d.ts`、`algo/geneIntake.d.ts`、`schema/evolutionGraph.d.ts`；全部 `.js`（混淆）。**⚠️ 因此"五个阶段"的顺序是从文档注释里 *"run in assembly, before scoring"* 与 *"Used ONLY after normal selection"* 这类措辞推出来的，不是从调用链读出来的。**
+
 ## 3. 实际采用状态（当前）
+
 
 | 来源/方向 | 状态 | 当前代码与未采用部分 |
 |---|---|---|
