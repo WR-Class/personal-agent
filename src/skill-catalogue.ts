@@ -236,3 +236,116 @@ function permissionError(file: string, key: string, index?: number): Error {
       `要放宽或收紧工具，请用同目录下的 config.json（它会逐条审计放宽项）`,
   );
 }
+
+/**
+ * A source of skills: the Definition role of the skill seam.
+ *
+ * `docs_architecture.md:117` is explicit that a seam has three roles and that
+ * "one role alone is not a seam", so this interface means something only
+ * together with {@link registerSkillProvider} (Provider) and {@link listSkills}
+ * (Consumer, called from `runtime.ts`). The shape is copied from this
+ * repository's own existing seam, `session-store.ts:298-311`, rather than from
+ * an external product: key validation, duplicate refusal, a disposer, an
+ * ownership token, and an auditable listing.
+ *
+ * ⚠️ `list` takes the agent home rather than closing over it. The home is a
+ * runtime parameter, not module state, so a provider that captured it could not
+ * be registered once at module scope the way `session-store.ts:318-320`
+ * registers the core's own projection. Passing it keeps that property and gives
+ * a third-party provider the same path the built-in one uses.
+ */
+export interface SkillProvider {
+  /** Identity in the registry. Two providers may not share one. */
+  readonly key: string;
+  /** Lower is nearer. The nearest provider's catalogue is the only one used. */
+  readonly order: number;
+  list(agentHome: string): Promise<readonly TaskPromptSkill[]>;
+}
+
+const skillProviders = new Map<
+  string,
+  { readonly token: symbol; readonly provider: SkillProvider }
+>();
+
+/**
+ * Register a skill source. Ownership is a unique token for the same reason as
+ * in `session-store.ts:294-296`: matching on the provider's identity would let
+ * a stale disposer from a reload unregister the live registration behind it.
+ *
+ * ⚠️ A duplicate key throws rather than warning. DSH's skill registry is
+ * lenient here (first registration wins, with a warning), and this project
+ * deliberately is not: skills are part of the capability surface, and
+ * `skill-catalogue.ts:151-156` already states the stronger reason — "Ambiguity
+ * in a record is a defect even when the behaviour is defined."
+ */
+export function registerSkillProvider(provider: SkillProvider): () => void {
+  if (typeof provider.key !== "string" || provider.key.trim() === "") {
+    throw new Error("技能提供方的 key 必须是非空字符串");
+  }
+  if (!Number.isSafeInteger(provider.order)) {
+    throw new Error(
+      `技能提供方 ${JSON.stringify(provider.key)} 的 order 必须是安全整数，实际是 ${JSON.stringify(provider.order)}`,
+    );
+  }
+  if (typeof provider.list !== "function") {
+    throw new Error(`技能提供方 ${JSON.stringify(provider.key)} 缺 list 方法`);
+  }
+  if (skillProviders.has(provider.key)) {
+    throw new Error(`技能提供方已注册：${provider.key}`);
+  }
+  const token = Symbol(provider.key);
+  skillProviders.set(provider.key, { token, provider });
+  return () => {
+    const current = skillProviders.get(provider.key);
+    if (current !== undefined && current.token === token) skillProviders.delete(provider.key);
+  };
+}
+
+/** The registered provider keys. What can be listed can be audited. */
+export function skillProviderKeys(): readonly string[] {
+  return [...skillProviders.keys()];
+}
+
+/**
+ * The catalogue to route against: the NEAREST provider's, and nothing else.
+ *
+ * ⚠️ This does not merge, and that is not an oversight. `runtime.ts:782-788`
+ * records why an injected catalogue "wins outright rather than merging with the
+ * disk one: two sources for a single routing decision is how an operator stops
+ * being able to tell which skill fired." Merging would also silently break two
+ * invariants that are enforced per file and therefore cannot see across
+ * providers: the duplicate-id refusal at `:157-161` and the byte ceiling at
+ * `:163-169`. So a second provider SHADOWS the first entirely. That is a strong
+ * semantic and it is stated here rather than discovered later.
+ *
+ * ⚠️ Merging stays closed until skills carry a source key that
+ * `taskspec-prompt.ts:111` prints alongside the matched id, and until the two
+ * per-file invariants above are lifted to the merged list.
+ *
+ * No providers registered yields no skills, which is the state every existing
+ * installation is in today; per `:98-105` a missing catalogue is a valid empty
+ * state and any other read failure throws rather than looking like a deletion.
+ */
+export async function listSkills(agentHome: string): Promise<readonly TaskPromptSkill[]> {
+  let nearest: SkillProvider | undefined;
+  for (const { provider } of skillProviders.values()) {
+    if (nearest === undefined || provider.order < nearest.order) nearest = provider;
+  }
+  return nearest === undefined ? [] : nearest.list(agentHome);
+}
+
+/**
+ * The built-in provider: the agent home's `skills.json`, which is what D84
+ * built and what every installation has today. Registered at module scope so it
+ * happens once per process rather than once per runtime, matching
+ * `session-store.ts:318-320`.
+ *
+ * ⚠️ `order: 100` leaves room either side for a provider that should shadow it
+ * or be shadowed by it. The disposer is exported so a test can prove the
+ * explicit-failure path; nothing calls it in normal operation.
+ */
+export const disposeAgentHomeSkillProvider = registerSkillProvider({
+  key: "agent-home",
+  order: 100,
+  list: (agentHome) => loadSkillCatalogue(agentHome),
+});

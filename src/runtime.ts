@@ -16,7 +16,7 @@ import { assessTaskState, formatTaskStateForPrompt, type TaskStateAssessment } f
 import { validateResponse } from "./response-validation.ts";
 import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
-import { loadSkillCatalogue } from "./skill-catalogue.ts";
+import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
@@ -786,7 +786,11 @@ export class AgentRuntime {
     // An injected catalogue wins outright rather than merging with the disk one:
     // two sources for a single routing decision is how an operator stops being able
     // to tell which skill fired.
-    const skillCatalogue = this.taskPromptSkills ?? (await loadSkillCatalogue(this.home));
+    // ⚠️ D101: this now goes through the skill seam instead of importing the
+    // loader directly, so a provider can be registered without editing this file.
+    // `listSkills` takes the NEAREST provider's catalogue and does not merge,
+    // which is what keeps the paragraph above true — see its own doc comment.
+    const skillCatalogue = this.taskPromptSkills ?? (await listSkills(this.home));
     this.taskPromptBlock = assembleTaskPrompt(taskSpec, skillCatalogue);
     // ⚠️ D82: only the skill half is charged to the injected cap, so measure it
     // instead of estimating it. Assembling against an empty catalogue yields exactly
