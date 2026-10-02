@@ -21,7 +21,11 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 after(async () => {
   await wait(200);
-  for (const dir of created) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // Windows releases child-process cwd handles asynchronously; under load the
+  // old 5x100ms budget was not enough and the after() hook itself failed with
+  // EPERM while all assertions had passed (measured 2026-10-02). Retry budget
+  // widened, assertions untouched.
+  for (const dir of created) rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
 });
 
 /**
