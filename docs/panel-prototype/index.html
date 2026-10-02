@@ -14,7 +14,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .banner{background:#fdf3e2;color:#b45309;text-align:center;font-size:12px;padding:3px 10px;flex-shrink:0}
 /* title bar */
 .title{height:40px;display:flex;align-items:center;padding:0 14px;background:var(--side);border-bottom:1px solid var(--line);gap:10px;flex-shrink:0}
-.dots{display:flex;gap:8px;margin-right:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+/* Windows 窗口控制按钮：最小化/最大化/关闭，固定右上角（交付目标是 Windows
+   桌面 Electron 应用；操作员指出不应是 macOS 红黄绿圆点，也不该在左侧） */
+.winctl{display:flex;flex-shrink:0;margin-right:-14px}
+.winctl button{width:46px;height:40px;display:inline-flex;align-items:center;justify-content:center;color:var(--sub);font-size:13px}
+.winctl button:hover{background:var(--hover);color:var(--text)}
+.winctl button.close:hover{background:#e81123;color:#fff}
 .title .t{flex:1;text-align:center;color:var(--sub);font-size:13px}
 .ib{width:30px;height:30px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:var(--sub)}
 .ib:hover{background:var(--hover);color:var(--text)}.ib.on{color:var(--main)}
@@ -143,10 +148,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 <div class="win" id="win">
   <div class="banner">⚠️ 原型 v6 交互 mockup（基座为操作员提供的 WorkBuddy 风原型，已按 personal-agent 真实能力裁剪），数据均为模拟</div>
   <div class="title">
-    <div class="dots"><i></i><i></i><i></i></div>
     <button class="ib on" data-act="toggleSide" title="侧边栏">☰</button>
     <div class="t" id="winTitle">personal-agent</div>
     <button class="ib on" data-act="toggleRight" id="rightBtn" title="右侧面板">▧</button>
+    <div class="winctl"><button title="最小化">─</button><button title="最大化">▢</button><button class="close" title="关闭">✕</button></div>
   </div>
   <div class="body">
     <aside class="side" id="side">
