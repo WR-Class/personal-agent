@@ -1,336 +1,379 @@
-<!doctype html>
-<html lang="zh">
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
 <head>
-<meta charset="utf-8" />
-<title>personal-agent 面板原型 v5（按 WorkBuddy 已登录真机截图重画，非真实接线）</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="UTF-8">
+<title>personal-agent 面板原型 v6（基座：操作员提供的 WorkBuddy 风交互原型，已裁掉本项目没有的能力）</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  /* ── v5：布局按操作员提供的已登录真机截图重画 ─────────────────────────────
-     真实观察（截图实测，非推测）：
-     1. 权限选择器在输入框内部（"🛡 默认权限 ▾" 底部左侧），不在标题栏
-     2. 模型选择器也在输入框内部（右下角 + 发送按钮）
-     3. 助手消息无气泡：头像+名字+状态行（"已完成 6s"）+纯文本+底部操作图标行；
-        只有用户消息有小灰气泡（右对齐）
-     4. 右侧栏是抽屉：默认关闭，右上角按钮开合；内部区块可折叠（"概览 ▾/产物 ▾"）
-     5. 对话内容居中限宽（反编译 CSS 实测 max-width:832px）
-     6. 输入框是居中的白色大圆角卡片，带阴影
-     色板/字体仍取自反编译产物（浅色、PingFang SC、主题绿）。 */
-  :root {
-    --wb-bg: #ffffff;
-    --wb-bg-secondary: #f7f7f8;
-    --wb-bg-tertiary: #f5f5f5;
-    --wb-border: rgba(0,0,0,.08);
-    --wb-border-subtle: rgba(0,0,0,.06);
-    --wb-text-primary: #1f1f1f;
-    --wb-text-secondary: #5c5c5c;
-    --wb-text-tertiary: #8a8a8a;
-    --wb-green: #07c160;
-    --wb-green-subtle: #e8f8ef;
-    --wb-warning: #d4880a;
-    --wb-warning-subtle: #fdf3e2;
-    --wb-danger: #e34d4d;
-    --wb-danger-subtle: #fdecec;
-    --wb-radius-sm: 6px;
-    --wb-radius-md: 8px;
-    --wb-radius-lg: 12px;
-    --wb-radius-xl: 16px;
-    --wb-radius-pill: 999px;
-    --wb-sidebar-w: 220px;
-    --wb-titlebar-h: 38px;
-    --wb-chat-max: 832px;
-    --wb-mono: "Cascadia Code", "Consolas", monospace;
-    --wb-font: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--wb-bg); color: var(--wb-text-primary); font-family: var(--wb-font); font-size: 13px; -webkit-font-smoothing: antialiased; overflow: hidden; }
-  .banner { background: var(--wb-warning-subtle); color: var(--wb-warning); padding: 6px 16px; font-size: 12px; border-bottom: 1px solid var(--wb-border); text-align: center; }
-
-  .app { display: grid; grid-template-columns: var(--wb-sidebar-w) 1fr; grid-template-rows: var(--wb-titlebar-h) 1fr; height: calc(100vh - 29px); }
-
-  /* 标题栏：左=会话标题，右=操作图标+抽屉开关（仿截图顶栏） */
-  .titlebar { grid-column: 1 / 3; display: flex; align-items: center; padding: 0 12px; background: var(--wb-bg); border-bottom: 1px solid var(--wb-border-subtle); gap: 10px; }
-  .titlebar .session-title { font-weight: 600; font-size: 13px; }
-  .titlebar .spacer { flex: 1; }
-  .tb-icon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--wb-radius-md); border: none; background: transparent; color: var(--wb-text-secondary); font-size: 14px; cursor: pointer; }
-  .tb-icon:hover { background: var(--wb-bg-tertiary); color: var(--wb-text-primary); }
-  .tb-icon.active { background: var(--wb-bg-tertiary); color: var(--wb-text-primary); }
-
-  /* 侧边栏（截图实测：文字入口 + 任务折叠组 + 空间折叠组） */
-  .sidebar { grid-row: 2 / 3; background: var(--wb-bg-secondary); border-right: 1px solid var(--wb-border-subtle); padding: 10px; overflow-y: auto; }
-  .nav-item { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: var(--wb-radius-md); cursor: pointer; color: var(--wb-text-primary); font-size: 13px; }
-  .nav-item:hover { background: rgba(0,0,0,.04); }
-  .nav-item.primary { color: var(--wb-text-primary); font-weight: 500; }
-  .sidebar details { margin-top: 10px; }
-  .sidebar summary { height: 26px; display: flex; align-items: center; gap: 4px; padding: 0 8px; cursor: pointer; color: var(--wb-text-tertiary); font-size: 12px; list-style: none; border-radius: var(--wb-radius-sm); }
-  .sidebar summary::-webkit-details-marker { display: none; }
-  .sidebar summary::before { content: "▾"; font-size: 9px; transition: transform .15s; }
-  .sidebar details:not([open]) > summary::before { transform: rotate(-90deg); }
-  .sidebar summary .cnt { color: var(--wb-text-tertiary); }
-  .space summary { color: var(--wb-text-secondary); font-size: 12.5px; }
-  .session-item { height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 22px; border-radius: var(--wb-radius-sm); cursor: pointer; color: var(--wb-text-secondary); font-size: 12.5px; }
-  .session-item .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .session-item .time { color: var(--wb-text-tertiary); font-size: 11px; flex-shrink: 0; }
-  .session-item.active { background: rgba(0,0,0,.05); color: var(--wb-text-primary); }
-  .session-item:hover:not(.active) { background: rgba(0,0,0,.03); }
-
-  /* 主区：对话居中限宽（实测 832px），底部居中输入卡片 */
-  .main { grid-row: 2 / 3; overflow-y: auto; background: var(--wb-bg); display: flex; flex-direction: column; }
-  .chat { flex: 1; width: 100%; max-width: var(--wb-chat-max); margin: 0 auto; padding: 24px 24px 12px; display: flex; flex-direction: column; gap: 20px; }
-
-  /* 用户消息：右对齐小灰气泡（截图实测） */
-  .msg-user { align-self: flex-end; max-width: 70%; background: var(--wb-bg-tertiary); border-radius: var(--wb-radius-lg); padding: 8px 14px; font-size: 13.5px; line-height: 1.6; }
-
-  /* 助手消息：无气泡——头像+名字+状态行+纯文本+操作图标行（截图实测） */
-  .msg-assistant { align-self: stretch; }
-  .msg-assistant .who { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .msg-assistant .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--wb-text-primary); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
-  .msg-assistant .who .name { font-weight: 600; font-size: 13px; }
-  .msg-assistant .status { color: var(--wb-text-tertiary); font-size: 12px; margin: 2px 0 6px 32px; }
-  .msg-assistant .text { margin-left: 32px; font-size: 13.5px; line-height: 1.7; }
-  .msg-assistant .actions-row { margin-left: 32px; margin-top: 8px; display: flex; gap: 4px; align-items: center; }
-  .msg-assistant .actions-row .tb-icon { width: 26px; height: 26px; font-size: 13px; color: var(--wb-text-tertiary); }
-  .msg-assistant .model-tag { margin-left: 8px; color: var(--wb-text-tertiary); font-size: 12px; }
-
-  .reasoning { margin-left: 32px; padding: 8px 14px; border-left: 2px solid var(--wb-border); color: var(--wb-text-tertiary); font-size: 12.5px; line-height: 1.6; }
-
-  /* 工具调用卡片：保留本项目特有概念，视觉并入浅色语言 */
-  .toolcall { margin-left: 32px; max-width: calc(100% - 32px); border: 1px solid var(--wb-border-subtle); border-radius: var(--wb-radius-lg); overflow: hidden; background: #fff; }
-  .toolcall .head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--wb-bg-secondary); font-family: var(--wb-mono); font-size: 12px; cursor: pointer; }
-  .toolcall .head .badge { font-size: 10px; padding: 2px 9px; border-radius: var(--wb-radius-pill); }
-  .toolcall .head .badge.readonly { color: var(--wb-green); background: var(--wb-green-subtle); }
-  .toolcall .head .badge.write { color: var(--wb-warning); background: var(--wb-warning-subtle); }
-  .toolcall .head .badge.mcp { color: #4a6fd6; background: #eef1fd; }
-  .toolcall .body { padding: 12px 14px; font-family: var(--wb-mono); font-size: 12px; color: var(--wb-text-secondary); white-space: pre-wrap; border-top: 1px solid var(--wb-border-subtle); display: none; }
-  .toolcall.open .body { display: block; }
-  .toolcall .result-ok { color: var(--wb-green); }
-
-  /* 批准卡片 */
-  .approval-card { margin-left: 32px; border: 1px solid #f0d9a8; border-radius: var(--wb-radius-lg); background: var(--wb-warning-subtle); padding: 14px 16px; }
-  .approval-card .title { color: var(--wb-warning); font-weight: 600; font-size: 13px; margin-bottom: 6px; }
-  .approval-card .prompt { font-family: var(--wb-mono); font-size: 12px; color: var(--wb-text-secondary); margin-bottom: 12px; white-space: pre-wrap; background: rgba(255,255,255,.6); padding: 8px 10px; border-radius: var(--wb-radius-sm); }
-  .approval-card .actions { display: flex; gap: 8px; }
-  .btn { padding: 7px 16px; border-radius: var(--wb-radius-pill); border: none; font-size: 12.5px; cursor: pointer; font-family: inherit; font-weight: 500; }
-  .btn.approve { background: var(--wb-green); color: #fff; }
-  .btn.deny { background: #fff; color: var(--wb-danger); border: 1px solid #f3c9c9; }
-  .approval-card .source-note { margin-top: 10px; font-size: 11px; color: var(--wb-text-tertiary); }
-
-  .task-line { margin-left: 32px; font-size: 12px; color: var(--wb-text-tertiary); font-family: var(--wb-mono); }
-  .task-line .met { color: var(--wb-green); }
-
-  /* 输入区：居中白色大圆角卡片（截图实测），权限与模型选择器内嵌 */
-  .composer-wrap { width: 100%; max-width: var(--wb-chat-max); margin: 0 auto; padding: 8px 24px 16px; }
-  .composer { background: #fff; border: 1px solid var(--wb-border); border-radius: var(--wb-radius-xl); box-shadow: 0 4px 16px rgba(0,0,0,.06); padding: 12px 14px 8px; }
-  .composer textarea { width: 100%; resize: none; height: 40px; border: none; outline: none; font-family: inherit; font-size: 13.5px; color: var(--wb-text-primary); background: transparent; padding: 2px 4px; }
-  .composer .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-  .composer .chip { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: var(--wb-radius-pill); border: 1px solid var(--wb-border); background: #fff; color: var(--wb-text-secondary); font-size: 12px; cursor: pointer; font-family: inherit; }
-  .composer .chip:hover { background: var(--wb-bg-secondary); }
-  .composer .chip .caret { font-size: 9px; color: var(--wb-text-tertiary); }
-  .composer .chip.model { border: none; color: var(--wb-text-tertiary); }
-  .composer .spacer { flex: 1; }
-  .composer button.send { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--wb-text-primary); color: #fff; font-size: 13px; cursor: pointer; }
-  .budget-line { font-family: var(--wb-mono); font-size: 11px; color: var(--wb-text-tertiary); display: flex; gap: 14px; padding: 6px 6px 0; justify-content: center; }
-  .budget-line .warn-tok { color: var(--wb-warning); }
-
-  /* 右侧抽屉：默认关闭，右上角按钮开合（截图实测的交互形态）；
-     内部区块用 <details> 可折叠（截图里的 "概览 ▾ / 产物 ▾" 形态） */
-  .drawer { position: fixed; top: calc(var(--wb-titlebar-h) + 29px); right: 0; bottom: 0; width: 300px; background: #fff; border-left: 1px solid var(--wb-border-subtle); box-shadow: -4px 0 16px rgba(0,0,0,.06); transform: translateX(100%); transition: transform .18s ease; overflow-y: auto; z-index: 10; }
-  .drawer.open { transform: translateX(0); }
-  .drawer .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--wb-border-subtle); font-size: 12.5px; color: var(--wb-text-secondary); }
-  .drawer details { border-bottom: 1px solid var(--wb-border-subtle); }
-  .drawer summary { padding: 12px 16px; font-size: 12.5px; font-weight: 500; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
-  .drawer summary::-webkit-details-marker { display: none; }
-  .drawer summary::before { content: "▾"; font-size: 9px; color: var(--wb-text-tertiary); transition: transform .15s; }
-  .drawer details:not([open]) > summary::before { transform: rotate(-90deg); }
-  .drawer summary .count { margin-left: auto; background: var(--wb-bg-secondary); border-radius: var(--wb-radius-pill); padding: 1px 8px; font-size: 10px; color: var(--wb-text-tertiary); font-weight: 400; }
-  .drawer .sect-body { padding: 0 16px 12px; }
-  .job-item, .plugin-item, .audit-item { padding: 8px 0; border-bottom: 1px solid var(--wb-border-subtle); font-size: 12px; }
-  .job-item:last-child, .plugin-item:last-child, .audit-item:last-child { border-bottom: none; }
-  .job-item .job-head { display: flex; justify-content: space-between; font-family: var(--wb-mono); font-size: 11.5px; }
-  .job-status { font-size: 10px; padding: 2px 9px; border-radius: var(--wb-radius-pill); }
-  .job-status.running { background: var(--wb-green-subtle); color: var(--wb-green); }
-  .job-status.done { background: var(--wb-bg-secondary); color: var(--wb-text-tertiary); }
-  .job-item .job-actions { margin-top: 6px; display: flex; gap: 6px; }
-  .job-item .job-actions button { font-size: 10.5px; padding: 3px 10px; border-radius: var(--wb-radius-pill); border: 1px solid var(--wb-border); background: #fff; color: var(--wb-text-secondary); cursor: pointer; font-family: inherit; }
-  .plugin-item .plugin-head { display: flex; justify-content: space-between; align-items: center; }
-  .plugin-item .plugin-name { font-family: var(--wb-mono); font-size: 12px; }
-  .plugin-item .plugin-tools { color: var(--wb-text-tertiary); font-size: 11px; margin-top: 4px; }
-  .plugin-item.error .plugin-tools { color: var(--wb-danger); }
-  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-  .dot.ok { background: var(--wb-green); } .dot.err { background: var(--wb-danger); }
-  .audit-item { font-family: var(--wb-mono); font-size: 11px; }
-  .audit-item .audit-decision { padding: 1px 7px; border-radius: var(--wb-radius-pill); font-size: 10px; }
-  .audit-item .audit-decision.denied { color: var(--wb-danger); background: var(--wb-danger-subtle); }
-  .audit-item .audit-decision.allowed { color: var(--wb-green); background: var(--wb-green-subtle); }
-  .audit-item .audit-reason { color: var(--wb-text-tertiary); margin-top: 4px; }
-  .placeholder-note { font-size: 10.5px; color: var(--wb-text-tertiary); padding: 10px 16px; text-align: center; }
+:root{--bg:#f6f7f9;--panel:#fff;--side:#eef0f4;--line:#e5e7ec;--text:#1f2329;--sub:#7b828e;--main:#3a6bff;--main-weak:#e8eeff;--ok:#16a34a;--warn:#f59e0b;--danger:#ef4444;--hover:rgba(0,0,0,.05);--shadow:0 8px 28px rgba(20,30,60,.14)}
+[data-theme=dark]{--bg:#16181d;--panel:#1e2128;--side:#191b21;--line:#2c3039;--text:#e8eaee;--sub:#8b93a1;--main:#5b86ff;--main-weak:#26314f;--hover:rgba(255,255,255,.07);--shadow:0 8px 28px rgba(0,0,0,.5)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:#0b0d12;height:100vh;display:flex;align-items:center;justify-content:center}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.win{width:min(1400px,100vw);height:min(880px,100vh);background:var(--bg);display:flex;flex-direction:column;overflow:hidden;border-radius:10px;position:relative}
+.banner{background:#fdf3e2;color:#b45309;text-align:center;font-size:12px;padding:3px 10px;flex-shrink:0}
+/* title bar */
+.title{height:40px;display:flex;align-items:center;padding:0 14px;background:var(--side);border-bottom:1px solid var(--line);gap:10px;flex-shrink:0}
+.dots{display:flex;gap:8px;margin-right:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+.title .t{flex:1;text-align:center;color:var(--sub);font-size:13px}
+.ib{width:30px;height:30px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:var(--sub)}
+.ib:hover{background:var(--hover);color:var(--text)}.ib.on{color:var(--main)}
+.body{flex:1;display:flex;min-height:0}
+/* sidebar */
+.side{width:252px;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px;flex-shrink:0;transition:margin .2s}
+.side.hide{margin-left:-252px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;padding:2px 8px 12px}
+.logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#3a6bff,#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px}
+.newbtn{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border-radius:8px;background:var(--main);color:#fff;font-weight:500;margin-bottom:10px}
+.newbtn:hover{opacity:.9}
+.nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;width:100%;text-align:left;color:var(--text)}
+.nav:hover{background:var(--hover)}.nav.active{background:var(--main-weak);color:var(--main);font-weight:500}
+.grp{font-size:12px;color:var(--sub);padding:12px 10px 4px}
+.tasks{flex:1;overflow:auto;margin:0 -4px;padding:0 4px}
+.ti{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;cursor:pointer;position:relative}
+.ti:hover{background:var(--hover)}.ti.active{background:var(--panel);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.ti .n{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ti .more{opacity:0;width:22px;height:22px;border-radius:4px;color:var(--sub)}
+.ti:hover .more{opacity:1}.ti .more:hover{background:var(--hover)}
+.sd{width:8px;height:8px;border-radius:50%;background:var(--ok);flex-shrink:0}.sd.run{background:var(--main);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+.wsfoot{padding:10px 8px 2px;border-top:1px solid var(--line);margin-top:8px;font-size:12px;color:var(--sub)}
+.wsfoot code{color:var(--text)}
+/* main */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--panel)}
+.view{flex:1;overflow:auto;display:none;flex-direction:column}.view.show{display:flex}
+.home{align-items:center;justify-content:center;padding:30px}
+.home h1{font-size:28px;margin-bottom:6px}.home p{color:var(--sub);margin-bottom:26px}
+.wrap{width:min(760px,100%)}
+.composer{border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 2px 12px rgba(20,30,60,.06);padding:12px 14px 10px;transition:border .15s}
+.composer:focus-within{border-color:var(--main)}
+.composer textarea{width:100%;border:0;outline:0;resize:none;background:none;color:var(--text);font:inherit;min-height:48px;max-height:180px}
+.cbar{display:flex;align-items:center;gap:6px;margin-top:6px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;background:var(--bg);border:1px solid var(--line);font-size:12.5px;color:var(--sub);white-space:nowrap}
+.chip:hover{color:var(--text);background:var(--hover)}
+.chip.x{background:var(--main-weak);color:var(--main);border-color:transparent}
+.sp{flex:1}
+.send{width:32px;height:32px;border-radius:50%;background:var(--main);color:#fff;display:flex;align-items:center;justify-content:center}
+.send:disabled{background:var(--line);cursor:not-allowed}.send.stop{background:var(--text)}
+.budget{display:flex;gap:14px;justify-content:center;font-size:11.5px;color:var(--sub);font-family:"Cascadia Code",Consolas,monospace;margin-top:8px}
+.budget .w{color:var(--warn)}
+.quick{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:22px}
+.qc{border:1px solid var(--line);border-radius:12px;padding:14px;text-align:left;background:var(--panel);transition:.15s}
+.qc:hover{border-color:var(--main);transform:translateY(-2px);box-shadow:var(--shadow)}
+.qc b{display:block;margin:4px 0 2px}.qc span{font-size:12.5px;color:var(--sub)}
+/* chat */
+.chat{flex:1;overflow:auto;padding:24px 0}
+.chat .in{width:min(780px,92%);margin:0 auto;display:flex;flex-direction:column;gap:22px}
+.um{align-self:flex-end;max-width:80%;background:var(--main-weak);padding:10px 14px;border-radius:14px 14px 4px 14px;white-space:pre-wrap}
+.am{display:flex;gap:12px}.am .logo{flex-shrink:0;margin-top:2px}
+.ab{flex:1;min-width:0}
+.plan{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:10px}
+.ph{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);cursor:pointer;font-weight:500}
+.ph .sub{color:var(--sub);font-weight:400;font-size:12.5px;margin-left:auto}
+.st{display:flex;align-items:center;gap:10px;padding:7px 12px;border-top:1px solid var(--line);font-size:13.5px}
+.st.pending{color:var(--sub)}
+.ic{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff}
+.st.done .ic{background:var(--ok);border-color:var(--ok)}.st.skip .ic{background:var(--sub);border-color:var(--sub)}
+.st.running .ic{border-color:var(--main);border-top-color:transparent;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tool{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:10px}
+.tool .th{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--bg);font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px;cursor:pointer}
+.badge{font-size:10.5px;padding:1px 8px;border-radius:10px}
+.badge.ro{color:var(--ok);background:rgba(22,163,74,.1)}
+.badge.wr{color:var(--warn);background:rgba(245,158,11,.12)}
+.badge.mcp{color:#4a6fd6;background:rgba(74,111,214,.1)}
+.tool .tb{display:none;padding:10px 12px;border-top:1px solid var(--line);font-family:"Cascadia Code",Consolas,monospace;font-size:12px;color:var(--sub);white-space:pre-wrap}
+.tool.open .tb{display:block}
+.tool .rok{color:var(--ok)}
+.perm{border:1px solid var(--warn);background:rgba(245,158,11,.08);border-radius:10px;padding:12px;margin-bottom:10px}
+.perm .bt{display:flex;gap:8px;margin-top:10px}
+.perm .src{margin-top:8px;font-size:12px;color:var(--sub)}
+.btn{padding:5px 14px;border-radius:7px;border:1px solid var(--line);background:var(--panel)}
+.btn:hover{background:var(--hover)}.btn.p{background:var(--main);border-color:var(--main);color:#fff}.btn.p:hover{opacity:.9}
+.txt{white-space:pre-wrap}
+.acts{display:flex;gap:2px;margin-top:8px}
+.acts .ib{width:26px;height:26px;font-size:13px}
+.cfoot{padding:0 0 16px}.cfoot .wrap{margin:0 auto;width:min(780px,92%)}
+.cur::after{content:"▍";animation:pulse 1s infinite;color:var(--main)}
+/* right */
+.right{width:340px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;flex-shrink:0;transition:margin .2s}
+.right.hide{margin-right:-340px}
+.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 10px}
+.tab{padding:10px 12px;color:var(--sub);border-bottom:2px solid transparent}
+.tab.on{color:var(--main);border-color:var(--main);font-weight:500}
+.rb{flex:1;overflow:auto;padding:14px}
+.empty{color:var(--sub);text-align:center;margin-top:60px}
+.job{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.job .jh{display:flex;align-items:center;gap:8px;font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px}
+.job .jb{margin-top:8px;display:flex;gap:6px}
+.audit{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-family:"Cascadia Code",Consolas,monospace;font-size:12px}
+.audit .ar{color:var(--sub);margin-top:2px;font-size:11.5px}
+/* pages */
+.page{padding:28px 40px;max-width:980px;width:100%;margin:0 auto}
+.page h2{font-size:22px}.page .d{color:var(--sub);margin:2px 0 18px}
+.search{width:100%;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);outline:0;margin-bottom:16px;font:inherit}
+.search:focus{border-color:var(--main)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px}
+.card:hover{border-color:var(--main)}
+.card .h{display:flex;align-items:center;gap:10px;font-weight:600}
+.card p{color:var(--sub);font-size:13px;flex:1}
+.card .meta{font-size:12px;color:var(--sub);font-family:"Cascadia Code",Consolas,monospace}
+.em{width:34px;height:34px;border-radius:10px;background:var(--main-weak);display:flex;align-items:center;justify-content:center;font-size:18px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.dot.ok{background:var(--ok)}.dot.err{background:var(--danger)}
+/* overlay */
+.pop{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:5px;min-width:190px;z-index:50}
+.pop button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border-radius:6px;text-align:left}
+.pop button:hover{background:var(--hover)}.pop .ck{margin-left:auto;color:var(--main)}.pop small{color:var(--sub);margin-left:auto;padding-left:14px}
+.mask{position:absolute;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:40}
+.mask.show{display:flex}
+.modal{width:520px;max-width:92%;background:var(--panel);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.mh{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);font-weight:600}
+.mb{padding:18px;display:flex;flex-direction:column;gap:14px}.mf{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.fr{display:flex;align-items:center;gap:10px}.fr label{width:90px;color:var(--sub)}
+.fr input,.fr select{flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;outline:0}
+.sw{width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;margin-left:auto;flex-shrink:0;transition:.2s}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.sw.on{background:var(--main)}.sw.on::after{left:18px}
+.toast{position:absolute;left:50%;top:60px;transform:translate(-50%,-20px);background:#222;color:#fff;padding:8px 18px;border-radius:20px;opacity:0;transition:.25s;z-index:99;pointer-events:none}
+.toast.show{opacity:1;transform:translate(-50%,0)}
 </style>
 </head>
 <body>
-<div class="banner">⚠️ 原型 v5 mockup（布局按 WorkBuddy 已登录真机截图重画，视觉可确认），非真实接线，数据均为示例</div>
-<div class="app">
+<div class="win" id="win">
+  <div class="banner">⚠️ 原型 v6 交互 mockup（基座为操作员提供的 WorkBuddy 风原型，已按 personal-agent 真实能力裁剪），数据均为模拟</div>
+  <div class="title">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <button class="ib on" data-act="toggleSide" title="侧边栏">☰</button>
+    <div class="t" id="winTitle">personal-agent</div>
+    <button class="ib on" data-act="toggleRight" id="rightBtn" title="右侧面板">▧</button>
+  </div>
+  <div class="body">
+    <aside class="side" id="side">
+      <div class="brand"><div class="logo">P</div>personal-agent</div>
+      <button class="newbtn" data-act="newTask"><span>＋</span>新建会话</button>
+      <button class="nav" data-nav="plugins">🧩 技能与连接器</button>
+      <div class="grp">会话</div>
+      <div class="tasks" id="taskList"></div>
+      <div class="wsfoot">工作区<br><code id="wsLabel">D:\DSHXM\AgentKHD</code></div>
+    </aside>
 
-  <div class="titlebar">
-    <button class="tb-icon" title="收起侧边栏">☰</button>
-    <span class="session-title">demo-01 · 修复 mcp-plugin 测试</span>
-    <span class="spacer"></span>
-    <button class="tb-icon" title="搜索">🔍</button>
-    <button class="tb-icon" title="历史">🕘</button>
-    <button class="tb-icon active" id="drawerToggle" title="详情面板">⿻</button>
+    <section class="main">
+      <div class="view home show" id="v-home">
+        <div class="wrap" style="text-align:center">
+          <h1>你好，今天想让 agent 帮你做什么？</h1>
+          <p>它在你授权的工作区内读写文件、运行命令、调用 MCP 连接器，并全程留审计</p>
+        </div>
+        <div class="wrap" id="homeComposer"></div>
+        <div class="wrap"><div class="quick">
+          <button class="qc" data-quick="跑一下测试套件，把红的修掉">🧪<b>修测试</b><span>运行测试、定位失败、修复并验证</span></button>
+          <button class="qc" data-quick="审计一下最近被拒绝的工具调用，告诉我原因分布">📋<b>看审计</b><span>梳理 allowed/denied 记录与规则来源</span></button>
+          <button class="qc" data-quick="检查 MCP 插件连接状态，重启失败的连接器">🧩<b>查连接器</b><span>查看插件进程状态与工具注册情况</span></button>
+        </div></div>
+      </div>
+
+      <div class="view" id="v-task">
+        <div class="chat" id="chat"><div class="in" id="chatIn"></div></div>
+        <div class="cfoot"><div class="wrap" id="taskComposer"></div></div>
+      </div>
+
+      <div class="view" id="v-plugins"><div class="page"><h2>技能与连接器</h2><div class="d">已声明的 MCP 插件（对应 mcp-plugin.ts 的 loadMcpPlugins）</div><input class="search" id="pluginSearch" placeholder="搜索插件或工具…"><div class="grid" id="pluginGrid"></div></div></div>
+    </section>
+
+    <aside class="right" id="right">
+      <div class="tabs"><button class="tab on" data-tab="progress">进度</button><button class="tab" data-tab="jobs">作业</button><button class="tab" data-tab="audit">审计</button></div>
+      <div class="rb" id="rightBody"></div>
+    </aside>
   </div>
 
-  <div class="sidebar">
-    <div class="nav-item primary">＋ 新建任务</div>
-    <div class="nav-item">🧩 技能与连接器</div>
-    <details open>
-      <summary>任务 <span class="cnt">(1)</span></summary>
-      <div class="session-item"><span class="t">修复 mcp-plugin cwd 测试</span><span class="time">进行中</span></div>
-    </details>
-    <details open>
-      <summary>空间 <span class="cnt">(2)</span></summary>
-      <details class="space" open>
-        <summary>📁 AgentKHD</summary>
-        <div class="session-item active"><span class="t">demo-01 · 修复 mcp-plugin 测试</span><span class="time">刚刚</span></div>
-        <div class="session-item"><span class="t">recover-broken · 恢复工具批</span><span class="time">2天前</span></div>
-      </details>
-      <details class="space">
-        <summary>📁 trust-audit-ws</summary>
-        <div class="session-item"><span class="t">trust-audit · 只读审计</span><span class="time">5天前</span></div>
-      </details>
-    </details>
-  </div>
-
-  <div class="main">
-    <div class="chat">
-
-      <div class="msg-user">帮我看看 mcp-plugin.test.ts 里那条 cwd 测试为什么还是红的</div>
-
-      <div class="msg-assistant">
-        <div class="who"><span class="avatar">A</span><span class="name">personal-agent</span></div>
-        <div class="status">已完成 42.3s · 步骤 3/40</div>
-        <div class="reasoning">先确认 args 是否相对最终生效的 cwd 书写，而不是相对插件根目录……</div>
-        <div class="toolcall" onclick="this.classList.toggle('open')">
-          <div class="head">
-            <span>🔧 read_file</span>
-            <span class="badge readonly">只读</span>
-            <span style="color:var(--wb-text-tertiary); margin-left:auto;">test/mcp-plugin.test.ts:134-146</span>
-          </div>
-          <div class="body">{"path":"test/mcp-plugin.test.ts","startLine":134,"endLine":146}
-
-<span class="result-ok">→ 已返回 13 行</span></div>
-        </div>
-        <div class="toolcall open" onclick="this.classList.toggle('open')" style="margin-top:8px;">
-          <div class="head">
-            <span>🔧 mcp__demo.main__echo</span>
-            <span class="badge mcp">MCP · demo 插件</span>
-            <span class="badge write">approve</span>
-          </div>
-          <div class="body">{"text":"hi"}
-
-<span class="result-ok">→ echo:hi cwd=D:\...\plugins\demo\server</span></div>
-        </div>
-        <div class="approval-card" style="margin-top:8px;">
-          <div class="title">⚠️ 需要你批准</div>
-          <div class="prompt">工具 create_file 即将写入：
-test/mcp-plugin.test.ts
-新增 6 行，修改 1 行</div>
-          <div class="actions">
-            <button class="btn approve">批准（是）</button>
-            <button class="btn deny">拒绝</button>
-          </div>
-          <div class="source-note">规则来源：workspace-write 档默认规则 · 2 分钟内相同调用免问</div>
-        </div>
-        <div class="text" style="margin-top:8px;">改好了，`args` 现在写成相对 `cwd:"server"` 之后的路径。跑一下测试确认。</div>
-        <div class="task-line" style="margin-top:6px;">任务：修复 mcp-plugin cwd 测试　<span class="met">✔ 已完成 1/1</span></div>
-        <div class="actions-row">
-          <button class="tb-icon" title="复制">📋</button>
-          <button class="tb-icon" title="赞">👍</button>
-          <button class="tb-icon" title="踩">👎</button>
-          <button class="tb-icon" title="重试">↻</button>
-          <span class="model-tag">claude-fable-5</span>
-        </div>
-      </div>
-
-    </div>
-
-    <div class="composer-wrap">
-      <div class="composer">
-        <textarea placeholder="给 agent 发消息…"></textarea>
-        <div class="row">
-          <button class="chip" title="添加上下文">＋</button>
-          <button class="chip" title="权限档位（对应 --tier）">🛡 workspace-write <span class="caret">▾</span></button>
-          <span class="spacer"></span>
-          <button class="chip model">claude-fable-5 <span class="caret">▾</span></button>
-          <button class="send">➤</button>
-        </div>
-      </div>
-      <div class="budget-line">
-        <span>步骤 3/40</span>
-        <span>工具 5/20</span>
-        <span class="warn-tok">令牌 187K/200K</span>
-        <span>42.3s</span>
-        <span>写入 2 文件 / 19 行</span>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-<!-- 右侧抽屉：默认关闭，标题栏 ⿻ 按钮开合；内部区块可折叠（仿截图"概览 ▾/产物 ▾"） -->
-<div class="drawer open" id="drawer">
-  <div class="drawer-head"><span>运行详情</span><button class="tb-icon" onclick="document.getElementById('drawer').classList.remove('open')">✕</button></div>
-  <details open>
-    <summary>后台作业 <span class="count">2</span></summary>
-    <div class="sect-body">
-      <div class="job-item">
-        <div class="job-head"><span>npm run test</span><span class="job-status running">运行中</span></div>
-        <div class="job-actions"><button>查看输出</button><button>停止</button></div>
-      </div>
-      <div class="job-item">
-        <div class="job-head"><span>npm run build</span><span class="job-status done">已完成</span></div>
-        <div class="job-actions"><button>查看输出</button></div>
-      </div>
-    </div>
-  </details>
-  <details open>
-    <summary>MCP 插件 <span class="count">1/1</span></summary>
-    <div class="sect-body">
-      <div class="plugin-item">
-        <div class="plugin-head"><span class="plugin-name"><span class="dot ok"></span>demo.main</span><span style="color:var(--wb-text-tertiary); font-size:11px;">已连接</span></div>
-        <div class="plugin-tools">mcp__demo.main__echo · readOnly=false · approve</div>
-      </div>
-      <div class="plugin-item error">
-        <div class="plugin-head"><span class="plugin-name"><span class="dot err"></span>broken.main</span><span style="font-size:11px; color:var(--wb-danger);">启动失败</span></div>
-        <div class="plugin-tools">MCP 服务器进程已退出</div>
-      </div>
-    </div>
-  </details>
-  <details open>
-    <summary>审计日志 <span class="count">3</span></summary>
-    <div class="sect-body">
-      <div class="audit-item">
-        <div><span class="audit-decision allowed">allowed</span> create_file</div>
-        <div class="audit-reason">rule: workspace-write.default</div>
-      </div>
-      <div class="audit-item">
-        <div><span class="audit-decision denied">denied</span> mcp__demo.main__echo</div>
-        <div class="audit-reason">reason: 操作员拒绝</div>
-      </div>
-      <div class="audit-item">
-        <div><span class="audit-decision allowed">allowed</span> run_command</div>
-        <div class="audit-reason">rule: ask-before-writing.readonly-command</div>
-      </div>
-    </div>
-  </details>
-  <div class="placeholder-note">以上均为静态示例数据</div>
+  <div class="mask" id="mask"><div class="modal" id="modal"></div></div>
+  <div class="toast" id="toast"></div>
 </div>
 
 <script>
-  // 抽屉开合（仿截图右上角按钮的交互）
-  document.getElementById('drawerToggle').addEventListener('click', function () {
-    var d = document.getElementById('drawer');
-    d.classList.toggle('open');
-    this.classList.toggle('active', d.classList.contains('open'));
-  });
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const S={view:'home',cur:null,model:'claude-fable-5',tier:'workspace-write',ws:'D:\\DSHXM\\AgentKHD',rightTab:'progress',
+ tasks:[
+  {id:1,title:'修复 mcp-plugin cwd 测试',running:false,pinned:true,msgs:[{role:'user',text:'帮我看看 mcp-plugin.test.ts 里那条 cwd 测试为什么还是红的'},{role:'ai',steps:[['理解需求','done'],['读取测试文件','done'],['定位 cwd 解析问题','done'],['修改并验证','done']],tools:[{name:'read_file',badge:'ro',args:'{"path":"test/mcp-plugin.test.ts","startLine":134,"endLine":146}',result:'→ 已返回 13 行',open:false}],text:'改好了，`args` 现在写成相对 `cwd:"server"` 之后的路径，测试已通过。',perm:'allowed',done:true}]},
+  {id:2,title:'恢复中断的工具批',running:false,pinned:false,msgs:[]}],
+ // 形状对应 mcp-plugin.ts：loadMcpPlugins 返回 {tools, rules, errors}
+ plugins:[
+  {name:'demo.main',status:'ok',tools:['mcp__demo.main__echo'],rule:'approve'},
+  {name:'broken.main',status:'err',tools:[],error:'MCP 服务器进程已退出'}],
+ jobs:[
+  {id:'j1',cmd:'npm run test',status:'running'},
+  {id:'j2',cmd:'npm run build',status:'done'}],
+ // 形状对应 session-store.ts 的 appendAudit 事件
+ audits:[
+  {tool:'create_file',decision:'allowed',reason:'rule: workspace-write.default'},
+  {tool:'mcp__demo.main__echo',decision:'denied',reason:'reason: 操作员拒绝'},
+  {tool:'run_command',decision:'allowed',reason:'rule: ask-before-writing.readonly-command'}],
+ resolvers:{}};
+let uid=10;
+const curTask=()=>S.tasks.find(t=>t.id===S.cur);
+
+/* ---------- helpers ---------- */
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800)}
+function closePop(){$$('.pop').forEach(p=>p.remove())}
+function pop(anchor,items,onPick){
+  closePop();const p=document.createElement('div');p.className='pop';
+  p.innerHTML=items.map((it,i)=>`<button data-i="${i}">${it.icon||''}${it.label}${it.sub?`<small>${it.sub}</small>`:''}${it.checked?'<span class="ck">✓</span>':''}</button>`).join('');
+  document.body.appendChild(p);
+  const r=anchor.getBoundingClientRect(),h=p.offsetHeight;
+  let top=r.top-h-6;if(top<10)top=r.bottom+6;
+  p.style.left=Math.min(r.left,innerWidth-p.offsetWidth-10)+'px';p.style.top=top+'px';
+  p.onclick=e=>{const b=e.target.closest('button');if(!b)return;e.stopPropagation();closePop();onPick(items[b.dataset.i])};
+}
+function modal(html){$('#modal').innerHTML=html;$('#mask').classList.add('show')}
+function closeModal(){$('#mask').classList.remove('show')}
+
+/* ---------- composer ---------- */
+function composer(ph){
+  return `<div class="composer">
+   <textarea rows="2" placeholder="${ph}"></textarea>
+   <div class="cbar">
+    <button class="chip" data-act="tierPop" title="权限档位（对应 --tier）">🛡 ${S.tier} ▾</button>
+    <button class="chip" data-act="wsPop" title="工作区（对应 --workspace）">📁 ${S.ws.split('\\').pop()} ▾</button>
+    <span class="sp"></span>
+    <button class="chip" data-act="modelPop">${S.model} ▾</button>
+    <button class="send" data-act="send" disabled>↑</button>
+   </div></div>
+   <div class="budget"><span>步骤 3/40</span><span>工具 5/20</span><span class="w">令牌 187K/200K</span><span>42.3s</span><span>写入 2 文件/19 行</span></div>`;
+}
+function renderComposers(){
+  const run=curTask()?.running;
+  const keep={};$$('.composer textarea').forEach((t,i)=>keep[i]=t.value);
+  $('#homeComposer').innerHTML=composer('描述你的任务…');
+  $('#taskComposer').innerHTML=composer(run?'agent 正在执行…':'继续追问或下达新指令…');
+  $$('.composer textarea').forEach((t,i)=>{t.value=keep[i]||'';syncSend(t)});
+  if(run){const b=$('#taskComposer .send');b.classList.add('stop');b.textContent='■';b.disabled=false;b.dataset.act='stop'}
+}
+function syncSend(t){const b=t.closest('.composer').querySelector('.send');if(b.dataset.act==='send')b.disabled=!t.value.trim()}
+document.addEventListener('input',e=>{if(e.target.matches('.composer textarea')){syncSend(e.target);e.target.style.height='auto';e.target.style.height=e.target.scrollHeight+'px'}
+  if(e.target.id==='pluginSearch')renderPlugins(e.target.value)});
+document.addEventListener('keydown',e=>{
+  if(e.target.matches('.composer textarea')&&e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();const b=e.target.closest('.composer').querySelector('.send');if(!b.disabled&&b.dataset.act==='send')send(e.target.value.trim())}
+  if(e.key==='Escape'){closePop();closeModal()}});
+
+/* ---------- views ---------- */
+function show(view){
+  S.view=view;$$('.view').forEach(v=>v.classList.toggle('show',v.id==='v-'+view));
+  $$('.nav').forEach(n=>n.classList.toggle('active',n.dataset.nav===view));
+  $('#winTitle').textContent=view==='task'?curTask().title+' - personal-agent':'personal-agent';
+  renderTasks();renderComposers();renderRight();
+}
+function renderTasks(){
+  const sorted=[...S.tasks].sort((a,b)=>b.pinned-a.pinned);
+  $('#taskList').innerHTML=sorted.map(t=>`<div class="ti ${t.id===S.cur&&S.view==='task'?'active':''}" data-open="${t.id}">
+    <span class="sd ${t.running?'run':''}" style="${!t.running&&!t.msgs.length?'background:var(--line)':''}"></span><span class="n">${t.pinned?'📌 ':''}${t.title}</span><button class="more" data-more="${t.id}">⋯</button></div>`).join('')||'<div class="empty" style="margin-top:20px">暂无会话</div>';
+}
+function renderPlugins(q=''){
+  $('#pluginGrid').innerHTML=S.plugins.filter(p=>p.name.includes(q)||p.tools.some(t=>t.includes(q))).map(p=>`<div class="card"><div class="h"><span class="dot ${p.status}"></span>${p.name}<span class="badge ${p.status==='ok'?'mcp':'wr'}" style="margin-left:auto">${p.status==='ok'?'已连接':'启动失败'}</span></div><p>${p.status==='ok'?p.tools.join('<br>'):p.error}</p><div class="meta">${p.status==='ok'?'readOnly=false · '+p.rule:'—'}</div></div>`).join('')||'<div class="empty">没有找到相关插件</div>';
+}
+
+function renderChat(){
+  const t=curTask();
+  $('#chatIn').innerHTML=t.msgs.map((m,mi)=>m.role==='user'?`<div class="um">${esc(m.text)}</div>`:aiHTML(m,mi)).join('')||'<div class="empty">在下方输入你的指令</div>';
+  $('#chat').scrollTop=1e9;
+}
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function aiHTML(m,mi){
+  const done=m.steps.filter(s=>s[1]==='done'||s[1]==='skip').length;
+  return `<div class="am"><div class="logo">P</div><div class="ab">
+   <div class="plan"><div class="ph" data-fold="${mi}">${m.done?'✅':'⚙️'} 任务计划<span class="sub">${done}/${m.steps.length} ${m.folded?'展开':'收起'}</span></div>
+   ${m.folded?'':m.steps.map(s=>`<div class="st ${s[1]}"><span class="ic">${s[1]==='done'?'✓':s[1]==='skip'?'–':''}</span>${s[0]}</div>`).join('')}</div>
+   ${(m.tools||[]).map((tl,ti)=>`<div class="tool ${tl.open?'open':''}"><div class="th" data-tool="${mi}:${ti}">🔧 ${tl.name}<span class="badge ${tl.badge}">${tl.badge==='ro'?'只读':tl.badge==='mcp'?'MCP':'approve'}</span></div><div class="tb">${esc(tl.args)}\n\n<span class="rok">${esc(tl.result)}</span></div></div>`).join('')}
+   ${m.perm==='ask'?`<div class="perm"><b>🔒 需要你批准</b><div style="color:var(--sub);margin-top:2px">工具 <code>create_file</code> 即将写入 <code>test/mcp-plugin.test.ts</code>（新增 6 行，修改 1 行）</div><div class="bt"><button class="btn p" data-perm="once">批准</button><button class="btn" data-perm="always">批准且 2 分钟内免问</button><button class="btn" data-perm="deny">拒绝</button></div><div class="src">规则来源：${S.tier} 档默认规则（对应 tools.ts 的 approveExact）</div></div>`:''}
+   <div class="txt ${m.streaming?'cur':''}">${esc(m.text||'')}</div>
+   ${m.done?`<div class="acts"><button class="ib" data-act="copy" title="复制">⧉</button><button class="ib" data-act="regen" title="重新生成">↻</button></div>`:''}
+  </div></div>`;
+}
+
+/* ---------- right panel ---------- */
+function lastAI(){const t=curTask();return t&&[...t.msgs].reverse().find(m=>m.role==='ai')}
+function renderRight(){
+  $$('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab===S.rightTab));
+  const b=$('#rightBody');
+  if(S.rightTab==='progress'){
+    const m=S.view==='task'?lastAI():null;
+    b.innerHTML=m?m.steps.map(s=>`<div class="st ${s[1]}" style="border:0"><span class="ic">${s[1]==='done'?'✓':s[1]==='skip'?'–':''}</span>${s[0]}</div>`).join('')+`<div style="margin-top:14px;color:var(--sub);font-size:12.5px">模型：${S.model}<br>档位：${S.tier}<br>工作区：${S.ws}</div>`:'<div class="empty">开始一个会话后，这里显示任务进度</div>'}
+  if(S.rightTab==='jobs'){
+    b.innerHTML=S.jobs.map(j=>`<div class="job"><div class="jh"><span class="dot ${j.status==='running'?'ok':''}" style="${j.status==='done'?'background:var(--line)':''}"></span>${j.cmd}<span class="badge ${j.status==='running'?'ro':''}" style="margin-left:auto">${j.status==='running'?'运行中':'已完成'}</span></div><div class="jb"><button class="btn">查看输出</button>${j.status==='running'?'<button class="btn">停止</button>':''}</div></div>`).join('')||'<div class="empty">没有后台作业</div>'}
+  if(S.rightTab==='audit'){
+    b.innerHTML=S.audits.map(a=>`<div class="audit"><span class="badge ${a.decision==='allowed'?'ro':'wr'}">${a.decision}</span> ${a.tool}<div class="ar">${a.reason}</div></div>`).join('')||'<div class="empty">暂无审计记录</div>'}
+}
+
+/* ---------- agent run（模拟） ---------- */
+async function send(text){
+  if(!text)return;
+  let t=curTask();
+  if(S.view!=='task'||!t){t={id:++uid,title:text.slice(0,16),running:false,pinned:false,msgs:[]};S.tasks.unshift(t);S.cur=t.id}
+  t.msgs.push({role:'user',text});
+  $$('.composer textarea').forEach(x=>{x.value='';x.style.height=''});
+  const m={role:'ai',steps:[['理解需求','pending'],['读取相关文件','pending'],['执行修改','pending'],['运行测试验证','pending']],tools:[],text:'',perm:'none',done:false};
+  t.msgs.push(m);t.running=true;t.abort=false;
+  show('task');renderChat();
+  const upd=()=>{if(S.cur===t.id&&S.view==='task'){renderChat();renderRight()}renderTasks()};
+  const step=async(i,ms,st='done')=>{m.steps[i][1]='running';upd();await sleep(ms);if(t.abort)throw 0;m.steps[i][1]=st;upd()};
+  try{
+    await step(0,900);
+    m.steps[1][1]='running';
+    m.tools.push({name:'read_file',badge:'ro',args:'{"path":"test/mcp-plugin.test.ts","startLine":134,"endLine":146}',result:'→ 已返回 13 行',open:false});upd();
+    if(S.tier==='read-only'){await sleep(700);m.steps[1][1]='done'}
+    else if(S.tier==='full-access'||S.alwaysAllow){await sleep(700);m.steps[1][1]='done'}
+    else{m.perm='ask';upd();const r=await new Promise(res=>S.resolvers[t.id]=res);if(t.abort)throw 0;
+      m.perm=r==='deny'?'denied':'allowed';if(r==='always')S.alwaysAllow=true;m.steps[1][1]=r==='deny'?'skip':'done'}
+    upd();
+    await step(2,1400);
+    m.tools.push({name:'create_file',badge:'wr',args:'test/mcp-plugin.test.ts（新增 6 行，修改 1 行）',result:m.steps[1][1]==='skip'?'→ 已拒绝，未写入':'→ 已写入',open:false});upd();
+    const out=m.steps[1][1]==='skip'?'由于写入被拒绝，我没有修改文件。以下是建议的改动：\n':'已完成修改。\n';
+    const full=out+'主要结果：\n• args 改为相对 cwd:"server" 之后的路径\n• npm run test 该用例转绿\n• 审计已记录本次写入（allowed, rule: '+S.tier+'.default）';
+    m.streaming=true;for(const c of full){if(t.abort)throw 0;m.text+=c;upd();await sleep(14)}
+    m.streaming=false;
+    await step(3,800);
+    m.done=true;
+  }catch(e){m.streaming=false;m.steps.forEach(s=>{if(s[1]==='running'||s[1]==='pending')s[1]='skip'});m.perm=m.perm==='ask'?'none':m.perm;m.text+=(m.text?'\n':'')+'⏹ 已停止执行';m.done=true}
+  t.running=false;upd();renderComposers();
+}
+
+/* ---------- global click ---------- */
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.pop'))closePop();
+  const g=s=>e.target.closest(s);
+  let el;
+  if(el=g('[data-nav]')){if(S.view===el.dataset.nav){show(S.cur&&curTask()?'task':'home');return}show(el.dataset.nav);return}
+  if(el=g('[data-more]')){e.stopPropagation();const id=+el.dataset.more,t=S.tasks.find(x=>x.id===id);
+    pop(el,[{icon:'✏️ ',label:'重命名'},{icon:'📌 ',label:t.pinned?'取消置顶':'置顶'},{icon:'🗑 ',label:'删除'}],it=>{
+      if(it.label==='重命名'){const n=prompt('会话名称',t.title);if(n){t.title=n;renderTasks()}}
+      else if(it.label.includes('置顶')){t.pinned=!t.pinned;renderTasks()}
+      else{S.tasks=S.tasks.filter(x=>x.id!==id);if(S.cur===id){S.cur=null;show('home')}else renderTasks();toast('会话已删除')}});return}
+  if(el=g('[data-open]')){S.cur=+el.dataset.open;show('task');renderChat();return}
+  if(el=g('[data-quick]')){$('#homeComposer textarea').value=el.dataset.quick;syncSend($('#homeComposer textarea'));$('#homeComposer textarea').focus();return}
+  if(el=g('[data-perm]')){const r=el.dataset.perm;S.resolvers[S.cur]?.(r);toast(r==='deny'?'已拒绝':'已批准');return}
+  if(el=g('[data-fold]')){const m=curTask().msgs[+el.dataset.fold];m.folded=!m.folded;renderChat();return}
+  if(el=g('[data-tool]')){const [mi,ti]=el.dataset.tool.split(':').map(Number);const tl=curTask().msgs[mi].tools[ti];tl.open=!tl.open;renderChat();return}
+  if(el=g('[data-tab]')){S.rightTab=el.dataset.tab;renderRight();return}
+  if(!(el=g('[data-act]')))return;
+  const a=el.dataset.act;
+  switch(a){
+   case 'toggleSide':$('#side').classList.toggle('hide');el.classList.toggle('on');break;
+   case 'toggleRight':$('#right').classList.toggle('hide');el.classList.toggle('on');break;
+   case 'newTask':S.cur=null;show('home');$('#homeComposer textarea').focus();break;
+   case 'send':send(el.closest('.wrap').querySelector('textarea').value.trim());break;
+   case 'stop':{const t=curTask();t.abort=true;S.resolvers[t.id]?.('deny');break}
+   case 'tierPop':pop(el,['read-only','ask-before-writing','workspace-write','full-access'].map(n=>({label:n,checked:n===S.tier,sub:n==='read-only'?'不加载 MCP 插件':n==='full-access'?'不再询问':''})),it=>{S.tier=it.label;S.alwaysAllow=false;renderComposers();renderRight();toast('档位已切换：'+it.label)});break;
+   case 'wsPop':pop(el,[{icon:'📁 ',label:'D:\\DSHXM\\AgentKHD',checked:true},{icon:'＋ ',label:'添加信任根目录…'}],it=>{if(it.label.startsWith('添加'))toast('原型：对应 --trust-root');});break;
+   case 'modelPop':pop(el,['claude-fable-5','gpt-6-astra','kimi-k3'].map(n=>({label:n,checked:n===S.model})),it=>{S.model=it.label;renderComposers();renderRight()});break;
+   case 'copy':navigator.clipboard?.writeText(lastAI().text);toast('已复制');break;
+   case 'regen':{const t=curTask(),u=[...t.msgs].reverse().find(m=>m.role==='user');t.msgs.splice(-2);send(u.text);break}
+   case 'closeModal':closeModal();break;
+  }
+});
+$('#mask').addEventListener('mousedown',e=>{if(e.target.id==='mask')closeModal()});
+
+/* init */
+renderPlugins();show('home');
 </script>
 </body>
 </html>

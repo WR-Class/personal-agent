@@ -99,13 +99,36 @@ input"——**此前几轮"看过截图"的判断实际是在看不到图的情�
 - "空间"分组 → 会话按工作区分组（`<details>` 原生折叠，见下表⚠️行：代码里
   尚无此机制，是原型设想）。
 
+## v6：收编操作员提供的交互原型为基座，按真实能力裁剪
+
+操作员提供了一份 390 行的 WorkBuddy 风**交互**原型（`新建 文本文档 (4).html`）——
+可真实发送、模拟执行流、授权三选一、右侧 tab 面板、弹出菜单，比 v5 的静态 mockup
+更接近"面板长什么样、点起来什么感觉"。操作员选择**收编并改造**。
+
+**保留的**：整体交互框架（会话发送/停止、计划步骤 running/done/skip、授权卡片
+允许一次/始终允许/拒绝、右侧面板 tab、弹出菜单、深浅色变量）。
+
+**裁剪掉的（本项目没有的能力，一律删除不保留空壳）**：专家中心、自动化（定时
+任务）、技能商店开关、Agent/Chat/Plan 三模式、附件上传、文件产出预览 tab、账号
+登录行、设置弹窗里的"文件权限"开关。
+
+**接入的真实概念**：
+- 三模式选择器 → **四档 `--tier`**（read-only / ask-before-writing / workspace-write /
+  full-access），且**档位真实影响模拟行为**：read-only 直接跳过授权、full-access 不询问、
+  中间两档弹授权卡；"批准且 2 分钟内免问"对应 `approveExact`。
+- 技能页 → **技能与连接器**页，卡片形状照 `loadMcpPlugins` 的返回（`tools`/`errors`、
+  已连接/启动失败两种状态、readOnly/approve 规则）。
+- 右侧 tab → **进度 / 作业 / 审计**三页，分别对应 `task-state.ts`、
+  `background-jobs.ts`、`session-store.ts` 的 `appendAudit` 事件形状。
+- 输入卡片下方的预算行照 `formatBudget` 字段。
+
 ## 每个区块对应 CLI 里的哪个真实概念
 
 原型里出现的每一项都能在已实现的代码里找到对应事实，不是凭空设计的功能：
 
 | 面板区块 | 对应的真实概念 | 代码位置 |
 |---|---|---|
-| 侧边栏"技能与连接器"入口 | MCP 插件桥接 | `mcp-plugin.ts`、`mcp-bridge.ts` |
+| 侧边栏"技能与连接器"入口 → 插件页 | MCP 插件桥接；卡片形状照 `loadMcpPlugins` 返回的 `{tools, errors}` | `mcp-plugin.ts`、`mcp-bridge.ts` |
 | 侧边栏"任务"折叠组 | 任务状态追踪 | `task-state.ts` |
 | 侧边栏会话列表 | `/sessions`、`--session <id>` | `cli.ts:38-39,72,131` |
 | ⚠️ 会话按"空间"（工作区）分组 | **原型独有的推测映射，代码里没有这个机制** | `--workspace`（`cli.ts:133`）与 `--session`（`cli.ts:131`）是两个独立维度，无关联分组逻辑；要做需新增代码 |
@@ -117,10 +140,10 @@ input"——**此前几轮"看过截图"的判断实际是在看不到图的情�
 | 批准卡片 | `approve` 回调、`approveExact` 的"2 分钟免问"提示 | `tools.ts` 的 `approveExact` |
 | 底部预算行（输入卡片下方居中） | `formatBudget` 的步骤/工具调用/令牌/用时/写入统计 | `runtime.ts` `formatBudget` |
 | 任务完成行 | `formatTaskAssessment` | `task-state.ts` |
-| 右侧抽屉（默认关闭，标题栏 ⿻ 开合） | 抽屉形态仿截图；内容为本项目真实能力 | — |
-| ├ 后台作业（可折叠区块） | `run_in_background`/`job_output`/`job_kill` | `background-jobs.ts` |
-| ├ MCP 插件（可折叠区块，含失败态） | `loadMcpPlugins` 的 `tools`/`errors` | `mcp-plugin.ts` |
-| └ 审计日志（可折叠区块） | `store.appendAudit` 事件 | `session-store.ts` |
+| 右侧面板（标题栏 ▧ 开合，进度/作业/审计三 tab） | 面板形态仿 WorkBuddy；内容为本项目真实能力 | — |
+| ├ 进度 tab | 任务步骤状态 | `task-state.ts` |
+| ├ 作业 tab | `run_in_background`/`job_output`/`job_kill` | `background-jobs.ts` |
+| └ 审计 tab | `store.appendAudit` 事件 | `session-store.ts` |
 
 ## 明确没有回答的问题（留给下一步决策）
 
