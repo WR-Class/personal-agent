@@ -162,3 +162,31 @@ input"——**此前几轮"看过截图"的判断实际是在看不到图的情�
 - 不做真实的状态管理框架选型（React/Vue/原生）——这是下一步的决定，不是原型的决定。
 - 不做深色/浅色主题切换、国际化——原型固定用浅色（WorkBuddy 默认 IDE Light 风）。
 - 不做响应式布局——先假设桌面宽屏。
+
+## v7：Electron 桌面壳落地（2026-10-02）
+
+操作员指令（原文）："按照这个 wb-client.html 构建客户端面板吧……不需要你删除某些功能签。"
+这**反转**了此前"裁掉未实现能力空壳"的策略：wb-client.html 的全部功能入口/标签/菜单
+一律保留；未接线的交互以"未接线"明示，绝不伪装成功。
+
+已落地（`desktop/`）：
+
+- `main.cjs`——无边框 1440×900 窗口；`sandbox:true`、`contextIsolation:true`、
+  `nodeIntegration:false`；主进程拒绝一切导航/新窗口/下载/权限请求；IPC 处理器
+  校验 `senderFrame` 是主 frame 且 URL 等于入口文件。
+- `preload.cjs`——contextBridge 仅暴露 `windowAction(min|max|close|reset|new|fullscreen)`
+  与 `onMaximized` 白名单。
+- `renderer/`——原单文件原型拆分为 `index.html` + `styles.css` + `app.js`；
+  CSP 收紧为 `script-src 'self'`。33 处交互打点"未接线"标记；窗口控制六动作真实接线。
+
+已接线 / 未接线边界：窗口动作真实；聊天发送、任务增删、设置持久化、模型配置、
+更新、帮助等全部仅展示提示——等运行时装配（IPC ↔ `AgentRuntime`）再逐个点亮。
+
+环境注记：桌面壳代码完成并通过静态验证（tsc EXIT 0、全量 782/781/0/1 skip），
+但本机运行**未签名**的 electron.exe 时在 main 之前即以 0x80000003（Chromium 主动
+CHECK）退出——32.2.0 与 44.5.1、exe 改名、计划任务、资源管理器快捷方式四种启动
+路径结果一致；而本机正常运行的 Electron/Chromium 应用（QQ、WorkBuddy、DSH、
+Chrome、Edge）二进制全部有有效签名，唯一相关变量锁定为"未签名"。机制未定位
+（无第三方注入驱动、系统进程缓解策略全空、SAC 关闭、VBS/HVCI 开启）。
+窗口预览验证待本机信任策略放行该二进制后补做；渲染层可在浏览器中预览。
+依赖固定为 **Electron 32.2.0**（与真实 WorkBuddy 客户端同版本）。

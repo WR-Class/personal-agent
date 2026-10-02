@@ -1,0 +1,19 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+const allowedActions = new Set(["min", "max", "close", "reset", "new", "fullscreen"]);
+
+contextBridge.exposeInMainWorld("personalAgentDesktop", {
+  platform: process.platform,
+  windowAction(action) {
+    if (!allowedActions.has(action)) {
+      return Promise.resolve({ ok: false, maximized: false });
+    }
+    return ipcRenderer.invoke("window:action", action);
+  },
+  onMaximized(callback) {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, maximized) => callback(Boolean(maximized));
+    ipcRenderer.on("window:maximized", listener);
+    return () => ipcRenderer.removeListener("window:maximized", listener);
+  },
+});
