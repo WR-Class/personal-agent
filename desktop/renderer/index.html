@@ -583,18 +583,18 @@ src/pages/pricing/plans.ts</div>
   </div>
 </div>
 
-<dialog id="historyDialog" aria-labelledby="historyTitle" style="margin:auto;width:min(800px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text-primary)">
+<dialog id="historyDialog" aria-labelledby="historyTitle" style="margin:auto;width:min(800px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border-primary);border-radius:12px;background:var(--bg-elevated);color:var(--text-primary)">
   <form method="dialog"><button autofocus class="set-btn">关闭历史预览</button></form>
   <h2 id="historyTitle">会话历史（只读）</h2>
   <p id="historyStatus" role="status"></p>
   <div id="historyBody"></div>
 </dialog>
-<dialog id="echoDialog" aria-labelledby="echoTitle" style="margin:auto;width:min(680px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text-primary)">
+<dialog id="echoDialog" aria-labelledby="echoTitle" style="margin:auto;width:min(680px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border-primary);border-radius:12px;background:var(--bg-elevated);color:var(--text-primary)">
   <form method="dialog"><button class="set-btn">关闭</button></form>
   <h2 id="echoTitle">离线 Echo 测试 · 非大模型</h2>
   <p>调用本地 AgentRuntime，不联网、不执行工具。每次发送新建并保存一个测试会话。</p>
   <label for="echoInput">测试文本（最多 8192 UTF-8 字节）</label>
-  <textarea id="echoInput" rows="4" maxlength="8192" style="display:block;width:100%"></textarea>
+  <textarea id="echoInput" rows="4" maxlength="8192" style="display:block;width:100%;margin:12px 0;padding:10px;border:1px solid var(--border-input);border-radius:8px;background:var(--bg-content);outline:revert"></textarea>
   <button id="echoSend" class="set-btn">发送并保存测试会话</button>
   <p id="echoStatus" role="status"></p>
   <pre id="echoReply" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
