@@ -40,16 +40,28 @@ const path = require('node:path');
     assert.deepEqual(entries.sub, ['skills','connector','apps','docs','files','mail','ima','lexiang']);
     assert.deepEqual(entries.panes, ['browser','art','file','term']);
     assert.equal(entries.node, 'undefined');
+    if (process.argv[2]) {
+      const reference = fs.readFileSync(path.resolve(process.argv[2]), 'utf8');
+      const missing = await evaluate(`(()=>{const old=new DOMParser().parseFromString(${JSON.stringify(reference)},'text/html');return Array.from(old.querySelectorAll('button[id],textarea[id],input[id]'),e=>e.id).filter(id=>!document.getElementById(id));})()`);
+      assert.deepEqual(missing, [], 'prototype controls must remain present');
+      console.log('PASS original prototype named controls retained');
+    }
     for (const width of [1440, 800]) {
       await call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
       await evaluate(`document.querySelector('#openEcho').click()`);
       await evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
       const bounds = await evaluate(`(()=>{const d=document.querySelector('#echoDialog'),r=d.getBoundingClientRect();return {open:d.open,left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight};})()`);
       assert.ok(bounds.open && bounds.left >= 0 && bounds.right <= bounds.width && bounds.bottom <= bounds.height, JSON.stringify(bounds));
-      await screenshot('echo-' + width);
+      if (!process.env.PA_VERIFY_NO_SCREENSHOTS) await screenshot('echo-' + width);
       await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       assert.equal(await evaluate(`document.querySelector('#echoDialog').open`), false, 'Escape closes dialog');
+      // Inspect model layout without fetching configuration or issuing any model request.
+      await evaluate(`document.querySelector('#modelDialog').showModal()`);
+      const modelFits = await evaluate(`(()=>{const r=document.querySelector('#modelDialog').getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;})()`);
+      assert.ok(modelFits, 'model dialog fits viewport');
+      if (!process.env.PA_VERIFY_NO_SCREENSHOTS) await screenshot('model-' + width);
+      await evaluate(`document.querySelector('#modelDialog').close()`);
     }
     console.log('PASS: prototype navigation/panes, renderer isolation, 1440/800 dialog bounds, Escape');
   } finally { await call('Emulation.clearDeviceMetricsOverride'); ws.close(); }
