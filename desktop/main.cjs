@@ -67,6 +67,22 @@ ipcMain.handle('sessions:history', async (event, id) => {
   }
 });
 
+let echoBusy = false;
+ipcMain.handle('runtime:echo', async (event, input) => {
+  trustedWindow(event);
+  if (echoBusy) throw new Error('离线测试正在运行，请稍后再试');
+  echoBusy = true;
+  try {
+    const { desktopEcho } = await import('../src/desktop-echo.ts');
+    trustedWindow(event);
+    const result = await desktopEcho(sessionHome, input);
+    trustedWindow(event);
+    return result;
+  } catch (_) {
+    throw new Error('离线测试失败；输入须为 1–8192 字节。可能已保存部分日志，请刷新会话检查，不会自动重试。');
+  } finally { echoBusy = false; }
+});
+
 ipcMain.handle('desktop:info', (event) => {
   trustedWindow(event);
   return {

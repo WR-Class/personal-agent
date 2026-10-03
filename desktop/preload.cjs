@@ -5,6 +5,7 @@ const allowedActions = new Set(["min", "max", "close", "reset", "new", "fullscre
 contextBridge.exposeInMainWorld("personalAgentDesktop", {
   platform: process.platform,
   listSessions() { return ipcRenderer.invoke("sessions:list"); },
+  sendEcho(input) { return ipcRenderer.invoke("runtime:echo", input); },
   readHistory(id) { return ipcRenderer.invoke("sessions:history", id); },
   async getInfo() {
     const info = await ipcRenderer.invoke("desktop:info");

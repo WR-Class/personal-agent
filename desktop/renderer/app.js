@@ -125,6 +125,27 @@
   $('#refreshSessions').addEventListener('click', refreshSessions);
   void refreshSessions();
 
+  $('#openEcho').addEventListener('click', function() { $('#echoDialog').showModal(); });
+  $('#echoSend').addEventListener('click', async function() {
+    var button = this, input = $('#echoInput').value, status = $('#echoStatus');
+    if (button.disabled) return;
+    if (!input.trim() || new TextEncoder().encode(input).length > 8192) {
+      status.textContent = '请输入 1–8192 字节文本'; return;
+    }
+    var bridge = window.personalAgentDesktop;
+    if (!bridge || typeof bridge.sendEcho !== 'function') { status.textContent = '浏览器预览不支持本地运行时'; return; }
+    button.disabled = true; $('#echoInput').disabled = true;
+    $('#echoReply').textContent = ''; status.textContent = '本地回显中（非模型）…';
+    try {
+      var result = await bridge.sendEcho(input);
+      $('#echoReply').textContent = result.content;
+      status.textContent = '已保存离线测试会话：' + result.id;
+      await refreshSessions();
+    } catch (_) {
+      status.textContent = '离线测试失败，可能已保存部分日志；请刷新会话检查。未自动重试。';
+    } finally { button.disabled = false; $('#echoInput').disabled = false; }
+  });
+
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
 
