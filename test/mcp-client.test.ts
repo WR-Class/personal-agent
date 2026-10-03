@@ -10,7 +10,8 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 
 import { startMcpClient } from "../src/mcp-client.ts";
@@ -21,11 +22,9 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 after(async () => {
   await wait(200);
-  // Windows releases child-process cwd handles asynchronously; under load the
-  // old 5x100ms budget was not enough and the after() hook itself failed with
-  // EPERM while all assertions had passed (measured 2026-10-02). Retry budget
-  // widened, assertions untouched.
-  for (const dir of created) rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
+  // Yield while retrying: close() launches taskkill asynchronously; synchronous
+  // retries block Node's close/error callbacks and their direct-kill fallback.
+  for (const dir of created) await rm(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
 });
 
 /**

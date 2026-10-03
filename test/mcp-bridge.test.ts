@@ -13,7 +13,8 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 
 import { startMcpClient } from "../src/mcp-client.ts";
@@ -32,13 +33,9 @@ const created: string[] = [];
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 after(async () => {
-  // Five real subprocesses are spawned across this file (mcp-client.test.ts only
-  // spawns per-test with fewer total), so Windows needs longer than that file's
-  // 200ms for every child's file handles on its fixture directory to release
-  // before rmSync can remove it; maxRetries/retryDelay alone were not enough,
-  // measured as an EPERM on the fixture directory itself.
   await wait(500);
-  for (const dir of created) rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
+  // Do not block child close/error callbacks while retrying fixture removal.
+  for (const dir of created) await rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
 });
 
 function echoServer(): { file: string; home: string; ws: string } {
