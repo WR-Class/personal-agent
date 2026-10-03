@@ -15,7 +15,7 @@ export async function listSessions(store: SessionStore): Promise<string[]> {
   if (root !== store.root) throw new Error("会话目录已改变。");
   try {
     const files = await readdir(root, { withFileTypes: true });
-    return files.filter(f => f.isFile() && /^[A-Za-z0-9._-]+\.jsonl$/.test(f.name)).map(f => f.name.slice(0,-6)).sort().reverse();
+    return files.filter(f => f.isFile() && f.name !== 'genes.jsonl' && f.name !== 'cycles.jsonl' && /^[A-Za-z0-9._-]+\.jsonl$/.test(f.name)).map(f => f.name.slice(0,-6)).sort().reverse();
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
 }
 export interface InteractiveOptions {

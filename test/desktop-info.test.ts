@@ -33,7 +33,7 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   };
   runInNewContext(readFileSync(path.join(desktop, 'main.cjs'), 'utf8'), {
     require: (name: string) => name === 'electron' ? electron : name === 'node:path' ? path : { pathToFileURL },
-    __dirname: desktop, process: { versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
+    __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
   await Promise.resolve();
   const sender = windows[0].webContents;
@@ -42,13 +42,13 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   assert.deepEqual(JSON.parse(JSON.stringify(info(valid))), { appVersion: '0.1.0', electron: '44.5.1', chrome: 'test-chrome', node: 'test-node', platform: 'win32', agentConnected: false });
   for (const fn of handlers.values()) {
     for (const event of [{ sender, senderFrame: null }, { sender, senderFrame: { ...sender.mainFrame } }, { sender: {}, senderFrame: sender.mainFrame }]) {
-      assert.throws(() => fn(event, 'min'), /Untrusted desktop sender/);
+      await assert.rejects(async () => fn(event, 'min'), /Untrusted desktop sender/);
     }
     const url = sender.mainFrame.url;
     sender.mainFrame.url = 'https://example.com/';
-    assert.throws(() => fn(valid, 'min'), /Untrusted desktop sender/);
+    await assert.rejects(async () => fn(valid, 'min'), /Untrusted desktop sender/);
     sender.mainFrame.url = url + '#settings';
-    assert.doesNotThrow(() => fn(valid, 'min'));
+    if (fn !== handlers.get('sessions:list')) await assert.doesNotReject(async () => fn(valid, 'min'));
     sender.mainFrame.url = url;
   }
 });
@@ -67,6 +67,8 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.equal(info.sandboxed, enabled);
     assert.equal(info.contextIsolated, enabled);
     assert.deepEqual(calls, [['desktop:info']]);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'onMaximized', 'platform', 'windowAction']);
+    await api.listSessions('ignored-path');
+    assert.deepEqual(calls[1], ['sessions:list']);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'listSessions', 'onMaximized', 'platform', 'windowAction']);
   }
 });

@@ -42,6 +42,19 @@ function trustedWindow(event) {
   return win;
 }
 
+const sessionHome = path.resolve(process.env.PERSONAL_AGENT_HOME ?? path.join(__dirname, '..', '.personal-agent'));
+ipcMain.handle('sessions:list', async (event) => {
+  trustedWindow(event);
+  try {
+    const { desktopSessions } = await import('../src/desktop-sessions.ts');
+    const result = await desktopSessions(sessionHome);
+    trustedWindow(event); // Recheck after asynchronous IO, before returning private IDs.
+    return result;
+  } catch (_) {
+    throw new Error('会话列表读取失败；请检查 PERSONAL_AGENT_HOME 与目录权限');
+  }
+});
+
 ipcMain.handle('desktop:info', (event) => {
   trustedWindow(event);
   return {

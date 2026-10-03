@@ -67,6 +67,34 @@
     }).join('');
   }
 
+  async function refreshSessions() {
+    var button = $('#refreshSessions'), status = $('#sessionListStatus'), host = $('#savedSessions');
+    if (button.disabled) return;
+    host.replaceChildren();
+    var bridge = window.personalAgentDesktop;
+    if (!bridge || typeof bridge.listSessions !== 'function') {
+      status.textContent = '浏览器预览：本地会话不可用';
+      return;
+    }
+    button.disabled = true;
+    status.textContent = '正在读取本地会话…';
+    try {
+      var result = await bridge.listSessions();
+      result.ids.forEach(function(id) {
+        var row = document.createElement('div');
+        row.className = 'chat-row';
+        var name = document.createElement('span');
+        name.className = 'chat-name'; name.textContent = id; row.title = id;
+        row.append(name); host.append(row);
+      });
+      status.textContent = result.total ? '已保存 ' + result.total + ' 个会话' + (result.truncated ? '（仅显示前 100 个）' : '') + ' · 仅 ID，历史打开未接线' : '尚无已保存会话';
+    } catch (_) {
+      status.textContent = '会话读取失败，请检查宿主 PERSONAL_AGENT_HOME 与目录权限；点击刷新重试';
+    } finally { button.disabled = false; }
+  }
+  $('#refreshSessions').addEventListener('click', refreshSessions);
+  void refreshSessions();
+
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
 
