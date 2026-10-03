@@ -148,27 +148,45 @@
 
   var modelSending = false, modelRequest = 0, modelToken;
   $('#modelDialog').addEventListener('close', function() { modelRequest++; modelToken = undefined; $('#modelSend').disabled = true; });
-  $('#openModel').addEventListener('click', async function() {
-    $('#modelDialog').showModal();
+  async function loadModelPreview() {
     if (modelSending) return;
     var request = ++modelRequest;
     modelToken = undefined;
     $('#modelSend').disabled = true; $('#modelTarget').textContent = '';
     $('#modelStatus').textContent = '读取宿主配置…';
     try {
-      var config = await window.personalAgentDesktop.getProvider();
+      var choice = $('#modelChoice').value;
+      var config = await window.personalAgentDesktop.getProvider(choice ? JSON.parse(choice) : undefined);
       if (request !== modelRequest || !$('#modelDialog').open) return;
       modelToken = config.token;
       $('#modelTarget').textContent = '目标：' + config.baseUrl + ' · 模型：' + config.model;
       $('#modelStatus').textContent = '配置已读取（不代表服务已连通）；请确认后发送。';
       $('#modelSend').disabled = false;
-    } catch (_) { if (request !== modelRequest) return; $('#modelStatus').textContent = '配置不可用，请在 CLI 配置完整 Provider 后重新打开。浏览器预览不支持发送。'; }
+    } catch (_) { if (request !== modelRequest) return; $('#modelStatus').textContent = '配置不可用，请在设置 → 模型中添加提供商与模型，或检查 CLI 配置。'; }
+  }
+  $('#modelChoice').addEventListener('change', loadModelPreview);
+  window.addEventListener('providers-changed', function() { modelRequest++; modelToken = undefined; $('#modelSend').disabled = true; });
+  $('#openModel').addEventListener('click', async function() {
+    $('#modelDialog').showModal();
+    if (modelSending) return;
+    var request = ++modelRequest;
+    modelToken = undefined; $('#modelSend').disabled = true;
+    try {
+      var r = await window.personalAgentDesktop.providerSettings('list');
+      if (request !== modelRequest || !$('#modelDialog').open) return;
+      if (!r.ok) throw Error(r.error);
+      var select = $('#modelChoice'), previous = select.value;
+      select.replaceChildren(new Option('CLI / 环境配置', ''));
+      r.data.providers.forEach(function(p) { p.models.forEach(function(m) { select.add(new Option(p.name + ' / ' + m, JSON.stringify({ id: p.id, model: m }))); }); });
+      select.value = Array.from(select.options).some(function(o) { return o.value === previous; }) && previous ? previous : (select.options[1]?.value || '');
+      await loadModelPreview();
+    } catch (_) { $('#modelStatus').textContent = '提供商列表读取失败，请检查模型设置。'; }
   });
   $('#modelSend').addEventListener('click', async function() {
     if (modelSending || this.disabled) return;
     var input = $('#modelInput').value;
     if (!input.trim() || new TextEncoder().encode(input).length > 8192) { $('#modelStatus').textContent = '请输入 1–8192 字节文本'; return; }
-    modelSending = true; this.disabled = true; $('#modelInput').disabled = true;
+    modelSending = true; this.disabled = true; $('#modelInput').disabled = true; $('#modelChoice').disabled = true;
     $('#modelReply').textContent = ''; $('#modelStatus').textContent = '请求中…关闭窗口不会取消；不要重复发送。';
     try {
       var result = await window.personalAgentDesktop.sendModel(input, modelToken);
@@ -176,7 +194,7 @@
       $('#modelStatus').textContent = '已保存：' + result.id + ' · ' + result.model + '；再次发送请关闭后重新确认配置。';
       await refreshSessions();
     } catch (_) { $('#modelStatus').textContent = '请求失败，可能已计费或保存部分日志；请检查配置与历史。未自动重试，重新发送前须再次确认配置。'; }
-    finally { modelSending = false; $('#modelInput').disabled = false; }
+    finally { modelSending = false; $('#modelInput').disabled = false; $('#modelChoice').disabled = false; }
   });
 
   /* ===================== 视图切换 ===================== */
@@ -663,7 +681,9 @@
       + '<div class="set-ph-note">未接线：保留原型功能入口，后续接入真实能力。</div></div>';
   }
 
+  var providerSettingsView;
   function renderSettings(id){
+    if (providerSettingsView) { providerSettingsView.destroy(); providerSettingsView = null; }
     if (id) currentTab = id;
     var nav = '';
     SET_GROUPS.forEach(function(g){
@@ -679,6 +699,7 @@
     var it = SET_ITEMS.filter(function(x){ return x.id === currentTab; })[0];
     $('#setTitle').textContent = it ? it.label : '设置';
     $('#setBody').innerHTML = '<p role="status">未接线：除主题与字号外，本页为界面演示，不改变运行时权限，不保存配置。</p>' + renderPanel(currentTab);
+    if (currentTab === 'models') providerSettingsView = window.mountProviderSettings($('#setBody'));
     $('#setBody').scrollTop = 0;
   }
   function openSettings(tab){ renderSettings(tab || 'settings'); setScrim.classList.add('is-on'); }
@@ -694,6 +715,7 @@
     if (b) renderSettings(b.dataset.tab);
   });
   $('#setBody').addEventListener('click', function(e){
+    if (currentTab === 'models') return;
     var tp = e.target.closest('[data-theme-pick]');
     if (tp){ applyTheme(tp.dataset.themePick); return; }
     var sg = e.target.closest('.seg button');

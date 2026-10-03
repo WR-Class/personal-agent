@@ -6,7 +6,12 @@ contextBridge.exposeInMainWorld("personalAgentDesktop", {
   platform: process.platform,
   listSessions() { return ipcRenderer.invoke("sessions:list"); },
   sendEcho(input) { return ipcRenderer.invoke("runtime:echo", input); },
-  getProvider() { return ipcRenderer.invoke("runtime:provider"); },
+  getProvider(selection) {
+    if (selection === undefined) return ipcRenderer.invoke("runtime:provider");
+    if (!selection || typeof selection.id !== 'string' || typeof selection.model !== 'string') return Promise.reject(new Error('Invalid model selection'));
+    return ipcRenderer.invoke("runtime:provider", { id: selection.id, model: selection.model });
+  },
+  providerSettings(action, payload) { return ipcRenderer.invoke("providers:settings", action, payload); },
   sendModel(input, token) { return ipcRenderer.invoke("runtime:model", input, token); },
   readHistory(id) { return ipcRenderer.invoke("sessions:history", id); },
   async getInfo() {

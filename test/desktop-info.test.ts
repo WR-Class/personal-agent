@@ -102,10 +102,15 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[2], ['sessions:history', 'demo']);
     await api.sendEcho('hello', 'ignored-path');
     assert.deepEqual(calls[3], ['runtime:echo', 'hello']);
-    await api.getProvider('ignored');
+    await assert.rejects(api.getProvider('ignored'), /Invalid model selection/);
+    await api.getProvider();
     await api.sendModel('hello', 123, 'ignored');
     assert.deepEqual(calls[4], ['runtime:provider']);
     assert.deepEqual(calls[5], ['runtime:model', 'hello', 123]);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'readHistory', 'sendEcho', 'sendModel', 'windowAction']);
+    await api.getProvider({ id: 'test', model: 'one', path: 'ignored' });
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[6])), ['runtime:provider', { id: 'test', model: 'one' }]);
+    await api.providerSettings('list');
+    assert.equal(calls[7]![0], 'providers:settings');
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'providerSettings', 'readHistory', 'sendEcho', 'sendModel', 'windowAction']);
   }
 });

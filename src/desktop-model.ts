@@ -10,9 +10,9 @@ export async function desktopProvider(home: string, env: NodeJS.ProcessEnv = pro
   return { baseUrl: config.baseUrl, model: config.model };
 }
 
-export async function desktopModelSend(home: string, input: unknown, expected: { baseUrl: string; model: string }, env: NodeJS.ProcessEnv = process.env) {
+export async function desktopModelSend(home: string, input: unknown, expected: { baseUrl: string; model: string }, env: NodeJS.ProcessEnv = process.env, selected?: { baseUrl: string; model: string; apiKey: string }) {
   if (typeof input !== 'string' || !input.trim() || Buffer.byteLength(input) > 8192) throw new Error('invalid input');
-  const config = await loadProvider(home, env);
+  const config = selected ?? await loadProvider(home, env);
   if (!config || config.apiKey === '__ASK_AT_START__' || !expected || config.baseUrl !== expected.baseUrl || config.model !== expected.model) throw new Error('provider changed or unavailable');
   const id = `desktop-model-${randomUUID()}`;
   const runtime = new AgentRuntime({ adapter: createOpenAIChatAdapter({ ...config, timeoutMs: 60000, maxTokens: 2048,

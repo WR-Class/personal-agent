@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const entry = path.join(__dirname, 'renderer', 'index.html');
@@ -67,17 +67,43 @@ ipcMain.handle('sessions:history', async (event, id) => {
   }
 });
 
+let providerService;
+async function providers() {
+  const { DesktopProviders } = await import('../src/desktop-providers.ts');
+  return providerService ??= new DesktopProviders(sessionHome, safeStorage);
+}
+// ponytail: serialize configuration/discovery in this host; cross-process writes use a file lock.
+let settingsBusy = false;
+ipcMain.handle('providers:settings', async (event, action, payload) => {
+  trustedWindow(event);
+  if (!['list', 'save', 'delete', 'discover'].includes(action)) return { ok: false, error: '未知配置操作' };
+  if (settingsBusy) return { ok: false, error: '正在处理配置请求，请稍后重试' };
+  settingsBusy = true;
+  try {
+    const service = await providers(); trustedWindow(event);
+    const data = action === 'list' ? await service.list() : await service[action](payload);
+    trustedWindow(event); return { ok: true, data };
+  } catch (e) {
+    const { ProviderError } = await import('../src/desktop-providers.ts');
+    return { ok: false, error: e instanceof ProviderError ? e.message : '配置操作失败；请检查文件权限、系统加密或配置完整性。原始内容已隐藏。' };
+  } finally { settingsBusy = false; }
+});
+
 const providerPreviews = new WeakMap();
 let providerSequence = 0;
 // ponytail: one global model request; use per-window locks only if parallel turns are needed.
 let modelBusy = false;
-ipcMain.handle('runtime:provider', async (event) => {
+ipcMain.handle('runtime:provider', async (event, selection) => {
   trustedWindow(event);
   const token = ++providerSequence;
   providerPreviews.set(event.sender, { token, expires: 0 });
   try {
     const { desktopProvider } = await import('../src/desktop-model.ts');
-    const preview = await desktopProvider(sessionHome);
+    let preview;
+    if (selection !== undefined) {
+      const config = await (await providers()).resolve(selection.id, selection.model);
+      preview = { baseUrl: config.baseUrl, model: config.model, revision: config.revision, providerId: selection.id };
+    } else { preview = await desktopProvider(sessionHome); }
     trustedWindow(event);
     if (providerPreviews.get(event.sender)?.token !== token) throw new Error('Stale preview');
     providerPreviews.set(event.sender, { ...preview, token, expires: Date.now() + 300000 });
@@ -94,7 +120,9 @@ ipcMain.handle('runtime:model', async (event, input, token) => {
   try {
     const { desktopModelSend } = await import('../src/desktop-model.ts');
     trustedWindow(event);
-    const result = await desktopModelSend(sessionHome, input, preview);
+    const selected = preview.providerId ? await (await providers()).resolve(preview.providerId, preview.model, preview.revision) : undefined;
+    trustedWindow(event);
+    const result = await desktopModelSend(sessionHome, input, preview, process.env, selected);
     trustedWindow(event);
     return result;
   } catch (_) { throw new Error('模型请求失败，可能已计费或保存部分日志；请检查本地配置与历史，不会自动重试'); }

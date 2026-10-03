@@ -603,6 +603,8 @@ src/pages/pricing/plans.ts</div>
 <dialog id="modelDialog" aria-labelledby="modelTitle" style="margin:auto;width:min(680px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border-primary);border-radius:12px;background:var(--bg-elevated);color:var(--text-primary)">
   <form method="dialog"><button class="set-btn">关闭（不取消已发送请求）</button></form>
   <h2 id="modelTitle">模型问答 · 无工具 · 每次新会话</h2>
+  <label for="modelChoice">提供商 / 模型</label>
+  <select id="modelChoice" class="set-sel"><option value="">CLI / 环境配置</option></select>
   <p id="modelTarget" style="overflow-wrap:anywhere"></p>
   <p>将发送文本及宿主长期约束、运行时提示到上述服务，可能产生费用并保存本地会话。密钥仅由宿主持有；不会执行工具。最长等待 60 秒。</p>
   <label for="modelInput">问题（最多 8192 UTF-8 字节）</label>
@@ -613,6 +615,7 @@ src/pages/pricing/plans.ts</div>
 </dialog>
 <div class="toast" id="toast"></div>
 
+<script src="providers.js"></script>
 <script src="app.js"></script>
 
 
