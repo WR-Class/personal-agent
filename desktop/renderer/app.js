@@ -200,7 +200,8 @@
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
 
-  function showChat(title){
+  function showChat(title, live){
+    if (mainChat && !live) mainChat.showExample();
     if (title) $('#chatTitle').textContent = title;
     $('#tbTitle').textContent = 'JM · ' + (title || $('#chatTitle').textContent);
     vHome.classList.remove('is-on');
@@ -346,25 +347,13 @@
     autoGrow(ta); syncSend(ta, btn);
   }
 
-  function pushMsg(text){
-    var list = $('.chat-list');
-    var wrap = document.createElement('div');
-    wrap.className = 'msg msg--user';
-    wrap.innerHTML = '<div class="msg-avatar">RW</div><div class="msg-body"><div class="bubble"></div></div>';
-    $('.bubble', wrap).textContent = text;
-    list.appendChild(wrap);
-
-    var rep = document.createElement('div');
-    rep.className = 'msg msg--agent';
-    rep.textContent = '未接线：消息仅展示在当前窗口，未发送给模型、未执行工具，也未保存。';
-    list.appendChild(rep);
-    var sc = $('#chatScroll');
-    sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' });
+  var mainChat = window.mountMainChat({ showChat: showChat, refreshSessions: refreshSessions });
+  bindComposer($('#taHome'), $('#sendHome'), function(v){ void mainChat.send(v, $('#taHome')); });
+  bindComposer($('#taChat'), $('#sendChat'), function(v){ void mainChat.send(v, $('#taChat')); });
+  $('#btnStop').addEventListener('click', function(){ mainChat.stop(); });
+  async function newTask() {
+    if (await mainChat.reset()) { showHome(); $('#taHome').focus(); toast('已新建空白会话'); }
   }
-
-  bindComposer($('#taHome'), $('#sendHome'), function(v){ pushMsg(v); $('#taHome').value=''; autoGrow($('#taHome')); syncSend($('#taHome'), $('#sendHome')); showChat('新任务 · ' + v.slice(0,14)); });
-  bindComposer($('#taChat'), $('#sendChat'), function(v){ pushMsg(v); $('#taChat').value=''; autoGrow($('#taChat')); syncSend($('#taChat'), $('#sendChat')); });
-  $('#btnStop').addEventListener('click', function(){ toast('未接线：当前没有真实运行的任务'); });
 
   /* ===================== 场景标签 ===================== */
   $('#sceneTabs').addEventListener('click', function(e){
@@ -384,7 +373,7 @@
     var bar = m.parentElement;
     $$('.chip-btn[data-mode]', bar).forEach(function(x){ x.classList.remove('is-on'); });
     m.classList.add('is-on');
-    toast('模式：' + (m.dataset.mode === 'plan' ? '计划' : '仅问答'));
+    toast('当前仅文字问答；计划与工具权限入口仍未接线');
   });
 
   /* ===================== 侧栏交互 ===================== */
@@ -452,11 +441,7 @@
     });
   });
 
-  $('#btnNew').addEventListener('click', function(){
-    showHome();
-    $('#taHome').focus();
-    toast('新建任务');
-  });
+  $('#btnNew').addEventListener('click', newTask);
   $('#btnBackHome').addEventListener('click', showHome);
 
   document.addEventListener('click', function(e){
@@ -748,7 +733,7 @@
 
   /* ===================== 命令面板 ===================== */
   var palItems = [
-    { sec:'任务', ico:'i-sparkle', label:'新建任务',           k:'Ctrl N', act:function(){ showHome(); } },
+    { sec:'任务', ico:'i-sparkle', label:'新建任务',           k:'Ctrl N', act:function(){ void newTask(); } },
     { sec:'任务', ico:'i-history', label:'Northwind 定价页改版', k:'',       act:function(){ showChat('Northwind 定价页改版'); } },
     { sec:'任务', ico:'i-history', label:'内置浏览器元素拾取联调', k:'',     act:function(){ showChat('内置浏览器元素拾取联调'); } },
     { sec:'视图', ico:'i-globe',   label:'打开浏览器面板',      k:'',       act:function(){ showPane('browser'); } },
@@ -882,12 +867,12 @@
     /* 与真实客户端 SHORTCUT_DEFINITIONS 对齐（见「设置 → 快捷键」）。注意：带 Shift 的组合必须先判断。 */
     if (mod && e.shiftKey && e.key.toLowerCase() === 'p'){ e.preventDefault(); openPal(); return; }        /* 原型附加：命令面板 */
     if (mod && e.shiftKey && e.key.toLowerCase() === 'b'){ e.preventDefault(); togglePanel(); return; }     /* toggle-artifacts */
-    if (mod && e.shiftKey && e.key.toLowerCase() === 'n'){ e.preventDefault(); showHome(); $('#taHome').focus(); toast('新建快速问答'); return; }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'n'){ e.preventDefault(); void newTask(); return; }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'e'){ e.preventDefault(); toast('已定位当前任务'); return; }
     if (mod && e.key.toLowerCase() === 'k'){ e.preventDefault(); openTaskSearch(); return; }                /* open-global-search */
     if (mod && e.key.toLowerCase() === 'b'){ e.preventDefault(); toggleSidebarCollapse(); return; }         /* toggle-sidebar */
     if (mod && e.key === ','){ e.preventDefault(); openSettings('settings'); return; }                      /* open-settings */
-    if (mod && e.key.toLowerCase() === 'n'){ e.preventDefault(); showHome(); $('#taHome').focus(); return; }/* new-conversation */
+    if (mod && e.key.toLowerCase() === 'n'){ e.preventDefault(); void newTask(); return; }/* new-conversation */
     if (mod && e.key === '['){ e.preventDefault(); stepTask(-1); return; }                                  /* prev-task */
     if (mod && e.key === ']'){ e.preventDefault(); stepTask(1); return; }                                   /* next-task */
     if (mod && (e.key === '=' || e.key === '+')){ e.preventDefault(); setFontSize(fontLevel + 1); return; }

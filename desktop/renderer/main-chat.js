@@ -1,0 +1,103 @@
+/* Real text-only chat; the original prototype messages remain available as examples. */
+(function () {
+  'use strict';
+  window.mountMainChat = function ({ showChat, refreshSessions }) {
+    const api = window.personalAgentDesktop;
+    const sample = document.querySelector('.chat-list');
+    const list = document.createElement('div'); list.className = 'chat-list'; list.id = 'liveChatList'; list.hidden = true; list.style.display = 'none'; sample.after(list);
+    let busy = false, started = false, failed = false, example = false, confirmed = '', title = '', loading = 0;
+    const selectors = [], statuses = [];
+    for (const id of ['taHome', 'taChat']) {
+      const input = document.getElementById(id), row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap';
+      const label = document.createElement('label'); label.textContent = '模型 '; label.htmlFor = id + 'Model';
+      const select = document.createElement('select'); select.id = id + 'Model'; select.className = 'set-sel'; select.style.maxWidth = '100%'; label.append(select); row.append(label);
+      const status = document.createElement('span'); status.setAttribute('role', 'status'); status.style.cssText = 'font-size:12px;color:var(--text-secondary)'; row.append(status);
+      input.before(row); selectors.push(select); statuses.push(status); input.maxLength = 8192;
+      select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; };
+    }
+    function status(text) { statuses.forEach(s => { s.textContent = text; }); }
+    function lock() {
+      selectors.forEach(s => { s.disabled = busy || started; });
+      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat', 'btnNew']) document.getElementById(id).disabled = busy;
+    }
+    async function load() {
+      const sequence = ++loading;
+      if (!api) { status('请在桌面客户端中配置模型'); return; }
+      try {
+        const r = await api.providerSettings('list');
+        if (sequence !== loading) return;
+        if (!r.ok) throw Error(r.error);
+        const old = selectors[0].value;
+        selectors.forEach(s => {
+          s.replaceChildren(new Option('CLI / 环境配置', ''));
+          r.data.providers.forEach(p => p.models.forEach(m => s.add(new Option(p.name + ' / ' + m, JSON.stringify({ id: p.id, model: m })))));
+          s.value = Array.from(s.options).some(o => o.value === old) && old ? old : s.options[1]?.value || '';
+        });
+        status('文字聊天 · 无工具 · 模型管理在设置中'); lock();
+      } catch (_) { status('模型列表读取失败，请重新打开客户端或检查设置'); }
+    }
+    function message(role, text) {
+      const row = document.createElement('div'); row.className = 'msg msg--' + (role === '你' ? 'user' : 'agent');
+      const body = document.createElement('div'); body.className = 'msg-body';
+      const label = document.createElement('strong'); label.textContent = role; body.append(label);
+      const content = document.createElement('div'); content.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 20px'; content.textContent = text; body.append(content); row.append(body); list.append(row);
+      document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
+      return content;
+    }
+    function showLive() { sample.hidden = true; sample.style.display = 'none'; list.hidden = false; list.style.display = 'flex'; showChat(title, true); }
+    async function send(text, input) {
+      if (busy) return;
+      if (example) { status('当前为原型示例，请先点击新建任务再发送'); return; }
+      if (!api) { status('请启动桌面客户端'); return; }
+      if (failed) { status('上轮失败或配置已改变，请新建任务；历史保留'); return; }
+      if (!text.trim() || new TextEncoder().encode(text).length > 8192) { status('请输入 1–8192 UTF-8 字节文本'); return; }
+      busy = true; lock(); status('读取模型配置…');
+      let reply, sent = false;
+      try {
+        const value = selectors[0].value;
+        const preview = await api.getProvider(value ? JSON.parse(value) : undefined);
+        const identity = JSON.stringify([preview.providerId, preview.baseUrl, preview.model, preview.revision]);
+        if (started && confirmed !== identity) { failed = true; status('模型配置已改变，请新建任务，旧上下文不会发送到新服务'); return; }
+        if (confirmed !== identity) {
+          if (!window.confirm('发送至：' + preview.baseUrl + '\n模型：' + preview.model + '\n\n本会话消息、长期约束及运行时提示会发送到此服务，可能计费并保存本地历史。仅文字问答，不执行工具。后续追问沿用同一服务。继续？')) { status('已取消发送'); return; }
+          // Discard any invisible host conversation left by a renderer reload.
+          await api.resetChat();
+          // reset invalidates the token, so obtain the target again and compare before sending.
+          const renewed = await api.getProvider(value ? JSON.parse(value) : undefined);
+          if (JSON.stringify([renewed.providerId, renewed.baseUrl, renewed.model, renewed.revision]) !== identity) throw Error('配置已变化');
+          Object.assign(preview, renewed); confirmed = identity;
+        }
+        if (!started) { list.replaceChildren(); title = text.slice(0, 24); }
+        showLive(); message('你', text); reply = message('Personal Agent', '正在回复…');
+        input.value = ''; input.style.height = 'auto';
+        status('请求中 · 最长 60 秒 · 暂不支持停止'); sent = true; started = true;
+        const result = await api.sendChat(text, preview.token);
+        reply.textContent = result.content; status(failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具');
+        document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
+        await refreshSessions().catch(() => {});
+      } catch (_) {
+        if (sent) { failed = true; if (reply) reply.textContent = '请求失败，可能已计费或保存部分日志。请检查历史后新建任务，不会自动重试。'; }
+        status(sent ? '请求失败，请新建任务；历史保留' : '模型配置不可用或已变化，请检查设置后重试');
+        if (sent) await refreshSessions().catch(() => {});
+      } finally { busy = false; lock(); }
+    }
+    async function reset() {
+      if (busy) { status('请求进行中，请等待完成后新建任务'); return false; }
+      busy = true; lock();
+      try {
+        if (api) await api.resetChat();
+        started = failed = example = false; confirmed = ''; title = ''; list.replaceChildren();
+        document.getElementById('taHome').value = ''; document.getElementById('taChat').value = '';
+        sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none';
+        await load(); return true;
+      } catch (_) { status('新建失败，请等待当前模型请求完成'); return false; }
+      finally { busy = false; lock(); }
+    }
+    window.addEventListener('providers-changed', () => {
+      if (started) { failed = true; status('配置已更新，请新建任务'); } else if (!busy) { confirmed = ''; void load(); }
+    });
+    void load();
+    return { send, reset, isBusy: () => busy, showExample() { example = true; status('原型示例 · 请新建任务开始真实聊天'); sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none'; }, stop() { status(busy ? '暂不支持停止；请求最长等待 60 秒，关闭界面不会取消' : '当前没有正在运行的请求'); } };
+  };
+})();

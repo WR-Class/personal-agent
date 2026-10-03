@@ -9,6 +9,7 @@ const { spawn } = require('node:child_process');
   await fs.mkdir(artifacts, { recursive: true });
   const home = await fs.mkdtemp(path.join(artifacts, 'provider-ui-'));
   let gets = 0, sends = 0, ws, child;
+  const prompts = []; let failChat = false;
   const server = http.createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer local-fixture-only');
     res.setHeader('Content-Type', 'application/json');
@@ -16,6 +17,8 @@ const { spawn } = require('node:child_process');
     assert.equal(req.url, '/v1/chat/completions');
     let body = ''; for await (const c of req) body += c;
     const p = JSON.parse(body); assert.equal(p.model, 'fixture-model'); assert.ok(!p.tools?.length); sends++;
+    prompts.push(p.messages);
+    if (failChat) { res.writeHead(503); res.end('{}'); return; }
     res.end(JSON.stringify({ model: 'fixture-model', choices: [{ message: { role: 'assistant', content: 'LOCAL SETTINGS MOCK ANSWER' }, finish_reason: 'stop' }] }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(19402, '127.0.0.1', resolve); });
@@ -101,7 +104,33 @@ const { spawn } = require('node:child_process');
     const afterDelete = await evaluate(`personalAgentDesktop.providerSettings('list')`);
     assert.equal(afterDelete.data.providers.length, 1); assert.equal(afterDelete.data.providers[0].id, 'deepseek');
     console.log('PASS real Electron: both discovery tabs, encrypted save, edit/reuse, close/reopen race, reload, duplicate rejection, deletion and selected model send; GET=', gets, 'POST=', sends);
-    console.log('Screenshot:', path.join(artifacts, 'provider-settings.png'));
+    await evaluate(`document.querySelector('#setClose').click();document.querySelector('#btnNew').click()`);
+    await until(`!document.querySelector('#btnNew').disabled && document.querySelector('#taHomeModel').value.includes('deepseek')`);
+    async function turn(inputId, buttonId, text, count) {
+      await evaluate(`document.getElementById(${JSON.stringify(inputId)}).value=${JSON.stringify(text)};document.getElementById(${JSON.stringify(buttonId)}).click()`);
+      await until(`document.querySelectorAll('#liveChatList .msg--agent').length===${count} && !document.querySelector('#sendChat').disabled`);
+    }
+    await turn('taHome', 'sendHome', 'remember ALPHA', 1);
+    assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('LOCAL SETTINGS MOCK ANSWER')`));
+    await turn('taChat', 'sendChat', 'what did I say?', 2);
+    assert.deepEqual(prompts.at(-1).filter(m=>m.role==='user').map(m=>m.content), ['remember ALPHA','what did I say?']);
+    assert.ok(prompts.at(-1).some(m=>m.role==='assistant' && m.content==='LOCAL SETTINGS MOCK ANSWER'));
+    const chatShot = await cdp('Page.captureScreenshot', { format: 'png' });
+    await fs.writeFile(path.join(artifacts, 'main-chat.png'), Buffer.from(chatShot.data, 'base64'));
+    await evaluate(`document.querySelector('#btnNew').click()`);
+    await until(`!document.querySelector('#btnNew').disabled && document.querySelector('#liveChatList').children.length===0`);
+    await turn('taHome', 'sendHome', 'fresh BETA', 1);
+    assert.deepEqual(prompts.at(-1).filter(m=>m.role==='user').map(m=>m.content), ['fresh BETA']);
+    failChat = true;
+    await turn('taChat', 'sendChat', 'fail once', 2);
+    assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('请求失败')`));
+    const beforeRetry = sends;
+    await evaluate(`document.querySelector('#taChat').value='must not retry';document.querySelector('#sendChat').click()`);
+    assert.equal(sends, beforeRetry);
+    const sessions = (await fs.readdir(home)).filter(n=>n.startsWith('desktop-chat-'));
+    assert.equal(sessions.length, 2, 'new task allocates a different persisted conversation');
+    console.log('PASS main chat: two-turn context, fresh session isolation, persisted sessions, failed-turn retry blocked; POST=', sends);
+    console.log('Screenshots:', path.join(artifacts, 'provider-settings.png'), path.join(artifacts, 'main-chat.png'));
     // Closing the renderer destroys its CDP context before Runtime.evaluate replies.
     ws.send(JSON.stringify({ id: ++id, method: 'Runtime.evaluate', params: { expression: `personalAgentDesktop.windowAction('close')` } }));
     assert.equal(await exited, 0); child = undefined;

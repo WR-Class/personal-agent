@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -31,17 +32,18 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     BrowserWindow: Window, ipcMain: { handle: (name: string, fn: Function) => handlers.set(name, fn) },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} } },
   };
-  let now = 1000, sends = 0;
+  let now = 1000, sends = 0, broken = false;
+  const sessionIds: unknown[] = [];
   const previews: Array<(v: any) => void> = [];
   const modelModule = {
     desktopProvider: () => new Promise(resolve => previews.push(resolve)),
-    desktopModelSend: async () => { sends++; return { content: 'ok' }; },
+    desktopModelSend: async (...args: unknown[]) => { sends++; sessionIds.push(args[5]); if (broken) throw Error('fixture failure'); return { content: 'ok' }; },
   };
   // Isolate IPC lifecycle from IO; desktop-model.test.ts covers real HTTP/storage.
   const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8').replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)');
   runInNewContext(source, {
-    modelModule, Date: { now: () => now },
-    require: (name: string) => name === 'electron' ? electron : name === 'node:path' ? path : { pathToFileURL },
+    modelModule, Buffer, Date: { now: () => now },
+    require: (name: string) => name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
     __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
   await Promise.resolve();
@@ -80,6 +82,26 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   await stale;
   await send(valid, 'hi', newest.token);
   assert.equal(sends, 2);
+  const chat = handlers.get('chat:send')!, reset = handlers.get('chat:reset')!;
+  await assert.rejects(chat(valid, 'hi', 0), /重新确认/);
+  const a = await settle(preview(valid));
+  const inFlight = chat(valid, 'first', a.token, 'renderer-controlled-id');
+  assert.throws(() => reset(valid), /进行中/);
+  await inFlight;
+  await assert.rejects(chat(valid, 'replay', a.token), /重新确认/);
+  await chat(valid, 'second', (await settle(preview(valid))).token);
+  assert.match(String(sessionIds[2]), /^desktop-chat-/);
+  assert.equal(sessionIds[2], sessionIds[3]);
+  const changed = preview(valid); await Promise.resolve(); previews.shift()!({ baseUrl: 'https://other.test', model: 'test' });
+  await assert.rejects(chat(valid, 'no transfer', (await changed).token), /新建任务/);
+  reset(valid);
+  broken = true;
+  await assert.rejects(chat(valid, 'failure', (await settle(preview(valid))).token), /请求失败/);
+  broken = false;
+  await assert.rejects(chat(valid, 'no retry', (await settle(preview(valid))).token), /新建任务/);
+  reset(valid);
+  await chat(valid, 'fresh', (await settle(preview(valid))).token);
+  assert.notEqual(sessionIds[2], sessionIds.at(-1));
 });
 
 test('preload exposes bounded metadata and reports actual renderer isolation', async () => {
@@ -111,6 +133,8 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(JSON.parse(JSON.stringify(calls[6])), ['runtime:provider', { id: 'test', model: 'one' }]);
     await api.providerSettings('list');
     assert.equal(calls[7]![0], 'providers:settings');
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'providerSettings', 'readHistory', 'sendEcho', 'sendModel', 'windowAction']);
+    await api.sendChat('hi', 45, 'untrusted-session'); await api.resetChat('ignored');
+    assert.deepEqual(calls[8], ['chat:send', 'hi', 45]); assert.deepEqual(calls[9], ['chat:reset']);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction']);
   }
 });

@@ -77,8 +77,8 @@ let settingsBusy = false;
 ipcMain.handle('providers:settings', async (event, action, payload) => {
   trustedWindow(event);
   if (!['list', 'save', 'delete', 'discover'].includes(action)) return { ok: false, error: '未知配置操作' };
-  if (settingsBusy) return { ok: false, error: '正在处理配置请求，请稍后重试' };
-  settingsBusy = true;
+  if (action !== 'list' && settingsBusy) return { ok: false, error: '正在处理配置请求，请稍后重试' };
+  if (action !== 'list') settingsBusy = true;
   try {
     const service = await providers(); trustedWindow(event);
     const data = action === 'list' ? await service.list() : await service[action](payload);
@@ -86,13 +86,47 @@ ipcMain.handle('providers:settings', async (event, action, payload) => {
   } catch (e) {
     const { ProviderError } = await import('../src/desktop-providers.ts');
     return { ok: false, error: e instanceof ProviderError ? e.message : '配置操作失败；请检查文件权限、系统加密或配置完整性。原始内容已隐藏。' };
-  } finally { settingsBusy = false; }
+  } finally { if (action !== 'list') settingsBusy = false; }
 });
 
 const providerPreviews = new WeakMap();
 let providerSequence = 0;
 // ponytail: one global model request; use per-window locks only if parallel turns are needed.
 let modelBusy = false;
+const conversations = new WeakMap();
+ipcMain.handle('chat:reset', (event) => {
+  trustedWindow(event);
+  if (modelBusy) throw new Error('请求进行中，暂不能新建会话');
+  conversations.delete(event.sender);
+  providerPreviews.delete(event.sender);
+  return { ok: true };
+});
+ipcMain.handle('chat:send', async (event, input, token) => {
+  trustedWindow(event);
+  if (typeof input !== 'string' || !input.trim() || Buffer.byteLength(input) > 8192) throw new Error('请输入 1–8192 字节文本');
+  const preview = providerPreviews.get(event.sender);
+  if (!preview || preview.token !== token || preview.expires < Date.now()) throw new Error('请重新确认模型');
+  if (modelBusy) throw new Error('模型请求正在运行');
+  // No renderer-provided session IDs and no cross-provider transfer of existing history.
+  const identity = JSON.stringify([preview.providerId, preview.baseUrl, preview.model, preview.revision]);
+  let conversation = conversations.get(event.sender);
+  if (conversation && (conversation.identity !== identity || conversation.failed)) throw new Error('配置已变化或上轮失败，请新建任务');
+  if (!conversation) {
+    conversation = { identity, id: 'desktop-chat-' + require('node:crypto').randomUUID(), failed: false };
+    conversations.set(event.sender, conversation);
+  }
+  providerPreviews.delete(event.sender); modelBusy = true;
+  try {
+    const { desktopModelSend } = await import('../src/desktop-model.ts');
+    const selected = preview.providerId ? await (await providers()).resolve(preview.providerId, preview.model, preview.revision) : undefined;
+    trustedWindow(event);
+    const result = await desktopModelSend(sessionHome, input, preview, process.env, selected, conversation.id);
+    trustedWindow(event); return result;
+  } catch (_) {
+    conversation.failed = true;
+    throw new Error('请求失败，可能已计费或保存部分日志；请检查历史后新建任务，不会自动重试');
+  } finally { modelBusy = false; }
+});
 ipcMain.handle('runtime:provider', async (event, selection) => {
   trustedWindow(event);
   const token = ++providerSequence;
