@@ -58,6 +58,15 @@ const { spawn } = require('node:child_process');
     }
     await until(`typeof window.mountProviderSettings === 'function'`);
     assert.equal(await evaluate(`!!document.querySelector('#panel,#savedSessions,#refreshSessions') || document.querySelector('#taskGroups').children.length>0`), false);
+    await until(`!!document.querySelector('#workspaceToggle')`);
+    assert.equal((await evaluate(`personalAgentDesktop.workspace('state')`)).data.permission, 'read');
+    assert.equal((await evaluate(`personalAgentDesktop.workspace('terminal',{command:'echo forbidden'})`)).ok, false);
+    assert.equal((await evaluate(`personalAgentDesktop.workspace('browser-open',{url:'file:///C:/Windows/win.ini'})`)).ok, false);
+    await evaluate(`document.querySelector('#workspaceToggle').click()`);
+    await until(`document.querySelectorAll('.workspace-start button').length===3`);
+    const toolShot = await cdp('Page.captureScreenshot', {format:'png'}); await fs.writeFile(path.join(artifacts,'workspace-panel.png'),Buffer.from(toolShot.data,'base64'));
+    await evaluate(`document.querySelector('#workspaceToggle').click()`);
+    assert.ok(await evaluate(`(()=>{const s=document.querySelector('#sendHome').getBoundingClientRect(),m=document.querySelector('#taHomeModel').getBoundingClientRect(),w=document.querySelector('.workspace-controls').getBoundingClientRect();return m.right<=s.left+2&&w.top>=s.bottom;})()`),'model before send and workspace below composer');
     async function checkProviderLayout(width, tag) {
       await cdp('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false });
       assert.ok(await evaluate(`(()=>{const d=document.querySelector('.provider-dialog[open]'),r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&d.scrollWidth<=d.clientWidth+1&&Array.from(d.querySelectorAll('button')).every(b=>{const s=getComputedStyle(b);return b.clientHeight>=parseFloat(s.paddingTop)+parseFloat(s.paddingBottom)+parseFloat(s.lineHeight)});})()`), 'dialog and buttons fit '+width);
@@ -98,8 +107,9 @@ const { spawn } = require('node:child_process');
     await until(`document.querySelector('#modelReply').textContent==='LOCAL SETTINGS MOCK ANSWER'`);
     assert.equal(sends, 1);
     // Reload renderer and use the saved disk profile, not in-memory input fields.
-    await cdp('Page.reload'); await until(`typeof window.mountProviderSettings === 'function'`);
-    await evaluate(`location.hash='models';window.dispatchEvent(new HashChangeEvent('hashchange'))`);
+    await evaluate(`window.__beforeReload = true`);
+    await cdp('Page.reload'); await until(`!window.__beforeReload && document.readyState==='complete' && typeof window.mountProviderSettings === 'function'`);
+    await evaluate(`if(location.hash==='#models') window.dispatchEvent(new HashChangeEvent('hashchange')); else location.hash='models'`);
     await until(`Array.from(document.querySelectorAll('#setBody button')).some(b=>b.textContent==='编辑')`);
     await evaluate(`Array.from(document.querySelectorAll('#setBody button')).find(b=>b.textContent==='＋ 添加模型提供商').click()`);
     await evaluate(`(()=>{const d=document.querySelector('.provider-dialog[open]');d.querySelector('details').open=true;const i=d.querySelectorAll('input');i[0].value='local-fixture-only';i[1].value='http://127.0.0.1:19402/v1';})()`);
@@ -108,10 +118,21 @@ const { spawn } = require('node:child_process');
     await evaluate(`Array.from(document.querySelectorAll('.provider-dialog[open] button')).find(b=>b.textContent==='创建提供商').onclick()`);
     const duplicate = await evaluate(`(async()=>{const a=personalAgentDesktop,s=(await a.providerSettings('list')).data,p=s.providers.find(p=>p.id==='deepseek');return a.providerSettings('save',{revision:s.revision,provider:{...p,apiKey:'',models:[]}});})()`);
     assert.equal(duplicate.ok, false); assert.match(duplicate.error, /已存在/);
-    // Exercise the real delete button with CDP accepting the native confirm dialog.
-    ws.onmessage = e => { const m = JSON.parse(e.data); if(m.method==='Page.javascriptDialogOpening') ws.send(JSON.stringify({id:++id,method:'Page.handleJavaScriptDialog',params:{accept:true}})); pending.get(m.id)?.(m); };
-    await cdp('Page.enable');
-    await evaluate(`Array.from(document.querySelectorAll('#setBody button')).find(b=>b.textContent==='删除').onclick()`);
+    // Exercise real confirmation, including cancellation, with a focused user gesture.
+    let acceptDialog = false, dialogs = 0; const dialogReplies = [];
+    ws.onmessage = e => { const m = JSON.parse(e.data); if(m.method==='Page.javascriptDialogOpening') { dialogs++; dialogReplies.push(cdp('Page.handleJavaScriptDialog',{accept:acceptDialog}).then(()=>null,e=>e.message)); } pending.get(m.id)?.(m); };
+    await cdp('Page.enable'); await cdp('Page.bringToFront');
+    for (const accept of [false, true]) {
+      acceptDialog = accept; const before = dialogs;
+      const r = await cdp('Runtime.evaluate', { expression: `Array.from(document.querySelectorAll('#setBody button')).find(b=>b.textContent==='删除').onclick()`, userGesture: true, awaitPromise: true, returnByValue: true });
+      assert.ok(!r.exceptionDetails, JSON.stringify(r.exceptionDetails));
+      assert.equal(dialogs, before + 1, 'delete must actually open confirmation');
+      assert.deepEqual(await Promise.all(dialogReplies), Array(dialogReplies.length).fill(null), 'CDP confirmation must succeed');
+      const actual = await evaluate(`personalAgentDesktop.providerSettings('list')`);
+      const status = await evaluate(`document.querySelector('#setBody [role=status]').textContent`);
+      assert.equal(actual.data.providers.length, accept ? 1 : 2, 'delete accept='+accept+'; UI status='+status);
+    }
+    await until(`(async()=>{const r=await personalAgentDesktop.providerSettings('list');return r.ok&&r.data.providers.length===1;})()`);
     const afterDelete = await evaluate(`personalAgentDesktop.providerSettings('list')`);
     assert.equal(afterDelete.data.providers.length, 1); assert.equal(afterDelete.data.providers[0].id, 'deepseek');
     console.log('PASS real Electron: both discovery tabs, encrypted save, edit/reuse, close/reopen race, reload, duplicate rejection, deletion and selected model send; GET=', gets, 'POST=', sends);

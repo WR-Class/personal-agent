@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, WebContentsView } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const entry = path.join(__dirname, 'renderer', 'index.html');
@@ -41,6 +41,8 @@ function trustedWindow(event) {
   }
   return win;
 }
+
+require('./workspace.cjs').installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow });
 
 const sessionHome = path.resolve(process.env.PERSONAL_AGENT_HOME ?? path.join(__dirname, '..', '.personal-agent'));
 ipcMain.handle('sessions:list', async (event) => {

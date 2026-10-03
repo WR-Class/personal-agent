@@ -4,6 +4,7 @@ const allowedActions = new Set(["min", "max", "close", "reset", "new", "fullscre
 
 contextBridge.exposeInMainWorld("personalAgentDesktop", {
   platform: process.platform,
+  workspace(action, payload) { return ipcRenderer.invoke('workspace:action', action, payload); },
   listSessions() { return ipcRenderer.invoke("sessions:list"); },
   sendEcho(input) { return ipcRenderer.invoke("runtime:echo", input); },
   getProvider(selection) {

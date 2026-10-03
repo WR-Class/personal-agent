@@ -43,7 +43,7 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8').replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)');
   runInNewContext(source, {
     modelModule, Buffer, Date: { now: () => now },
-    require: (name: string) => name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
+    require: (name: string) => name === './workspace.cjs' ? { installWorkspace() {} } : name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
     __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
   await Promise.resolve();
@@ -135,6 +135,8 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.equal(calls[7]![0], 'providers:settings');
     await api.sendChat('hi', 45, 'untrusted-session'); await api.resetChat('ignored');
     assert.deepEqual(calls[8], ['chat:send', 'hi', 45]); assert.deepEqual(calls[9], ['chat:reset']);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction']);
+    await api.workspace('files', { relative: 'src' }, 'ignored');
+    assert.deepEqual(calls[10], ['workspace:action', 'files', { relative: 'src' }]);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
   }
 });

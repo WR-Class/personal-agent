@@ -46,7 +46,9 @@
       const label = document.createElement('label'); label.textContent = '模型 '; label.htmlFor = id + 'Model';
       const select = document.createElement('select'); select.id = id + 'Model'; select.className = 'set-sel'; select.style.maxWidth = '100%'; label.append(select); row.append(label);
       const status = document.createElement('span'); status.setAttribute('role', 'status'); status.style.cssText = 'font-size:12px;color:var(--text-secondary)'; row.append(status);
-      input.before(row); selectors.push(select); statuses.push(status); input.maxLength = 8192;
+      row.className = 'composer-model'; row.style.cssText = ''; status.className = 'composer-status';
+      const composer = input.closest('.composer'); composer.querySelector('.send').before(row); composer.append(status);
+      selectors.push(select); statuses.push(status); input.maxLength = 8192;
       select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; };
     }
     function status(text) { statuses.forEach(s => { s.textContent = text; }); }
