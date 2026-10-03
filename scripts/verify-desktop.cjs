@@ -33,7 +33,7 @@ const path = require('node:path');
     await call('Page.reload');
     await evaluate(`new Promise(resolve=>{if(document.readyState==='complete')resolve();else addEventListener('load',resolve,{once:true});})`);
     const backgrounds = await evaluate(`Array.from(document.querySelectorAll('dialog'),d=>getComputedStyle(d).backgroundColor)`);
-    assert.equal(backgrounds.length, 2);
+    assert.equal(backgrounds.length, 3);
     assert.ok(backgrounds.every(c=>c.startsWith('rgb(')), 'dialogs must have opaque backgrounds: ' + backgrounds);
     const entries = await evaluate(`({ nav:Array.from(document.querySelectorAll('.nav-item'),e=>e.dataset.nav), sub:Array.from(document.querySelectorAll('.nav-sub-item'),e=>e.dataset.sub), panes:Array.from(document.querySelectorAll('.pane'),e=>e.dataset.pane), node:typeof require })`);
     assert.deepEqual(entries.nav, ['assistant','project','expert','automation','more']);

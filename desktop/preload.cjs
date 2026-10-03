@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("personalAgentDesktop", {
   platform: process.platform,
   listSessions() { return ipcRenderer.invoke("sessions:list"); },
   sendEcho(input) { return ipcRenderer.invoke("runtime:echo", input); },
+  getProvider() { return ipcRenderer.invoke("runtime:provider"); },
+  sendModel(input, token) { return ipcRenderer.invoke("runtime:model", input, token); },
   readHistory(id) { return ipcRenderer.invoke("sessions:history", id); },
   async getInfo() {
     const info = await ipcRenderer.invoke("desktop:info");

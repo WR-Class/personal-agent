@@ -146,6 +146,39 @@
     } finally { button.disabled = false; $('#echoInput').disabled = false; }
   });
 
+  var modelSending = false, modelRequest = 0, modelToken;
+  $('#modelDialog').addEventListener('close', function() { modelRequest++; modelToken = undefined; $('#modelSend').disabled = true; });
+  $('#openModel').addEventListener('click', async function() {
+    $('#modelDialog').showModal();
+    if (modelSending) return;
+    var request = ++modelRequest;
+    modelToken = undefined;
+    $('#modelSend').disabled = true; $('#modelTarget').textContent = '';
+    $('#modelStatus').textContent = '读取宿主配置…';
+    try {
+      var config = await window.personalAgentDesktop.getProvider();
+      if (request !== modelRequest || !$('#modelDialog').open) return;
+      modelToken = config.token;
+      $('#modelTarget').textContent = '目标：' + config.baseUrl + ' · 模型：' + config.model;
+      $('#modelStatus').textContent = '配置已读取（不代表服务已连通）；请确认后发送。';
+      $('#modelSend').disabled = false;
+    } catch (_) { if (request !== modelRequest) return; $('#modelStatus').textContent = '配置不可用，请在 CLI 配置完整 Provider 后重新打开。浏览器预览不支持发送。'; }
+  });
+  $('#modelSend').addEventListener('click', async function() {
+    if (modelSending || this.disabled) return;
+    var input = $('#modelInput').value;
+    if (!input.trim() || new TextEncoder().encode(input).length > 8192) { $('#modelStatus').textContent = '请输入 1–8192 字节文本'; return; }
+    modelSending = true; this.disabled = true; $('#modelInput').disabled = true;
+    $('#modelReply').textContent = ''; $('#modelStatus').textContent = '请求中…关闭窗口不会取消；不要重复发送。';
+    try {
+      var result = await window.personalAgentDesktop.sendModel(input, modelToken);
+      $('#modelReply').textContent = result.content;
+      $('#modelStatus').textContent = '已保存：' + result.id + ' · ' + result.model + '；再次发送请关闭后重新确认配置。';
+      await refreshSessions();
+    } catch (_) { $('#modelStatus').textContent = '请求失败，可能已计费或保存部分日志；请检查配置与历史。未自动重试，重新发送前须再次确认配置。'; }
+    finally { modelSending = false; $('#modelInput').disabled = false; }
+  });
+
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
 

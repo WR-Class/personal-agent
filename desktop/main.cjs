@@ -67,6 +67,40 @@ ipcMain.handle('sessions:history', async (event, id) => {
   }
 });
 
+const providerPreviews = new WeakMap();
+let providerSequence = 0;
+// ponytail: one global model request; use per-window locks only if parallel turns are needed.
+let modelBusy = false;
+ipcMain.handle('runtime:provider', async (event) => {
+  trustedWindow(event);
+  const token = ++providerSequence;
+  providerPreviews.set(event.sender, { token, expires: 0 });
+  try {
+    const { desktopProvider } = await import('../src/desktop-model.ts');
+    const preview = await desktopProvider(sessionHome);
+    trustedWindow(event);
+    if (providerPreviews.get(event.sender)?.token !== token) throw new Error('Stale preview');
+    providerPreviews.set(event.sender, { ...preview, token, expires: Date.now() + 300000 });
+    return { ...preview, token };
+  } catch (_) { throw new Error('模型配置不可用；请先用 CLI 配置完整 Provider，密钥不在桌面显示'); }
+});
+ipcMain.handle('runtime:model', async (event, input, token) => {
+  trustedWindow(event);
+  const preview = providerPreviews.get(event.sender);
+  if (!preview || token !== preview.token || preview.expires < Date.now()) throw new Error('请重新查看并确认模型配置');
+  if (modelBusy) throw new Error('模型请求正在运行');
+  providerPreviews.delete(event.sender);
+  modelBusy = true;
+  try {
+    const { desktopModelSend } = await import('../src/desktop-model.ts');
+    trustedWindow(event);
+    const result = await desktopModelSend(sessionHome, input, preview);
+    trustedWindow(event);
+    return result;
+  } catch (_) { throw new Error('模型请求失败，可能已计费或保存部分日志；请检查本地配置与历史，不会自动重试'); }
+  finally { modelBusy = false; }
+});
+
 let echoBusy = false;
 ipcMain.handle('runtime:echo', async (event, input) => {
   trustedWindow(event);

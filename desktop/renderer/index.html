@@ -178,6 +178,7 @@
           <div id="sessionListStatus" role="status">点击已保存会话，打开只读历史预览</div>
           <div id="savedSessions"></div>
           <button class="grp-row" id="openEcho">离线 Echo 测试（非大模型）</button>
+          <button class="grp-row" id="openModel">模型问答（无工具）</button>
         </div>
         <div class="grp-path">以下为原型示例任务（未接线）</div>
         <div id="taskGroups"></div>
@@ -598,6 +599,17 @@ src/pages/pricing/plans.ts</div>
   <button id="echoSend" class="set-btn">发送并保存测试会话</button>
   <p id="echoStatus" role="status"></p>
   <pre id="echoReply" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+</dialog>
+<dialog id="modelDialog" aria-labelledby="modelTitle" style="margin:auto;width:min(680px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border-primary);border-radius:12px;background:var(--bg-elevated);color:var(--text-primary)">
+  <form method="dialog"><button class="set-btn">关闭（不取消已发送请求）</button></form>
+  <h2 id="modelTitle">模型问答 · 无工具 · 每次新会话</h2>
+  <p id="modelTarget" style="overflow-wrap:anywhere"></p>
+  <p>将发送文本及宿主长期约束、运行时提示到上述服务，可能产生费用并保存本地会话。密钥仅由宿主持有；不会执行工具。最长等待 60 秒。</p>
+  <label for="modelInput">问题（最多 8192 UTF-8 字节）</label>
+  <textarea id="modelInput" rows="4" maxlength="8192" style="display:block;width:100%;margin:12px 0;padding:10px;border:1px solid var(--border-input);outline:revert"></textarea>
+  <button id="modelSend" class="set-btn" disabled>确认发送至上述模型</button>
+  <p id="modelStatus" role="status"></p>
+  <pre id="modelReply" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
 </dialog>
 <div class="toast" id="toast"></div>
 

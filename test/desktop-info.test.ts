@@ -31,7 +31,16 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     BrowserWindow: Window, ipcMain: { handle: (name: string, fn: Function) => handlers.set(name, fn) },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} } },
   };
-  runInNewContext(readFileSync(path.join(desktop, 'main.cjs'), 'utf8'), {
+  let now = 1000, sends = 0;
+  const previews: Array<(v: any) => void> = [];
+  const modelModule = {
+    desktopProvider: () => new Promise(resolve => previews.push(resolve)),
+    desktopModelSend: async () => { sends++; return { content: 'ok' }; },
+  };
+  // Isolate IPC lifecycle from IO; desktop-model.test.ts covers real HTTP/storage.
+  const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8').replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)');
+  runInNewContext(source, {
+    modelModule, Date: { now: () => now },
     require: (name: string) => name === 'electron' ? electron : name === 'node:path' ? path : { pathToFileURL },
     __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
@@ -51,6 +60,26 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     if (fn === handlers.get('desktop:info') || fn === handlers.get('window:action')) await assert.doesNotReject(async () => fn(valid, 'min'));
     sender.mainFrame.url = url;
   }
+  const preview = handlers.get('runtime:provider')!, send = handlers.get('runtime:model')!;
+  const settle = async (p: Promise<any>) => { await Promise.resolve(); previews.shift()!({ baseUrl: 'https://example.test/v1', model: 'test' }); return p; };
+  await assert.rejects(send(valid, 'hi'), /重新查看/);
+  const first = await settle(preview(valid));
+  await assert.rejects(send(valid, 'hi', first.token + 1), /重新查看/);
+  now += 300001;
+  await assert.rejects(send(valid, 'hi', first.token), /重新查看/);
+  const second = await settle(preview(valid));
+  await send(valid, 'hi', second.token);
+  await assert.rejects(send(valid, 'hi', second.token), /重新查看/);
+  assert.equal(sends, 1);
+  const older = preview(valid), newer = preview(valid);
+  const stale = assert.rejects(older, /配置不可用/);
+  await Promise.resolve();
+  previews.pop()!({ baseUrl: 'https://new.test', model: 'new' });
+  const newest = await newer;
+  previews.shift()!({ baseUrl: 'https://old.test', model: 'old' });
+  await stale;
+  await send(valid, 'hi', newest.token);
+  assert.equal(sends, 2);
 });
 
 test('preload exposes bounded metadata and reports actual renderer isolation', async () => {
@@ -73,6 +102,10 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[2], ['sessions:history', 'demo']);
     await api.sendEcho('hello', 'ignored-path');
     assert.deepEqual(calls[3], ['runtime:echo', 'hello']);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'listSessions', 'onMaximized', 'platform', 'readHistory', 'sendEcho', 'windowAction']);
+    await api.getProvider('ignored');
+    await api.sendModel('hello', 123, 'ignored');
+    assert.deepEqual(calls[4], ['runtime:provider']);
+    assert.deepEqual(calls[5], ['runtime:model', 'hello', 123]);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listSessions', 'onMaximized', 'platform', 'readHistory', 'sendEcho', 'sendModel', 'windowAction']);
   }
 });
