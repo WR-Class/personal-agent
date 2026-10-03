@@ -5,13 +5,13 @@
 
   /* ===================== 数据 ===================== */
   var GROUPS = [
-    { name:'JM', path:'D:\\WorkBuddyXM\\JM', open:true, items:[
+    { name:'JM', path:'示例工作区（未接线）', open:true, items:[
       { t:'Northwind 定价页改版', time:'刚刚',  st:'run', on:true },
       { t:'内置浏览器元素拾取联调', time:'12:40', st:'ok' },
       { t:'侧栏按项目目录分组',     time:'11:05', st:'ok' },
       { t:'整理季度财报成网页',     time:'昨天',  st:'err' }
     ]},
-    { name:'workbuddy-docs', path:'D:\\repos\\workbuddy-docs', open:true, items:[
+    { name:'示例文档', path:'示例目录（未接线）', open:true, items:[
       { t:'设计令牌对照表梳理',   time:'昨天', st:'ok' },
       { t:'令牌提取脚本重构',     time:'周一', st:'ok' }
     ]},
@@ -355,13 +355,13 @@
     { id:'memory',            label:'记忆与进化',      group:'feature',      ico:'i-book' },
     { id:'extensions',        label:'智能体',         group:'feature',      ico:'i-expert' },
     { id:'models',            label:'模型',           group:'feature',      ico:'i-cloud' },
-    { id:'claw',              label:'WorkBuddy 设置',  group:'feature',      ico:'i-sparkle' },
+    { id:'claw',              label:'Personal Agent 设置',  group:'feature',      ico:'i-sparkle' },
     { id:'dataManagement',    label:'数据管理',        group:'dataSecurity', ico:'i-terminal' },
     { id:'buddyApps',         label:'应用管理',        group:'dataSecurity', ico:'i-grid' },
     { id:'securityCenter',    label:'安全中心',        group:'dataSecurity', ico:'i-shield' },
     { id:'systemPermissions', label:'系统授权',        group:'dataSecurity', ico:'i-lock' },
     { id:'softwareConfig',    label:'软件配置',        group:'dataSecurity', ico:'i-code' },
-    { id:'helpFeedback',      label:'关于 WorkBuddy',  group:'about',        ico:'i-bulb' },
+    { id:'helpFeedback',      label:'关于 Personal Agent',  group:'about',        ico:'i-bulb' },
     { id:'getHelp',           label:'获取帮助',        group:'about',        ico:'i-search' }
   ];
 
@@ -403,12 +403,12 @@
     personalization:   ['个性化',     '称呼、语气与回复风格偏好。'],
     memory:            ['记忆与进化', '长期记忆的查看、编辑与清理。'],
     extensions:        ['智能体',     '智能体与技能的启用、配置与上传。'],
-    claw:              ['WorkBuddy 设置', '助手行为与运行时配置。'],
+    claw:              ['Personal Agent 设置', '助手行为与运行时配置。'],
     dataManagement:    ['数据管理',   '会话、文件与本地数据的导出和清理。'],
     buddyApps:         ['应用管理',   '已发布应用的查看与管理。'],
     systemPermissions: ['系统授权',   '屏幕录制、辅助功能、文件访问等系统权限。'],
     softwareConfig:    ['软件配置',   '终端、环境变量与运行时配置。'],
-    helpFeedback:      ['关于 WorkBuddy', '版本信息、更新与诊断工具。'],
+    helpFeedback:      ['关于 Personal Agent', '版本信息、更新与诊断工具。'],
     getHelp:           ['获取帮助',   '使用文档、反馈与支持。']
   };
 
@@ -461,15 +461,15 @@
       + sRow('专家与技能推荐', '每次启动新任务时，为你推荐适合完成任务的专家与技能', sw(true))
       + sRow('自动安装可信技能', '安全检测通过后自动安装，高风险项始终要求手动确认', sw(true))
       + sSec('通用')
-      + sRow('开机自启', '开启后 WorkBuddy 会在你登录电脑后自动启动。', sw(false))
-      + sRow('启动强制自动更新', '开启后 WorkBuddy 启动时若检测到新版本，会自动下载并重启升级，无需手动确认。', sw(false))
-      + sRow('链接打开方式', '按需模式下，本地预览链接在 WorkBuddy 内置浏览器打开，其他链接默认使用系统浏览器；按住修饰键点击始终外部打开。', sel(['按需（默认）','始终内置','始终外部'], '按需（默认）'))
-      + sRow('网络代理', '配置 WorkBuddy 访问网络的方式。修改后立即生效，无需重启。', sel(['直接连接','跟随系统','手动配置'], '直接连接'))
+      + sRow('开机自启', '开启后 Personal Agent 会在你登录电脑后自动启动。', sw(false))
+      + sRow('启动强制自动更新', '开启后 Personal Agent 启动时若检测到新版本，会自动下载并重启升级，无需手动确认。', sw(false))
+      + sRow('链接打开方式', '按需模式下，本地预览链接在 Personal Agent 内置浏览器打开，其他链接默认使用系统浏览器；按住修饰键点击始终外部打开。', sel(['按需（默认）','始终内置','始终外部'], '按需（默认）'))
+      + sRow('网络代理', '配置 Personal Agent 访问网络的方式。修改后立即生效，无需重启。', sel(['直接连接','跟随系统','手动配置'], '直接连接'))
       + sRow('锁屏远程', '选择锁屏后的运行方式，保障远程控制与后台 Agent 任务持续执行', sel(['关闭','熄屏后保持唤醒','保持屏幕常亮'], '熄屏后保持唤醒'))
       + sSec('存储')
-      + sRow('系统缓存目录', 'D:&#92;WorkBuddyXM&#92;JM&#92;.workbuddy-ai · 存放对话记录、运行缓存与临时文件', txt('打开目录'))
+      + sRow('系统缓存目录', '未接线：尚未读取实际缓存目录', txt('打开目录'))
       + sRow('任务保留期限', '过期会清理任务对话记录；仅对新任务生效，已有任务不受影响。', sel(['30 天','60 天','90 天','永久保留'], '90 天'))
-      + sRow('默认工作空间存储路径', '新建任务、工作空间时将自动存放在该路径下；修改后不影响已有数据。', txt('D:&#92;WorkBuddyXM&#92;JM'))
+      + sRow('默认工作空间存储路径', '新建任务、工作空间时将自动存放在该路径下；修改后不影响已有数据。', txt('未接线：尚未选择工作区'))
       + sSec('隐私')
       + sRow('体验优化计划', '允许使用你的对话数据帮助改进模型。数据会先加密脱敏，且无法关联到你个人。', sw(false));
   };
@@ -1059,5 +1059,5 @@
   window.addEventListener('hashchange', route);
   route();
 
-  if (!location.hash) toast('已按真实 WorkBuddy 设计令牌渲染');
+  if (!location.hash) toast('Personal Agent 桌面壳 · 示例数据，运行时未接线');
 })();

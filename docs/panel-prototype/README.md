@@ -182,11 +182,30 @@ input"——**此前几轮"看过截图"的判断实际是在看不到图的情�
 已接线 / 未接线边界：窗口动作真实；聊天发送、任务增删、设置持久化、模型配置、
 更新、帮助等全部仅展示提示——等运行时装配（IPC ↔ `AgentRuntime`）再逐个点亮。
 
-环境注记：桌面壳代码完成并通过静态验证（tsc EXIT 0、全量 782/781/0/1 skip），
-但本机运行**未签名**的 electron.exe 时在 main 之前即以 0x80000003（Chromium 主动
-CHECK）退出——32.2.0 与 44.5.1、exe 改名、计划任务、资源管理器快捷方式四种启动
-路径结果一致；而本机正常运行的 Electron/Chromium 应用（QQ、WorkBuddy、DSH、
-Chrome、Edge）二进制全部有有效签名，唯一相关变量锁定为"未签名"。机制未定位
-（无第三方注入驱动、系统进程缓解策略全空、SAC 关闭、VBS/HVCI 开启）。
-窗口预览验证待本机信任策略放行该二进制后补做；渲染层可在浏览器中预览。
-依赖固定为 **Electron 32.2.0**（与真实 WorkBuddy 客户端同版本）。
+环境注记（更正）：同一 Electron 44.5.1 的 dist 副本放到 Downloads 后，默认参数可
+启动本项目真实窗口，renderer 带 `--enable-sandbox`。原位置曾出现 0x80000003 /
+0xC0000005；目前只确认运行位置相关，尚未证明 ACL、签名或其他具体机制。
+此前“未签名是唯一变量”“WorkBuddy 的 Electron 是 32.2.0”的判断均撤回。
+依赖固定为 **Electron 44.5.1**；无需降级或禁用沙箱。
+
+启动：`npm run start:desktop` 默认使用安装的 Electron。若本机原位置仍启动失败，
+可显式指定已验证的同版本完整运行时（不是只复制 exe，也不依赖 WorkBuddy/DSH）：
+
+```powershell
+$env:PERSONAL_AGENT_ELECTRON = "$env:USERPROFILE\Downloads\electron-test\electron.exe"
+npm run start:desktop
+```
+
+启动器仅为子进程清除宿主遗留的 `ELECTRON_RUN_AS_NODE`，保留参数与退出失败状态；
+不会自动复制运行时、修改文件权限或加入 `--no-sandbox`。显式外部路径不会触发下载；
+默认路径使用 Electron 官方 npm 入口，Electron 44 在安装不完整时可能自动下载运行时。
+开发环境需要 Node >=22.12（与 Electron 44 的 npm 依赖要求对齐）。
+这是开发阶段的显式路径替代方案，不是权限根因修复或安装包。
+桌面产品名使用 Personal Agent，保留原型来源说明及全部功能入口。
+验证：构建、语法检查与桌面 4 项回归通过；此前全量 785 项（784 通过、1 跳过）。
+补充异常分支后全量复跑两次分别在 mcp-plugin / mcp-client 的 after 清理中遇到
+Windows EPERM；单独复验 desktop + mcp-plugin 共 10 项通过。最终全量绿灯尚未恢复，
+不将早先通过结果冒充最终提交验证；本轮未更改这些旧测试的清理策略。
+真实 Electron 页面经 CDP 验证标题、设置/关于名称与未接线提示；最大化、恢复、关闭
+成功，启动器正常退出 0，渲染页面 `require` 不可用。未声称完成逐像素视觉验收。
+启动日志仍有 GPU 缓存目录拒绝访问告警，未妨碍上述验证；未修改权限或删除用户缓存。

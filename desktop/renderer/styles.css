@@ -1,6 +1,6 @@
 /* ============================================================================
    0. 设计令牌
-   —— 全部取自真实客户端 D:/WorkBuddy/WorkBuddyAI/resources/app.asar
+   —— 沿用用户提供的 wb-client.html 设计基座；以下为原型保留的令牌来源说明
       · renderer/index.html            骨架屏尺寸（38 / 220 / 22）
       · assets/desktop-sdk-setup.css   根主题映射（--wb-color-* → --wb-palette-gray-*）
       · assets/lib-chat-ui.css         聊天 UI 令牌（--cb-* / --cr-*）

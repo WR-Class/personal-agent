@@ -9,14 +9,14 @@
     "test:live": "node --experimental-strip-types --test test/live.e2e.ts",
     "build": "tsc --noEmit",
     "start": "node --experimental-strip-types src/cli.ts",
-    "start:desktop": "electron ."
+    "start:desktop": "node desktop/launch.cjs"
   },
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.12"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
-    "electron": "32.2.0",
+    "electron": "44.5.1",
     "typescript": "^5.6.3"
   }
 }
