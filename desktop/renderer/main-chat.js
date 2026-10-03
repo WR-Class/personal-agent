@@ -1,6 +1,39 @@
-/* Real text-only chat; the original prototype messages remain available as examples. */
+/* Real chat with a text-only safe Markdown subset. */
 (function () {
   'use strict';
+  // ponytail: a safe Markdown subset, not a full HTML/CommonMark engine. Unknown syntax stays text.
+  window.renderReply = function (host, text) {
+    host.replaceChildren(); host.classList.add('reply-markdown');
+    function inline(parent, value) {
+      const parts = value.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
+      for (const part of parts) {
+        if (part.startsWith('`') && part.endsWith('`')) { const n = document.createElement('code'); n.textContent = part.slice(1, -1); parent.append(n); }
+        else if (part.startsWith('**') && part.endsWith('**')) { const n = document.createElement('strong'); n.textContent = part.slice(2, -2); parent.append(n); }
+        else parent.append(document.createTextNode(part));
+      }
+    }
+    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    let fence = '', code = [], paragraph = [], language = '';
+    function flush() { if (paragraph.length) { const p = document.createElement('p'); inline(p, paragraph.join('\n')); host.append(p); paragraph = []; } }
+    function block() {
+      if (language) { const label = document.createElement('div'); label.className = 'code-language'; label.textContent = language; host.append(label); }
+      const pre = document.createElement('pre'), n = document.createElement('code'); n.textContent = code.join('\n'); pre.append(n); host.append(pre); code = [];
+    }
+    for (const line of lines) {
+      const marker = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) { block(); fence = ''; }
+        else code.push(line);
+      } else if (marker) { flush(); fence = marker[1]; language = marker[2].trim(); }
+      else if (!line.trim()) flush();
+      else {
+        const heading = line.match(/^(#{1,6})\s+(.+)$/), item = line.match(/^\s*(?:[-*+] |\d+\. )(.+)$/);
+        if (heading || item) { flush(); const n = document.createElement(heading ? 'h' + Math.min(heading[1].length + 1, 6) : 'p'); inline(n, heading ? heading[2] : '• ' + item[1]); host.append(n); }
+        else paragraph.push(line);
+      }
+    }
+    if (fence) block(); flush();
+  };
   window.mountMainChat = function ({ showChat, refreshSessions }) {
     const api = window.personalAgentDesktop;
     const sample = document.querySelector('.chat-list');
@@ -48,7 +81,7 @@
     function showLive() { sample.hidden = true; sample.style.display = 'none'; list.hidden = false; list.style.display = 'flex'; showChat(title, true); }
     async function send(text, input) {
       if (busy) return;
-      if (example) { status('当前为原型示例，请先点击新建任务再发送'); return; }
+      if (example) example = false;
       if (!api) { status('请启动桌面客户端'); return; }
       if (failed) { status('上轮失败或配置已改变，请新建任务；历史保留'); return; }
       if (!text.trim() || new TextEncoder().encode(text).length > 8192) { status('请输入 1–8192 UTF-8 字节文本'); return; }
@@ -73,7 +106,7 @@
         input.value = ''; input.style.height = 'auto';
         status('请求中 · 最长 60 秒 · 暂不支持停止'); sent = true; started = true;
         const result = await api.sendChat(text, preview.token);
-        reply.textContent = result.content; status(failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具');
+        window.renderReply(reply, result.content); status(failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具');
         document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
         await refreshSessions().catch(() => {});
       } catch (_) {

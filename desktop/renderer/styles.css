@@ -813,6 +813,20 @@ html[data-theme="dark"] .msg-text code{background:rgba(255,255,255,.1)}
 .set-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
 .set-btn--primary{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
 .set-btn--primary:hover{background:#333;color:#fff}
+/* Provider actions have larger padding than compact setting controls: never force 28px. */
+.provider-settings .set-btn,.provider-dialog .set-btn{height:auto;min-height:34px;line-height:1.4;display:inline-flex;align-items:center;justify-content:center;white-space:normal;flex-shrink:0}
+.provider-settings{padding:18px;overflow-x:hidden}
+.provider-settings span{min-width:0;overflow-wrap:anywhere}
+.provider-dialog{inset:0;box-sizing:border-box;scrollbar-gutter:stable;font-size:14px;line-height:1.6}
+.provider-dialog input{box-sizing:border-box;min-width:0}
+.provider-dialog h3,.provider-dialog h4{margin:12px 0}
+.provider-dialog::backdrop{background:rgba(0,0,0,.3)}
+.reply-markdown{white-space:normal!important;line-height:1.7;overflow-wrap:anywhere}
+.reply-markdown p{white-space:pre-wrap;margin:10px 0}
+.reply-markdown pre{white-space:pre;overflow:auto;max-width:100%;padding:14px;background:var(--bg-hover);border:1px solid var(--border-primary);border-radius:8px;margin:8px 0 16px}
+.reply-markdown code{font-family:var(--font-mono);font-size:12px}
+.reply-markdown .code-language{color:var(--text-tertiary);font-size:12px}
+@media(max-width:600px){.set-nav{width:126px}.set-body.provider-settings{padding:12px}.provider-dialog{padding:16px!important}.provider-settings>div>div{flex-wrap:wrap}.provider-settings>div>div>span{flex-basis:100%!important}}
 .set-empty{padding:22px 0 8px;text-align:center}
 .set-empty-t{font-size:var(--fs-base);color:var(--text-primary);font-weight:500}
 .set-empty-d{font-size:var(--fs-caption);color:var(--text-tertiary);margin:6px auto 14px;max-width:430px;line-height:1.6}

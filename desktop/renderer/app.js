@@ -4,21 +4,7 @@
   var $$ = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
 
   /* ===================== 数据 ===================== */
-  var GROUPS = [
-    { name:'JM', path:'示例工作区（未接线）', open:true, items:[
-      { t:'Northwind 定价页改版', time:'刚刚',  st:'run', on:true },
-      { t:'内置浏览器元素拾取联调', time:'12:40', st:'ok' },
-      { t:'侧栏按项目目录分组',     time:'11:05', st:'ok' },
-      { t:'整理季度财报成网页',     time:'昨天',  st:'err' }
-    ]},
-    { name:'示例文档', path:'示例目录（未接线）', open:true, items:[
-      { t:'设计令牌对照表梳理',   time:'昨天', st:'ok' },
-      { t:'令牌提取脚本重构',     time:'周一', st:'ok' }
-    ]},
-    { name:'sandbox', path:'C:\\Users\\RongWu\\sandbox', open:false, items:[
-      { t:'asr 音频转写实验', time:'周日', st:'ok' }
-    ]}
-  ];
+  var GROUPS = [];
   /* 筛选状态：all / run / ok / err —— 对应任务运行状态 */
   var filterState = { status:'all' };
   var FILTER_LABEL = { all:'全部任务', run:'进行中', ok:'已完成', err:'失败' };
@@ -67,63 +53,7 @@
     }).join('');
   }
 
-  var historyRequest = 0;
-  $('#historyDialog').addEventListener('close', function() { historyRequest++; $('#historyBody').replaceChildren(); });
-  async function openHistory(id) {
-    var request = ++historyRequest, dialog = $('#historyDialog'), body = $('#historyBody');
-    body.replaceChildren();
-    $('#historyTitle').textContent = '会话历史 · ' + id;
-    $('#historyStatus').textContent = '读取中…';
-    if (!dialog.open) dialog.showModal();
-    try {
-      var result = await window.personalAgentDesktop.readHistory(id);
-      if (request !== historyRequest || !dialog.open) return;
-      $('#historyStatus').textContent = '只读预览，不发送、不重放工具。共 ' + result.total + ' 条消息' + (result.truncated ? '，仅显示最后 200 条' : '');
-      result.messages.forEach(function(message) {
-        var section = document.createElement('section'), heading = document.createElement('h3'), text = document.createElement('pre');
-        heading.textContent = message.role;
-        text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere';
-        text.textContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2);
-        section.append(heading, text);
-        if (message.toolCalls && message.toolCalls.length) {
-          var calls = document.createElement('pre'); calls.style.whiteSpace = 'pre-wrap'; calls.style.overflowWrap = 'anywhere';
-          calls.textContent = '工具调用记录（未执行）\n' + JSON.stringify(message.toolCalls, null, 2); section.append(calls);
-        }
-        body.append(section);
-      });
-    } catch (_) {
-      if (request === historyRequest) $('#historyStatus').textContent = '读取失败：会话不存在、损坏、受保护或超过 1 MiB；未修改日志。关闭后可重试。';
-    }
-  }
-
-  async function refreshSessions() {
-    var button = $('#refreshSessions'), status = $('#sessionListStatus'), host = $('#savedSessions');
-    if (button.disabled) return;
-    host.replaceChildren();
-    var bridge = window.personalAgentDesktop;
-    if (!bridge || typeof bridge.listSessions !== 'function') {
-      status.textContent = '浏览器预览：本地会话不可用';
-      return;
-    }
-    button.disabled = true;
-    status.textContent = '正在读取本地会话…';
-    try {
-      var result = await bridge.listSessions();
-      result.ids.forEach(function(id) {
-        var row = document.createElement('button');
-        row.addEventListener('click', function() { void openHistory(id); });
-        row.className = 'chat-row';
-        var name = document.createElement('span');
-        name.className = 'chat-name'; name.textContent = id; row.title = id;
-        row.append(name); host.append(row);
-      });
-      status.textContent = result.total ? '已保存 ' + result.total + ' 个会话' + (result.truncated ? '（仅显示前 100 个）' : '') + ' · 点击只读预览' : '尚无已保存会话';
-    } catch (_) {
-      status.textContent = '会话读取失败，请检查宿主 PERSONAL_AGENT_HOME 与目录权限；点击刷新重试';
-    } finally { button.disabled = false; }
-  }
-  $('#refreshSessions').addEventListener('click', refreshSessions);
-  void refreshSessions();
+  async function refreshSessions() {} // History remains on disk; no read-only sidebar.
 
   $('#openEcho').addEventListener('click', function() { $('#echoDialog').showModal(); });
   $('#echoSend').addEventListener('click', async function() {
@@ -190,7 +120,7 @@
     $('#modelReply').textContent = ''; $('#modelStatus').textContent = '请求中…关闭窗口不会取消；不要重复发送。';
     try {
       var result = await window.personalAgentDesktop.sendModel(input, modelToken);
-      $('#modelReply').textContent = result.content;
+      window.renderReply($('#modelReply'), result.content);
       $('#modelStatus').textContent = '已保存：' + result.id + ' · ' + result.model + '；再次发送请关闭后重新确认配置。';
       await refreshSessions();
     } catch (_) { $('#modelStatus').textContent = '请求失败，可能已计费或保存部分日志；请检查配置与历史。未自动重试，重新发送前须再次确认配置。'; }
@@ -214,116 +144,7 @@
     $('#tbTitle').textContent = 'JM · 新建任务';
   }
 
-  /* ===================== 右侧面板 ===================== */
-  var panel = $('#panel'), pickOn = true;
-  var VIEW_LABEL = { browser:'浏览器', art:'产物', file:'全部文件', term:'终端' };
-
-  function showPane(name){
-    $$('.pane').forEach(function(p){ p.classList.toggle('is-on', p.dataset.pane === name); });
-    $$('#atabs .atab').forEach(function(t){ t.classList.toggle('is-on', t.dataset.pane === name); });
-    $('#viewSelLabel').textContent = VIEW_LABEL[name] || name;
-    panel.classList.remove('is-hidden');
-    if (typeof syncScrim === 'function') syncScrim();
-  }
-
-  $('#viewSel').addEventListener('click', function(e){
-    e.stopPropagation();
-    openMenu(this, [
-      { ico:'i-globe',    label:'浏览器',   act:function(){ showPane('browser'); } },
-      { ico:'i-package',  label:'产物',     act:function(){ showPane('art'); } },
-      { ico:'i-folder',   label:'全部文件', act:function(){ showPane('file'); } },
-      { ico:'i-terminal', label:'终端',     act:function(){ showPane('term'); } }
-    ]);
-  });
-
-  $('#atabs').addEventListener('click', function(e){
-    var tab = e.target.closest('.atab'); if (!tab) return;
-    if (e.target.closest('.x')) { tab.remove(); return; }
-    showPane(tab.dataset.pane);
-  });
-
-  function togglePanel(force){
-    var hide = (typeof force === 'boolean') ? force : !panel.classList.contains('is-hidden');
-    panel.classList.toggle('is-hidden', hide);
-    if (typeof syncScrim === 'function') syncScrim();
-    toast(hide ? '已收起右侧面板' : '已展开右侧面板');
-  }
-  $('#btnTogglePanel').addEventListener('click', function(){ togglePanel(); });
-  $('#btnClosePanel').addEventListener('click', function(){ togglePanel(true); });
-
-  /* ===================== 元素拾取 ===================== */
-  var box = $('#pickBox'), pin = $('#pickPin'), size = $('#pickSize'), cta = $('#pickCta');
-  var stage = $('#brwStage');
-
-  function clearPick(){
-    [box,pin,size,cta].forEach(function(el){ el.style.display = 'none'; });
-  }
-
-  function pickAt(el){
-    var sr = stage.getBoundingClientRect();
-    var r  = el.getBoundingClientRect();
-    var x = r.left - sr.left + stage.scrollLeft;
-    var y = r.top  - sr.top  + stage.scrollTop;
-    box.style.display = 'block';
-    box.style.left = x + 'px'; box.style.top = y + 'px';
-    box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
-    pin.style.display = 'grid';
-    pin.style.left = x + 'px'; pin.style.top = y + 'px';
-    size.style.display = 'block';
-    size.style.left = x + 'px'; size.style.top = (y + r.height + 8) + 'px';
-    size.textContent = Math.round(r.width) + '×' + Math.round(r.height);
-    cta.style.display = 'flex';
-    var cls = el.className.split(' ')[0] || 'div';
-    var tag = el.tagName.toLowerCase();
-    var id  = el.dataset.plan ? '#' + el.dataset.plan : (el.id ? '#' + el.id : '');
-    $('#pickSel').textContent = tag + (cls && cls !== tag ? '.' + cls : '') + id;
-    $('#pickDim').textContent = Math.round(r.width) + '×' + Math.round(r.height);
-  }
-
-  $('#brwPage').addEventListener('click', function(e){
-    if (!pickOn) return;
-    e.preventDefault(); e.stopPropagation();
-    var el = e.target.closest('[data-plan], .wp-plan, .wp-hero, .wp-nav, .wp-cta');
-    pickAt(el || e.target);
-  }, true);
-
-  $('#brwPage').addEventListener('mouseover', function(e){
-    if (!pickOn) return;
-    var el = e.target.closest('[data-plan], .wp-plan, .wp-hero, .wp-nav, .wp-cta');
-    if (el) el.style.outline = '2px dashed rgba(229,72,77,.45)';
-  });
-  $('#brwPage').addEventListener('mouseout', function(e){
-    if (e.target.style) e.target.style.outline = '';
-  });
-
-  $('#brwPick').addEventListener('click', function(){
-    pickOn = !pickOn;
-    this.classList.toggle('is-on', pickOn);
-    if (!pickOn) clearPick();
-    toast(pickOn ? '元素拾取已开启：点击页面任意元素' : '元素拾取已关闭');
-  });
-
-  $('#pickCancel').addEventListener('click', function(e){ e.stopPropagation(); clearPick(); });
-
-  $('#pickSend').addEventListener('click', function(e){
-    e.stopPropagation();
-    var sel = $('#pickSel').textContent, dim = $('#pickDim').textContent;
-    var ta = $('#taChat');
-    ta.value = '看这里：' + sel + '（' + dim + '）。把它的内边距收紧一些，标题和价格再拉开一点层级。';
-    autoGrow(ta); syncSend(ta, $('#sendChat'));
-    showChat();
-    clearPick();
-    toast('已放入输入框；Agent 尚未接线');
-    setTimeout(function(){ ta.focus(); }, 60);
-  });
-
-  $('#brwReload').addEventListener('click', function(){
-    var p = $('#brwPage');
-    p.style.transition = 'opacity .18s ease';
-    p.style.opacity = '.35';
-    setTimeout(function(){ p.style.opacity = '1'; }, 180);
-    toast('已重新加载预览');
-  });
+  function togglePanel() {} // Removed prototype panel.
 
   /* ===================== 输入框 ===================== */
   function autoGrow(ta){
@@ -393,7 +214,7 @@
     }
   });
 
-  $('.sec-head').addEventListener('click', function(){
+  $('.sec-head')?.addEventListener('click', function(){
     var n = this.nextElementSibling;
     if (!n) return;
     var hid = n.style.display === 'none';
@@ -734,14 +555,11 @@
   /* ===================== 命令面板 ===================== */
   var palItems = [
     { sec:'任务', ico:'i-sparkle', label:'新建任务',           k:'Ctrl N', act:function(){ void newTask(); } },
-    { sec:'任务', ico:'i-history', label:'Northwind 定价页改版', k:'',       act:function(){ showChat('Northwind 定价页改版'); } },
-    { sec:'任务', ico:'i-history', label:'内置浏览器元素拾取联调', k:'',     act:function(){ showChat('内置浏览器元素拾取联调'); } },
     { sec:'视图', ico:'i-globe',   label:'打开浏览器面板',      k:'',       act:function(){ showPane('browser'); } },
     { sec:'视图', ico:'i-package', label:'打开产物面板',        k:'',       act:function(){ showPane('art'); } },
     { sec:'视图', ico:'i-folder',  label:'打开文件树',          k:'',       act:function(){ showPane('file'); } },
     { sec:'视图', ico:'i-terminal',label:'打开终端',            k:'',       act:function(){ showPane('term'); } },
     { sec:'设置', ico:'i-wand',    label:'打开外观设置',       k:'',        act:function(){ openSettings('appearance'); } },
-    { sec:'设置', ico:'i-panel-r', label:'显示 / 收起右侧面板', k:'Ctrl B', act:function(){ togglePanel(); } }
   ];
   var palScrim = $('#scrim'), palInput = $('#palInput'), palList = $('#palList'), palIdx = 0, palView = palItems;
 
@@ -898,19 +716,13 @@
     if (e.key === 'Escape'){
       closeMenu();
       closeTaskSearch();
-      if (cta.style.display !== 'none') clearPick();
-      else if (panel.classList.contains('is-hidden')) togglePanel(false);
+
     }
   });
 
   /* ===================== 窄屏抽屉 ===================== */
-  var sidebar = $('#sidebar'), panelScrim = $('#panelScrim');
-
-  function syncScrim(){
-    var narrow = innerWidth <= 900;
-    var panelOpen = !panel.classList.contains('is-hidden');
-    panelScrim.classList.toggle('is-off', !(narrow && panelOpen));
-  }
+  var sidebar = $('#sidebar');
+  function syncScrim() {}
   /* 菜单栏最左：侧边栏收起 / 展开（宽屏收成 48px 图标轨，窄屏走抽屉） */
   function toggleSidebarCollapse(){
     if (innerWidth <= 900){
@@ -925,8 +737,7 @@
     e.stopPropagation();
     toggleSidebarCollapse();
   });
-  panelScrim.addEventListener('click', function(){ togglePanel(true); });
-  panel.addEventListener('click', function(e){ e.stopPropagation(); });
+
   document.addEventListener('click', function(e){
     if (innerWidth > 900) return;
     if (!sidebar.classList.contains('is-open')) return;
@@ -1187,11 +998,9 @@
     if (h === 'appearance'){ setTimeout(function(){ openSettings('appearance'); }, 80); return; }
     if (h === 'models'){ setTimeout(function(){ openSettings('models'); }, 80); return; }
     if (h === 'shortcuts'){ setTimeout(function(){ openSettings('keyboardShortcuts'); }, 80); return; }
-    if (h === 'pick'){ showPane('browser'); setTimeout(function(){ pickAt($('.wp-plan--hot')); }, 120); return; }
-    if (['art','file','term','browser'].indexOf(h) > -1){ showPane(h); return; }
   }
   window.addEventListener('hashchange', route);
   route();
 
-  if (!location.hash) toast('Personal Agent 桌面壳 · 示例数据，运行时未接线');
+  if (!location.hash) toast('选择模型开始聊天 · 无工具');
 })();

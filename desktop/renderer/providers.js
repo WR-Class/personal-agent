@@ -9,7 +9,7 @@
   }
   window.mountProviderSettings = function (host) {
     let state, activeDialog, destroyed = false;
-    host.replaceChildren();
+    host.replaceChildren(); host.classList.add('provider-settings');
     el('p', '填入各提供商的 API 密钥即可使用其模型。密钥使用系统加密保存。', host);
     const status = el('p', '', host); status.setAttribute('role', 'status');
     const list = el('div', '', host);
@@ -133,6 +133,6 @@
       current.showModal();
     }
     refresh();
-    return { refresh, destroy() { destroyed = true; activeDialog?.close(); } };
+    return { refresh, destroy() { destroyed = true; host.classList.remove('provider-settings'); activeDialog?.close(); } };
   };
 })();

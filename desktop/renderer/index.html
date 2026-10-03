@@ -121,11 +121,7 @@
     </div>
     <div class="tb-sep"></div>
     <div class="tb-title" id="tbTitle">JM · 新建任务</div>
-    <div class="tb-right">
-      <button class="tb-btn" id="btnTogglePanel" title="切换右侧面板 (Ctrl B)">
-        <svg class="ico"><use href="#i-panel-r"/></svg>
-      </button>
-    </div>
+    <div class="tb-right"></div>
   </header>
 
   <div class="shell" data-page-node-id="oQiGjzEVoaLYL6W6siAkfY">
@@ -168,19 +164,11 @@
       </div>
 
       <div class="side-scroll" data-page-node-id="gF8HnAW4Ll8ZNGHHl5Krzz">
-        <!-- 空间（按项目目录分组） -->
-        <div class="sec-head" data-sec="space">
-          <svg class="ico"><use href="#i-chev-d"/></svg><span>空间</span>
-          <svg class="ico sec-add" style="width:13px;height:13px"><use href="#i-plus"/></svg>
-        </div>
         <div class="grp">
-          <button class="grp-row" id="refreshSessions" title="刷新只读会话列表"><span class="grp-name">本地会话</span><span class="grp-path">刷新</span></button>
-          <div id="sessionListStatus" role="status">点击已保存会话，打开只读历史预览</div>
-          <div id="savedSessions"></div>
           <button class="grp-row" id="openEcho">离线 Echo 测试（非大模型）</button>
           <button class="grp-row" id="openModel">模型问答（无工具）</button>
         </div>
-        <div class="grp-path">以下为原型示例任务（未接线）</div>
+
         <div id="taskGroups"></div>
       </div>
 
@@ -274,8 +262,8 @@
           <button class="icon-btn" id="btnBackHome" title="返回首页" data-page-node-id="nJH5EdFdEuGpHuEfhgzT4h">
             <svg class="ico" style="width:15px;height:15px" data-page-node-id="bi9UpTeM2lV3WalqtNEddj"><use href="#i-arrow-l" data-page-node-id="3n8EcE32kAZGeRseFqdraX"/></svg>
           </button>
-          <div class="ch-title" id="chatTitle" data-page-node-id="zGWFefWpKcxh5KYd9B5ze5">Northwind 定价页改版</div>
-          <span class="ch-meta" data-page-node-id="wYJROfMarfQprJe87CpRne">示例工作区（未接线）</span>
+          <div class="ch-title" id="chatTitle" data-page-node-id="zGWFefWpKcxh5KYd9B5ze5">新对话</div>
+          <span class="ch-meta" data-page-node-id="wYJROfMarfQprJe87CpRne">文字问答 · 无工具</span>
           <span class="grow" data-page-node-id="AHwDFi3DM1S3CJuiq2OKSE"></span>
           <button class="icon-btn" title="分享" data-page-node-id="v4xZhBUlE4MkZeu0JkfFU6"><svg class="ico" style="width:15px;height:15px" data-page-node-id="sCPsoDIE4cFLbcIHSLj2EF"><use href="#i-share" data-page-node-id="EBEb3DSNLZlH2HKbwvCDMv"/></svg></button>
           <button class="icon-btn" title="历史" data-page-node-id="TEYQmeUJyeLOewe5NJNYVC"><svg class="ico" style="width:15px;height:15px" data-page-node-id="d2rpQVp6n5hM3oXwKS28Ax"><use href="#i-history" data-page-node-id="VkS02Gj79q03PV9Gwi29jd"/></svg></button>
@@ -284,67 +272,6 @@
 
         <div class="chat-scroll" id="chatScroll" data-page-node-id="lKEWnjhtJPvmZ1qgjb7S49">
           <div class="chat-list" data-page-node-id="mlCn0SdKrsNLgfWt3M4JhF">
-
-            <div class="msg msg--user" data-page-node-id="U1iEbFpRBVVJ6lGGLgiVGG">
-              <div class="msg-avatar" data-page-node-id="IevveM85R0LdTpNO7y96nw">RW</div>
-              <div class="msg-body" data-page-node-id="1j2wixNe8R4zMJ5xOOjNfE">
-                <div class="bubble" data-page-node-id="xrNtr9ktLKeye7X55ggS8h">把 Northwind 的定价页重做一版：三档方案并排，主推团队版，强调「按席位计费、随时升降级」。</div>
-              </div>
-            </div>
-
-            <div class="msg msg--agent" data-page-node-id="MIpVDE9oJXrgJvnU32UmUv">
-              <div class="msg-avatar" data-page-node-id="5pnE5kjcy1BukaxLVhYjf5">PA</div>
-              <div class="msg-body" data-page-node-id="7FRtz6d2tSCceF593P6lvz">
-                <div class="msg-name" data-page-node-id="C7jgS6rVIF67LbhAkiNEP8">Personal Agent <span class="tag" data-page-node-id="jwvYT4uADUMBNU8k4Rtu8j">代码开发</span></div>
-                <div class="msg-text" data-page-node-id="xWmCDHgjNpbHmCOKG0KeX8">
-                  <p data-page-node-id="fRR8fvPstHVZvXguBmU9AV">我先看了项目结构，发现 <code data-page-node-id="IKdxcH1Ciqs3To7rKemjNY">src/pages/pricing</code> 下已有一版旧定价页，我直接在它基础上改，保留现有的路由与埋点。</p>
-                </div>
-                <div class="tool is-done" data-page-node-id="j5IACuC09PLbzjDFXe3r8Q">
-                  <div class="tool-head" data-page-node-id="Gry5ZuFLgTTRpctDBozt3J">
-                    <svg class="ico" data-page-node-id="gGlaxy8ThwoHJCnlzOmmj6"><use href="#i-folder-open" data-page-node-id="dlCxXAMknR0svR5CdNf4OP"/></svg>
-                    <span class="tool-name" data-page-node-id="DtAM21ID6GJLIS4tJMFYJ3">read_files</span>
-                    <span data-page-node-id="IdXEuNOGX2gBfvWfh0Q1jr">src/pages/pricing/ · 4 个文件</span>
-                    <span class="grow" data-page-node-id="vJPPPCVzi7UPTseMfl23i7"></span>
-                    <span class="tool-time" data-page-node-id="RjTtUL8CsjwQxDAY5QMaVh">0.8s</span>
-                    <div class="spin" data-page-node-id="YEdZrgBMWR3L1LajVODWtP"></div>
-                  </div>
-                  <div class="tool-body" data-page-node-id="1hLbEeC0QqOyI1AgLXLDuI">src/pages/pricing/index.tsx
-src/pages/pricing/PlanCard.tsx
-src/pages/pricing/pricing.module.css
-src/pages/pricing/plans.ts</div>
-                </div>
-              </div>
-            </div>
-
-            <div class="msg msg--agent" data-page-node-id="fLmjn0Icax8oTcKKEXSirE">
-              <div class="msg-avatar" data-page-node-id="LPrLN8mOMh5aS4Xv65X22Q">PA</div>
-              <div class="msg-body" data-page-node-id="Yewd5LjEtZ4fsoA6U6FTGk">
-                <div class="msg-text" data-page-node-id="m6BsMHZXLucca2630BZC9S">
-                  <p data-page-node-id="3LB4vz2WR3ZRQrPE3TZDw9">改好了。三档并排、团队版加边框高亮与「推荐」角标，席位滑块实时联动总价。我在内置浏览器里跑起来看了下效果：</p>
-                </div>
-                <div class="tool is-done" data-page-node-id="LdFdunCW8rGMVntLrzcms7">
-                  <div class="tool-head" data-page-node-id="LD3J4UOgsNwWcmBznM6TnU">
-                    <svg class="ico" data-page-node-id="mxouSCNwxzVvhVm2EKcHwh"><use href="#i-terminal" data-page-node-id="fD1T62qXI5vYX5ec8l6cjC"/></svg>
-                    <span class="tool-name" data-page-node-id="m2E1HMs8QtRRBmjqlOKo7V">run_command</span>
-                    <span data-page-node-id="WygdHfYdOoceUamwKQ5cbu">npm run dev</span>
-                    <span class="grow" data-page-node-id="ecNvWKekX46An9D3xHxHT2"></span>
-                    <span class="tool-time" data-page-node-id="eJTGBqJWsDKLSaodV9DWqj">2.4s</span>
-                    <div class="spin" data-page-node-id="tXdpnTLKuaG33FYiD873I7"></div>
-                  </div>
-                  <div class="tool-body" data-page-node-id="SEkIkyEdCSuTsJSmCqIf0p">VITE v5.4.2  ready in 412 ms
-➜  Local:   http://localhost:5173/pricing
-✓ 已在内置浏览器打开预览</div>
-                </div>
-                <div class="msg-text" data-page-node-id="EYsY1yEayzYRwkL51oxx8a">
-                  <p data-page-node-id="nJJBggCGWRwmd2ubPDBDFU">右侧就是实际渲染结果。我用元素拾取选了「团队版」那一档，你可以直接把修改意见发给我。</p>
-                </div>
-                <div class="msg-actions" data-page-node-id="lZauWrEEJ8uBk533O6wxrF">
-                  <button class="icon-btn" title="复制" data-page-node-id="yJdK0S1vQi3pyKqhav7mhb"><svg class="ico" data-page-node-id="FrGNNC5fOho65CLbgptl6J"><use href="#i-copy" data-page-node-id="bmhHdFN8KCmVnDILhA8uLv"/></svg></button>
-                  <button class="icon-btn" title="重试" data-page-node-id="EHMTsinHj9eSvSEAAkAs7Q"><svg class="ico" data-page-node-id="RvHqe1hW2uRYCCGoCCTE9f"><use href="#i-refresh" data-page-node-id="EqER9l6UTw8nd8qYHmXYTX"/></svg></button>
-                  <button class="icon-btn" title="采纳" data-page-node-id="z7NEssk7vMPWGcyt85EFsf"><svg class="ico" data-page-node-id="Wm9WYRQ9Ck1m944QzGSmEb"><use href="#i-check" data-page-node-id="vTp4pRWQCUHoaooNHHThOV"/></svg></button>
-                </div>
-              </div>
-            </div>
 
           </div>
         </div>
@@ -374,162 +301,17 @@ src/pages/pricing/plans.ts</div>
       </section>
     </main>
 
-    <!-- ======================= 右侧面板 ======================= -->
-    <aside class="panel" id="panel" data-page-node-id="aWaAQHvSPdIGnHAa3Bo6hc">
-      <div class="panel-rail" data-page-node-id="4i7T9tPByS5D47vQiYwHjy">
-        <button class="vsel" id="viewSel" data-page-node-id="r5T5AaeEyc9ayqkINoabyo">
-          <svg class="ico" data-page-node-id="mIeekq4zoOVXOtgEDqSTqA"><use href="#i-package" data-page-node-id="jvnRaJD2RWfh4vkigc1zsP"/></svg>
-          <span id="viewSelLabel" data-page-node-id="ZBAPYnyDp4RqAuuPDLwlUE">浏览器</span>
-          <svg class="ico" style="width:12px;height:12px" data-page-node-id="HdDooC1DASKSxYS1ZQ2v6J"><use href="#i-chev-d" data-page-node-id="syyhqNdaHpMHjHBxEeXO2E"/></svg>
-        </button>
-        <div class="rail-sep" data-page-node-id="vDw9UeSM6igMFApZ3KIowL"></div>
-        <div class="atabs" id="atabs" data-page-node-id="xUlkUkol5rkT4xdF7TaNmB">
-          <button class="atab is-on" data-pane="browser" data-page-node-id="ZJGnID3y3drh0b3B4slVWt">
-            <svg class="ico" data-page-node-id="wVspIk83qFNRLGyP2fZjfD"><use href="#i-globe" data-page-node-id="M4ApXxcHQ0dqA5rPe1NLut"/></svg><span data-page-node-id="aJtZRXR5CgOzVeUeYt9NxR">localhost:5173/pricing</span>
-            <span class="x" data-page-node-id="Mey784IYYXPETCngA1oMDt"><svg class="ico" style="width:12px;height:12px" data-page-node-id="iHUA9tACP4WE2hSUCAtQjM"><use href="#i-close" data-page-node-id="V4NZCxvvtSjf2mFySsSjZw"/></svg></span>
-          </button>
-          <button class="atab" data-pane="art" data-page-node-id="YclXrbRL4oM8sduda88eII">
-            <svg class="ico" data-page-node-id="Eb1aZRz8oGDKIg0uHA2si9"><use href="#i-doc" data-page-node-id="mN5LyLRihFCwDm4h6uZulX"/></svg><span data-page-node-id="28pFMqs8eBvNnR1pgTI69O">改版说明.md</span>
-            <span class="x" data-page-node-id="2Cp4YL1PrigsGpriBvGGyB"><svg class="ico" style="width:12px;height:12px" data-page-node-id="x83ShDNCMINKFMqHm4JAwG"><use href="#i-close" data-page-node-id="uGyjSgsMWxUdxAZ83GK6cx"/></svg></span>
-          </button>
-        </div>
-        <span class="grow" data-page-node-id="yNsqUBiTuh1CTb0FuOhNgw"></span>
-        <button class="rail-sq" title="新增标签页" data-page-node-id="aTDVubr3hFI9b4t2w9GW0T"><svg class="ico" data-page-node-id="lFayhKHLDBrZLDr0k2dH2z"><use href="#i-plus" data-page-node-id="E4gqVJkVcETqNmF31TZXO6"/></svg></button>
-        <button class="rail-sq" id="btnClosePanel" title="收起面板" data-page-node-id="ltqZ2rvSk41RnAsqK5Bddw"><svg class="ico" data-page-node-id="jUwc8GcilAlpjJvC1oJyZS"><use href="#i-panel-r" data-page-node-id="s9Ufo076w6uBzFIWdgO4wc"/></svg></button>
-      </div>
-
-      <div class="panel-body" data-page-node-id="6kyZXPyk8pR9FE1XpDNodw">
-
-        <!-- 浏览器 -->
-        <div class="pane is-on" data-pane="browser" data-page-node-id="fFLyBIzru5TqfhG8RRjVtI">
-          <div class="brw-bar" data-page-node-id="kbvUM6Env0eh1hRUr2hnio">
-            <button class="brw-nav" disabled data-page-node-id="bhkc59hGuDJxtiBHAudq7a"><svg class="ico" style="width:15px;height:15px" data-page-node-id="FXYr3lrahWYxhhzNg2XIJn"><use href="#i-arrow-l" data-page-node-id="oQfDWHVCV6dXTO0croDuHq"/></svg></button>
-            <button class="brw-nav" data-page-node-id="AVP7pM5nKbtDBbNzAmBzfg"><svg class="ico" style="width:15px;height:15px" data-page-node-id="QbaLkB2ssA9RMnAw3BUBrz"><use href="#i-arrow-r" data-page-node-id="wAAsxz7PtAjqEMsFUeEV9X"/></svg></button>
-            <button class="brw-nav" id="brwReload" data-page-node-id="4HDE0UM9BCiAHdp0IX1SMP"><svg class="ico" style="width:15px;height:15px" data-page-node-id="Lwmcf0EGWmCJnYBZ3F2BlL"><use href="#i-refresh" data-page-node-id="g17IqvtlyjanyBFynNqjWe"/></svg></button>
-            <div class="brw-url" data-page-node-id="Mcfl0VnPQsnjpQMedyWeFY">
-              <svg class="ico lock" data-page-node-id="hoW9TVJRaQwBUUx75Nj3GE"><use href="#i-lock" data-page-node-id="kfyCMIWRW2sfWGAAUYfs1J"/></svg>
-              <input value="localhost:5173/pricing" spellcheck="false" data-page-node-id="CGZlkknP3cN37qykv9xxXM" />
-            </div>
-            <button class="brw-nav is-on" id="brwPick" title="元素拾取" data-page-node-id="sCL3sRe4NqBYt1eTWxFPVG"><svg class="ico" style="width:15px;height:15px" data-page-node-id="ED35TEz23JsuDif8H89Sni"><use href="#i-crosshair" data-page-node-id="KN1445hBA5cCg9CCTOYWcZ"/></svg></button>
-            <button class="brw-nav" title="在外部打开" data-page-node-id="JJoLCjBzgrRCAbOYEwM0VS"><svg class="ico" style="width:15px;height:15px" data-page-node-id="tECHrnx8DDG6tLkoSnv5Cg"><use href="#i-external" data-page-node-id="VTgTBsT3BWOyMfjEBcsrwf"/></svg></button>
-          </div>
-
-          <div class="brw-stage" id="brwStage" data-page-node-id="I8I9HcUUKJfU7akF1qDGML">
-            <div class="brw-page" id="brwPage" data-page-node-id="0Z4MR1wBpf4bAzSOiaHbRv">
-              <div class="wp-nav" data-page-node-id="G1jRboWKSGeiE3igabmpzL">
-                <div class="wp-logo" data-page-node-id="Cv8Ddn7mO0hxdOvEPvbNed">North<i data-page-node-id="3w9UKTkdFDD51KqaeIG1Zr">wind</i></div>
-                <div class="wp-links" data-page-node-id="4VANV1tgVE4G3JoESGtkm5"><span data-page-node-id="KKGWAcmJIdG9ZAOeGNSVy4">产品</span><span data-page-node-id="1yRJDHjOuLhkVJgYB7L3xo">方案</span><span data-page-node-id="ddNYFKN3meAh7gc8OBN2i6">文档</span><span data-page-node-id="6O2UI1YKYpUrS3FqLaiEgq">客户</span></div>
-                <div class="wp-cta" data-page-node-id="Jfos620ihTEFfZ4fgajH69">开始试用</div>
-              </div>
-              <div class="wp-hero" data-page-node-id="DCAnOGZMKmTQbZemXQY9r6">
-                <h1 class="wp-h1" data-page-node-id="DmAB2SRcpjGJz4L8uUubCx">按席位计费，<em data-page-node-id="KqwT2BbiHPIarpQBayUqMU">随时升降级</em></h1>
-                <p class="wp-p" data-page-node-id="bfGjuKBSLSpatHPjtI2wMt">三档方案覆盖从个人到大型团队的全部场景。所有方案均含无限项目、完整 API 与 99.95% 可用性承诺。</p>
-              </div>
-              <div class="wp-plans" data-page-node-id="DFdhL0dDbPCqj0GzW7wugp">
-                <div class="wp-plan" data-plan="starter" data-page-node-id="v7lbtuMm3mFyOr62P37cqE">
-                  <h4 data-page-node-id="HbLKeraJ0DjebO3PL9rNxl">入门版</h4>
-                  <div class="wp-price" data-page-node-id="OKG4PRqeZhebggL04GZKUp">¥39 <s data-page-node-id="NSwoSKjaephztm0yUPKBMS">¥59</s></div>
-                  <ul data-page-node-id="rOwnK0SmceA9eXuzyGbGb4"><li data-page-node-id="cHubLt5kdz4MApk01uAIkN">5 名成员</li><li data-page-node-id="GNxpllqdSHltGHltC1LwXL">10 GB 存储</li><li data-page-node-id="VaiJStveVW5OMGZAi7maJP">社区支持</li><li data-page-node-id="HG2MTbxxKEdJxvFIE9Szvg">基础分析</li></ul>
-                </div>
-                <div class="wp-plan wp-plan--hot" data-plan="team" data-page-node-id="FxeFDvXPxb8yThXEifrr9j">
-                  <h4 data-page-node-id="zwLaG2EiaqXqHeYv37Xmri">团队版<span class="wp-badge" data-page-node-id="wOOCrxcfxdn0jVdehXGls2">推荐</span></h4>
-                  <div class="wp-price" data-page-node-id="GKMiF3RD2ma3Vou1c5RTJH">¥99 <s data-page-node-id="jfJFKQy44ldkxqKLofXitU">¥129</s></div>
-                  <ul data-page-node-id="khYY7coFmmXLmQrAhtpyYi"><li data-page-node-id="hzuwrRGliydD2ZQxlSCaCa">50 名成员</li><li data-page-node-id="HDxh4EVPpaqgtosbshoDJZ">200 GB 存储</li><li data-page-node-id="mBdXGs3FCpnlnVEO5ntO82">优先工单支持</li><li data-page-node-id="xVOXGN2OH7xqV2dePBKD9n">高级分析 + 审计日志</li><li data-page-node-id="hpOsWCkUxg6t2qSvgdDi8p">SSO 单点登录</li></ul>
-                </div>
-                <div class="wp-plan" data-plan="enterprise" data-page-node-id="UMqvtHw0XrOsrujynke2G9">
-                  <h4 data-page-node-id="H1eEScXsJgANHvHM8nDFLj">企业版</h4>
-                  <div class="wp-price" data-page-node-id="QzUnYkImP8uSSL0mLHUkq9">定制</div>
-                  <ul data-page-node-id="OnOe3PBcSa9ly4ncceRUrp"><li data-page-node-id="H7bcERbiSkoBT3WyKxm3oy">不限成员</li><li data-page-node-id="b5dltZpCkaKyykGrYsBVmb">不限存储</li><li data-page-node-id="PfP2mjZYOXow18oL7cHpSt">专属客户成功</li><li data-page-node-id="pNBtaGnVMk2JDFFERwgU2Y">私有化部署</li><li data-page-node-id="qw7Yem3oyZDmSTW5Y6C711">SLA 99.99%</li></ul>
-                </div>
-              </div>
-            </div>
-
-            <!-- 元素拾取覆盖层（由 JS 定位） -->
-            <div class="pick-box" id="pickBox" style="display:none" data-page-node-id="wPm6sCWJji0s8UgKnI6Iyp"></div>
-            <div class="pick-pin" id="pickPin" style="display:none" data-page-node-id="88OewIliQo0b7yCZREmBfT">1</div>
-            <div class="pick-size" id="pickSize" style="display:none" data-page-node-id="HruxPCxWS84jHiBBGZMgh3"></div>
-
-            <div class="pick-cta" id="pickCta" style="display:none" data-page-node-id="AjP1Y7rlFGTcPNgjlv71ig">
-              <div class="pc-txt" data-page-node-id="dhwK3D3OQg6N9i2pBl2aeS">已选中 <b id="pickSel" data-page-node-id="CClhQDoa9xgsFwHIhfaoSD">section#plan-team</b> · <span id="pickDim" data-page-node-id="N4S0mESOlXCfxA10CSKc0C">320×196</span></div>
-              <button class="btn-ghost" id="pickCancel" data-page-node-id="Lt2GdJSGMcr0M6PZiTYQc5">取消</button>
-              <button class="btn-primary" id="pickSend" data-page-node-id="oy8YiNaMA4o7y221DEBf3f">
-                <svg class="ico" style="width:13px;height:13px" data-page-node-id="Lf6hXbfWx0OwiiVZD2fHma"><use href="#i-arrow-up" data-page-node-id="4L6ACCzDeczNwNWm0oJK0T"/></svg>发给 Agent
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 产物 -->
-        <div class="pane" data-pane="art" data-page-node-id="NHGaAZZ7P7BXytE5CXA98t">
-          <div class="rail-list" data-page-node-id="NXoD4nCcGKugugbr4EQ0Js">
-            <button class="rl-row is-on" data-page-node-id="g7lZUuHrQ71TL4eDXATO9K"><svg class="ico" data-page-node-id="fOjFmxmQE3M6QY9vsnGqKU"><use href="#i-doc" data-page-node-id="cNS7V8VFaFyvGYe7mLEXf2"/></svg><span data-page-node-id="AkpTHdT4MtU5u7p1V9sdUx">改版说明.md</span><span class="sz" data-page-node-id="BXMvrsNQZugH5gR6yzEPhk">4.2 KB</span></button>
-            <button class="rl-row" data-page-node-id="ixe5VBffdK416GUyDL1DwS"><svg class="ico" data-page-node-id="jtFV1QEMo0CGCP16MmMSs9"><use href="#i-file" data-page-node-id="l6ixD0m9Y5kT9iaazY3ZXe"/></svg><span data-page-node-id="AUONKvtYiCRHOLQDYF3BAA">PlanCard.tsx</span><span class="sz" data-page-node-id="cpG3vu3NgmGe6rRHFnqUEO">6.8 KB</span></button>
-            <button class="rl-row" data-page-node-id="HVHVcoviZLxYCXmNDsVQUV"><svg class="ico" data-page-node-id="7W0HKUTBPoOEkfUeL5qnfv"><use href="#i-file" data-page-node-id="uSSEZ9nUb7A3B9x3WFrp0o"/></svg><span data-page-node-id="ZONgqXD9WXHlEH3ptt27i0">pricing.module.css</span><span class="sz" data-page-node-id="pXWW6yMFJ1BUR4RmGvSqN4">3.1 KB</span></button>
-            <button class="rl-row" data-page-node-id="ziUEmjINkgR7E1mCLcsceg"><svg class="ico" data-page-node-id="gEKSRjFxhn9j6Hegm36KTH"><use href="#i-globe" data-page-node-id="2AWAioo7UDEMXJiTc6N61l"/></svg><span data-page-node-id="OjCxhiYgIJ2g7M1j26W3HE">pricing 预览</span><span class="sz" data-page-node-id="7jkFDpQ2fdOryHBkCFS7Vb">网页</span></button>
-          </div>
-          <div class="term" style="font-family:var(--font-sans);font-size:var(--fs-body);line-height:22px;color:var(--text-primary)" data-page-node-id="NKNypX7yCqSahVdlUsTF23">
-            <p style="margin:0 0 10px;font-weight:600" data-page-node-id="HFiTkjr2h78evY93fkPCVv">Northwind 定价页改版说明</p>
-            <p style="margin:0 0 8px;color:var(--text-secondary)" data-page-node-id="TL9Sw6rni2Z65yZujNaveK">本轮改动集中在三处：</p>
-            <p style="margin:0 0 6px" data-page-node-id="5YIveYQ6pVQMYXRypLQC6k">1. 三档方案改为并排栅格，团队版加 <code style="font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px" data-page-node-id="cVXVn3BUvCowvzUJ72E79u">1px</code> 实线边框与角标。</p>
-            <p style="margin:0 0 6px" data-page-node-id="VIOBAgTsFqv43086yd5VXb">2. 席位滑块与总价联动，步进 5 席位。</p>
-            <p style="margin:0 0 6px" data-page-node-id="N4lSmTvlpBky3nMMdAF5gO">3. 保留原有埋点 <code style="font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px" data-page-node-id="hUrhSNSKxvaEQHt05suAGg">pricing_view</code>，新增 <code style="font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px" data-page-node-id="f3yCl9pm0M8ybgGg5Q5JRR">plan_select</code>。</p>
-          </div>
-        </div>
-
-        <!-- 文件 -->
-        <div class="pane" data-pane="file" data-page-node-id="sYU4cxyjSpZ7uFbEM7UH6c">
-          <div class="rail-list" data-page-node-id="0iD2zbk2QH4fjDyq8DMFfT">
-            <button class="rl-row" data-page-node-id="L8DGsoyASJCRuPsYZUCAer"><svg class="ico" data-page-node-id="P0sufiNqVizJQtdepEdcxN"><use href="#i-chev-d" data-page-node-id="3ZMy8PzCHyXWeHPpjJgx9u"/></svg><svg class="ico" data-page-node-id="UsgSEaZKt9tdd3uhl4ZyTr"><use href="#i-folder-open" data-page-node-id="9vQzkfcCs6dhLAqE6LeBVp"/></svg><span data-page-node-id="hJtPJgfOKqhWOgqyLvjbTi">JM</span></button>
-            <button class="rl-row rl-ind" data-page-node-id="JLAEaVzaXlc3v2KnEFJrIG"><svg class="ico" data-page-node-id="may2zN6Qlphr3aJa7KzCJE"><use href="#i-chev-d" data-page-node-id="QdN8wmiXSfBxOZVo8Q9Hyy"/></svg><svg class="ico" data-page-node-id="0jrs7nqRLeZ7JuPIxPM6I9"><use href="#i-folder" data-page-node-id="U3AQiJHgNlyLR9JU88BUa9"/></svg><span data-page-node-id="vJ6sdcJs7xJNI0eDY81MGU">src</span></button>
-            <button class="rl-row rl-ind" style="padding-left:38px" data-page-node-id="5EnWzo5rDFCsmaSpnYosTG"><svg class="ico" data-page-node-id="Q6N34Oz8e8vGACCByu4UHN"><use href="#i-chev-d" data-page-node-id="u4eiuyD3AGXK4aOUXnbn5Y"/></svg><svg class="ico" data-page-node-id="BBKpPkCHei0nLK2tHeJo9u"><use href="#i-folder" data-page-node-id="cp4roaHYknFfXxvwKGulx5"/></svg><span data-page-node-id="28ZPEqbG72t0JXCw7HvpAg">pages</span></button>
-            <button class="rl-row is-on" style="padding-left:54px" data-page-node-id="cKei5d3CsqaxZjzekYsuVw"><svg class="ico" data-page-node-id="FnVgBAxFd1adZeSkCCXQ6W"><use href="#i-file" data-page-node-id="W25k3pckyiH38O9S7Skl2M"/></svg><span data-page-node-id="ZlNgB5i4KXYJIOD09FcR6r">PlanCard.tsx</span></button>
-            <button class="rl-row" style="padding-left:54px" data-page-node-id="PI3dvzlG4pJB3ijGTYnnRw"><svg class="ico" data-page-node-id="iXbgqswU9JM8w20pH5Sgy2"><use href="#i-file" data-page-node-id="Um4mjniui7zIlVqiNZoKZs"/></svg><span data-page-node-id="x5LCK3M84jPAKjj5gjiRGd">plans.ts</span></button>
-            <button class="rl-row rl-ind" style="padding-left:38px" data-page-node-id="t0ovrd0A8PdH6tMcQFw8fc"><svg class="ico" data-page-node-id="sR8B9MMgtxcy9nyW0nAuIy"><use href="#i-chev-r" data-page-node-id="fuqJ1xsYvQj5jwCfcChuOZ"/></svg><svg class="ico" data-page-node-id="9DsabfKZTbmgNAixcWYWEd"><use href="#i-folder" data-page-node-id="Xdr1k0VH6bZfeznf8qCnvl"/></svg><span data-page-node-id="mBiE111VLSp12ezsFJ8DOC">components</span></button>
-            <button class="rl-row rl-ind" data-page-node-id="jtRrdsMqXdMEI9KDueOUL1"><svg class="ico" data-page-node-id="0QXfsFmGK5xJ9opxwJW4UA"><use href="#i-file" data-page-node-id="wszV4NOD2Ne3gJqzss7oSh"/></svg><span data-page-node-id="AEgFjkvbeEA9fbLV0eie0V">package.json</span></button>
-            <button class="rl-row rl-ind" data-page-node-id="CjmUwj112HbwRjsexAALX9"><svg class="ico" data-page-node-id="YCBXbH8CGDHFttUzwkOEr3"><use href="#i-file" data-page-node-id="eHpfQPt4nxVlMWRf2ihYx8"/></svg><span data-page-node-id="DfQRJ8LFlbvskKzVNFKesR">README.md</span></button>
-          </div>
-        </div>
-
-        <!-- 终端 -->
-        <div class="pane" data-pane="term" data-page-node-id="iA9EKhIVr4j0UyDvc5eHCZ">
-          <div class="term" data-page-node-id="eW5Rau0BxyFWlEOF6kzGW2">
-<div data-page-node-id="hyjfgeBRZATGFYYLCP3owF"><span class="t-p" data-page-node-id="QrET8uTZLQYQwr3Ag51kkq">RongWu@JM</span> <span class="t-c" data-page-node-id="0s0fQYDY0B5EzV37XS1QxI">MINGW64</span> <span class="t-d" data-page-node-id="FbaBBWrpWtT7vAH5vEZhRU">~/JM</span></div>
-<div data-page-node-id="FwjU72DmEubWst41MSXynG"><span class="t-p" data-page-node-id="GvScvxqbfIlXTSoORpdrsQ">$</span> <span class="t-c" data-page-node-id="5dCeXWOx0CLcIP8XVOHhMZ">npm run dev</span></div>
-<div class="t-d" data-page-node-id="FXpakMmZXoZodDFN9qXyJS">&nbsp;</div>
-<div data-page-node-id="B6fm0vWZHoiIjVu5n1X7PM">&nbsp; VITE v5.4.2  <span class="t-ok" data-page-node-id="OsD4XQ524iKqh1uwry1eLZ">ready in 412 ms</span></div>
-<div class="t-d" data-page-node-id="98yD3MJSx3UIfHX9qUUE4f">&nbsp;</div>
-<div data-page-node-id="QXqjPiXFYDmOLI40MN3CBQ">&nbsp; <span class="t-ok" data-page-node-id="iJnXlBXCoPibJ4TAIX0zI7">➜</span>  Local:   <span class="t-c" data-page-node-id="DMZlauJslvUNrD1rqrIfFO">http://localhost:5173/</span></div>
-<div data-page-node-id="ifr5qo7DUHdPYCmFMUiTBD">&nbsp; <span class="t-d" data-page-node-id="i0MBwkZIxsb290TK7gqPzC">➜</span>  Network: use --host to expose</div>
-<div class="t-d" data-page-node-id="A0BShXeESoigSe0lZmLWQk">&nbsp;</div>
-<div data-page-node-id="QOADzIw8yXnGcEHdGvhEh2"><span class="t-p" data-page-node-id="grj4lBQJvPuAleT27LrXNz">$</span> <span class="t-c" data-page-node-id="OHbgDcHLBetJUkiqLKJROo">npm run build</span></div>
-<div data-page-node-id="Y9id9aarrK87XT4grG8uCy">&nbsp; vite v5.4.2 building for production...</div>
-<div data-page-node-id="V1GmSDHAcVTtx1v0ahwSec">&nbsp; <span class="t-ok" data-page-node-id="bCWyr7N6j3Ora0tAibegAN">✓</span> 1284 modules transformed.</div>
-<div data-page-node-id="cvoEeRSJmNpC2Xm3ynaksC">&nbsp; dist/index.html&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0.62 kB</div>
-<div data-page-node-id="CWciA95D6DxsQ2Sa0Xr2cK">&nbsp; dist/assets/index-4f2a.css&nbsp;&nbsp;&nbsp;18.42 kB</div>
-<div data-page-node-id="05zhvhIsVUw5RwOzsK8e1N">&nbsp; dist/assets/index-9b1c.js&nbsp;&nbsp;&nbsp;214.07 kB</div>
-<div data-page-node-id="9oFemyNAxQgDtKdQhK0Fos">&nbsp; <span class="t-w" data-page-node-id="8GCA6aVUYcF5afeFz0imS5">(!)</span> 部分 chunk 大于 500 kB，建议代码分割</div>
-<div data-page-node-id="OHUcNxoB8BfHxdk5aIFodU">&nbsp; <span class="t-ok" data-page-node-id="Adyg7rAcFKP1cigJ3OJCgw">✓ built in 3.41s</span></div>
-<div class="t-d" data-page-node-id="RGMKY7nVM6FuCBNs695pqn">&nbsp;</div>
-<div data-page-node-id="ZgifLiO4NYcbYNQfnhqPQ9"><span class="t-p" data-page-node-id="2pVc1KTvUoomAY52CYqO85">$</span> <span class="term-caret" data-page-node-id="F1wHdxmZNL7s1m3lrJM8xz"></span></div>
-          </div>
-        </div>
-
-      </div>
-    </aside>
-
-    <div class="panel-scrim" id="panelScrim" data-page-node-id="dJL8JfzB4nhQNk6mMZ660A"></div>
-
   </div>
 
   <!-- ======================= 状态栏 22px ======================= -->
   <footer class="statusbar" data-page-node-id="RphFCY52pTeKZd6C4y7Cbw">
     <div class="sb-item" data-page-node-id="mbH5jp8SiujvLqxeiYUVxH"><svg class="ico" data-page-node-id="siAPH9sx33VW3YNbHdgoWh"><use href="#i-branch" data-page-node-id="zAtiMNighC7Omx9ZM8B6ry"/></svg><span class="mono" data-page-node-id="UaYSesuGflfMdN0UqOMEQk">分支未接线</span></div>
-    <div class="sb-item" data-page-node-id="axa5yi449BScGkAeVRYtUD"><svg class="ico" data-page-node-id="FoDax9Nben4Gbpc1XbeNio"><use href="#i-folder" data-page-node-id="b2rb73lCZFyQonds8OCpcP"/></svg><span class="mono" data-page-node-id="dtpWXy7ydxycP68SuwRv9M">示例工作区（未接线）</span></div>
+    <div class="sb-item" data-page-node-id="axa5yi449BScGkAeVRYtUD"><svg class="ico" data-page-node-id="FoDax9Nben4Gbpc1XbeNio"><use href="#i-folder" data-page-node-id="b2rb73lCZFyQonds8OCpcP"/></svg><span class="mono" data-page-node-id="dtpWXy7ydxycP68SuwRv9M">文字问答 · 无工具</span></div>
     <div class="sb-item" data-page-node-id="ephcYtajFShnosT6iHDIUy"><svg class="ico" data-page-node-id="PIsGqit1woI1cR3WBfdVMP"><use href="#i-shield" data-page-node-id="HxDJZoLbCb426swysYgq3V"/></svg><span id="sbIsolation" data-page-node-id="P2MeQMVwzJBICslrfABm54">隔离状态待读取 · 工具权限未接线</span></div>
     <span class="sb-grow" data-page-node-id="iSRbKg868qIp9A3BgTBmJG"></span>
     <div class="sb-item" data-page-node-id="zmaLhtWRKFIBz0TXDDCYr7"><span class="sb-dot" data-page-node-id="TFjPjAbHAvhguXcibp0OSf"></span><span id="sbConnection" data-page-node-id="eizVamvkwaQUHZvK7ZvM0j">Agent 未接线</span></div>
     <div class="sb-item" data-page-node-id="gEkwqk5FLqAqNPN20OU6IA"><svg class="ico" data-page-node-id="TVf8vrP3E4jff4xibW5b2J"><use href="#i-plug" data-page-node-id="ilMVrQUEkVBt3oEy4nSsEx"/></svg><span data-page-node-id="CW9T35H9zbgS1orHJtE2JV">连接器未接线</span></div>
-    <div class="sb-item" data-page-node-id="MFRltGCBLm7CxoIujRqaez"><span class="mono" data-page-node-id="jZLc9pXDcO5DTqHIasE4FE">模型未接线</span></div>
+    <div class="sb-item" data-page-node-id="MFRltGCBLm7CxoIujRqaez"><span class="mono" data-page-node-id="jZLc9pXDcO5DTqHIasE4FE">模型见输入框</span></div>
     <div class="sb-item" data-page-node-id="H2eATi5rEFKKvECtmbpOBv"><span class="mono" id="sbTokens" data-page-node-id="MhrNeESUJwD33PSpYeHcaj">用量未接线</span></div>
   </footer>
 </div>

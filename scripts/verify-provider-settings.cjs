@@ -57,10 +57,19 @@ const { spawn } = require('node:child_process');
       throw Error('UI condition failed: ' + expression);
     }
     await until(`typeof window.mountProviderSettings === 'function'`);
+    assert.equal(await evaluate(`!!document.querySelector('#panel,#savedSessions,#refreshSessions') || document.querySelector('#taskGroups').children.length>0`), false);
+    async function checkProviderLayout(width, tag) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false });
+      assert.ok(await evaluate(`(()=>{const d=document.querySelector('.provider-dialog[open]'),r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&d.scrollWidth<=d.clientWidth+1&&Array.from(d.querySelectorAll('button')).every(b=>{const s=getComputedStyle(b);return b.clientHeight>=parseFloat(s.paddingTop)+parseFloat(s.paddingBottom)+parseFloat(s.lineHeight)});})()`), 'dialog and buttons fit '+width);
+      const image = await cdp('Page.captureScreenshot', { format: 'png' });
+      await fs.writeFile(path.join(artifacts, tag+'-'+width+'.png'), Buffer.from(image.data,'base64'));
+    }
     await evaluate(`location.hash='models'`);
     await until(`Array.from(document.querySelectorAll('#setBody button')).some(b=>b.textContent==='＋ 添加模型提供商')`);
     await evaluate(`Array.from(document.querySelectorAll('#setBody button')).find(b=>b.textContent==='＋ 添加模型提供商').click()`);
+    await checkProviderLayout(1440, 'provider-third'); await checkProviderLayout(520, 'provider-third');
     await evaluate(`Array.from(document.querySelectorAll('.provider-dialog button')).find(b=>b.textContent==='自定义模型 API').click()`);
+    await checkProviderLayout(520, 'provider-custom'); await checkProviderLayout(1440, 'provider-custom');
     await evaluate(`(()=>{const inputs=document.querySelectorAll('.provider-dialog input');['fixture','本机验收','http://127.0.0.1:19402/v1','local-fixture-only'].forEach((v,i)=>inputs[i].value=v);})()`);
     await evaluate(`Array.from(document.querySelectorAll('.provider-dialog button')).find(b=>b.textContent==='获取可用模型').onclick()`);
     assert.equal(gets, 1);
@@ -69,6 +78,8 @@ const { spawn } = require('node:child_process');
     await fs.writeFile(path.join(artifacts, 'provider-settings.png'), Buffer.from(shot.data, 'base64'));
     await evaluate(`Array.from(document.querySelectorAll('.provider-dialog button')).find(b=>b.textContent==='创建提供商').onclick()`);
     assert.equal(await evaluate(`!!document.querySelector('.provider-dialog')`), false);
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll('#setBody button')).every(b=>{const s=getComputedStyle(b);return b.clientHeight>=parseFloat(s.paddingTop)+parseFloat(s.paddingBottom)+parseFloat(s.lineHeight)})`), 'provider list button text fits its border');
+    const listShot = await cdp('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(artifacts,'provider-list.png'), Buffer.from(listShot.data,'base64'));
     const stored = await fs.readFile(path.join(home, 'desktop-providers.json'), 'utf8');
     assert.ok(!stored.includes('local-fixture-only'), 'Electron safeStorage must encrypt the persisted key');
     await evaluate(`Array.from(document.querySelectorAll('#setBody button')).find(b=>b.textContent==='编辑').click()`);
@@ -115,6 +126,8 @@ const { spawn } = require('node:child_process');
     await turn('taChat', 'sendChat', 'what did I say?', 2);
     assert.deepEqual(prompts.at(-1).filter(m=>m.role==='user').map(m=>m.content), ['remember ALPHA','what did I say?']);
     assert.ok(prompts.at(-1).some(m=>m.role==='assistant' && m.content==='LOCAL SETTINGS MOCK ANSWER'));
+    const markdown = '# 标题\n\n**加粗** 和 `行内代码`\n\n```python\nprint("hello")\n<img src=x onerror=alert(1)>\n```\n\n<script>alert(1)</script>\n- 项目';
+    assert.ok(await evaluate(`(()=>{const h=document.querySelector('#liveChatList .msg--agent .msg-body>div');window.renderReply(h,${JSON.stringify(markdown)});return h.querySelector('pre code').textContent.includes('<img')&&!h.querySelector('img,script')&&h.querySelector('strong')?.textContent==='加粗'&&h.querySelector('h2')?.textContent==='标题'&&!h.textContent.includes('\u0060\u0060\u0060');})()`), 'safe code blocks and inline formatting');
     const chatShot = await cdp('Page.captureScreenshot', { format: 'png' });
     await fs.writeFile(path.join(artifacts, 'main-chat.png'), Buffer.from(chatShot.data, 'base64'));
     await evaluate(`document.querySelector('#btnNew').click()`);

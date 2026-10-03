@@ -55,13 +55,14 @@ test('desktop launcher reports spawn errors, exceptions, nonzero and signal exit
   }
 });
 
-test('desktop retains prototype entries, own branding and sandbox', () => {
+test('desktop removes demo panels but retains navigation, own branding and sandbox', () => {
   const html = readFileSync(new URL('../desktop/renderer/index.html', import.meta.url), 'utf8');
   const js = readFileSync(new URL('../desktop/renderer/app.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
   const base = readFileSync(new URL('../docs/panel-prototype/index.html', import.meta.url), 'utf8');
   const entries = (s: string) => [...s.matchAll(/data-(?:nav|sub|pane|scene)="[^"]+"/g)].map(m => m[0]).sort();
-  assert.deepEqual(entries(html), entries(base));
+  assert.deepEqual(entries(html), entries(base).filter(e => !e.startsWith('data-pane=')));
+  assert.doesNotMatch(html, /id="(?:panel|savedSessions|refreshSessions)"|Northwind|localhost:5173/);
   assert.match(html, /<title>Personal Agent — Agent 客户端<\/title>/);
   assert.match(html, /class="tb-mark">PA</);
   assert.doesNotMatch(html, /WorkBuddy|>WB</);
