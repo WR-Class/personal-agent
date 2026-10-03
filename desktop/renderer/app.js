@@ -842,6 +842,26 @@
     b.addEventListener('click', function(){ winAction(b.dataset.win); });
   });
 
+  async function desktopInfo(showVersion) {
+    var bridge = window.personalAgentDesktop;
+    if (!bridge || typeof bridge.getInfo !== 'function') {
+      $('#sbConnection').textContent = '浏览器预览 · Agent 未接线';
+      if (showVersion) toast('浏览器预览：无桌面运行信息');
+      return;
+    }
+    try {
+      var info = await bridge.getInfo();
+      $('#sbConnection').textContent = '桌面已就绪 · Agent 未接线';
+      $('#sbIsolation').textContent = info.sandboxed && info.contextIsolated ? '渲染器已隔离 · 工具权限未接线' : '警告：渲染器隔离未启用';
+      if (showVersion) toast('Personal Agent ' + info.appVersion + ' · Electron ' + info.electron + ' · Chromium ' + info.chrome + ' · Node ' + info.node + ' · ' + info.platform + ' · 界面基于用户提供的 WorkBuddy 原型');
+    } catch (_) {
+      $('#sbConnection').textContent = '桌面信息读取失败 · Agent 未接线';
+      $('#sbIsolation').textContent = '隔离状态未知';
+      if (showVersion) toast('桌面信息读取失败，请重试');
+    }
+  }
+  void desktopInfo(false);
+
   /* ---- 顶部菜单定义 ---- */
   var MENUS = {
     edit: [
@@ -874,7 +894,7 @@
     ],
     about: [
       { label:'检查更新', act:function(){ toast('未接线：检查更新'); } },
-      { label:'版本信息', act:function(){ toast('personal-agent 桌面壳 · 界面基于用户提供的 WorkBuddy 原型'); } },
+      { label:'版本信息', act:function(){ void desktopInfo(true); } },
       { label:'开源许可', act:function(){ toast('未接线：许可查看器'); } },
       { label:'访问官网', act:function(){ toast('未接线：访问官网'); } }
     ]
@@ -1025,12 +1045,7 @@
     if (e.target === searchScrim) closeTaskSearch();
   });
 
-  /* ===================== 状态栏心跳 ===================== */
-  var tk = 12480;
-  setInterval(function(){
-    tk += Math.floor(Math.random() * 90) + 10;
-    $('#sbTokens').textContent = tk.toLocaleString('en-US') + ' / 200K';
-  }, 3200);
+  // Token usage stays explicitly unwired until supplied by the real runtime.
 
   /* ===================== 初始化 ===================== */
   renderGroups();

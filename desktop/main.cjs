@@ -32,13 +32,30 @@ function createWindow() {
   return win;
 }
 
-ipcMain.handle('window:action', (event, action) => {
+function trustedWindow(event) {
   const win = BrowserWindow.fromWebContents(event.sender);
   const frame = event.senderFrame;
-  if (!win || !windows.has(win) || frame !== event.sender.mainFrame ||
+  if (!win || !windows.has(win) || !frame || frame !== event.sender.mainFrame ||
       frame.url.split('#')[0] !== entryURL) {
     throw new Error('Untrusted desktop sender');
   }
+  return win;
+}
+
+ipcMain.handle('desktop:info', (event) => {
+  trustedWindow(event);
+  return {
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    agentConnected: false,
+  };
+});
+
+ipcMain.handle('window:action', (event, action) => {
+  const win = trustedWindow(event);
   switch (action) {
     case 'min': win.minimize(); break;
     case 'max': win.isMaximized() ? win.unmaximize() : win.maximize(); break;

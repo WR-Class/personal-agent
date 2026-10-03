@@ -4,6 +4,10 @@ const allowedActions = new Set(["min", "max", "close", "reset", "new", "fullscre
 
 contextBridge.exposeInMainWorld("personalAgentDesktop", {
   platform: process.platform,
+  async getInfo() {
+    const info = await ipcRenderer.invoke("desktop:info");
+    return { ...info, sandboxed: process.sandboxed === true, contextIsolated: process.contextIsolated === true };
+  },
   windowAction(action) {
     if (!allowedActions.has(action)) {
       return Promise.resolve({ ok: false, maximized: false });

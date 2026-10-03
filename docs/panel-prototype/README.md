@@ -210,3 +210,10 @@ npm run start:desktop
 真实 Electron 页面经 CDP 验证标题、设置/关于名称与未接线提示；最大化、恢复、关闭
 成功，启动器正常退出 0，渲染页面 `require` 不可用。未声称完成逐像素视觉验收。
 启动日志仍有 GPU 缓存目录拒绝访问告警，未妨碍上述验证；未修改权限或删除用户缓存。
+
+首条只读数据接线：`desktop:info` 复用窗口主 frame / URL 校验，经 preload 提供
+实际 app/Electron/Chromium/Node 版本、平台及 renderer 的 sandboxed/contextIsolated。
+版本菜单读取真实值；底栏明确区分“桌面已就绪”和“Agent 未接线”，不代表工具 OS 隔离。
+移除原型随机令牌计数，连接器、模型、分支、用量与套餐积分不再冒充实时数据；入口保留。
+构建、语法检查与全量 789 项（788 通过、1 跳过、0 失败）通过；真实窗口 CDP 已确认
+隔离布尔值为 true、Agent 为未连接、等待超过旧定时器周期后用量仍显示未接线。
