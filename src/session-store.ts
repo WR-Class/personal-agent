@@ -1,7 +1,8 @@
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { withSessionLease } from "./session-lease.ts";
 import { dirname, join } from "node:path";
-import { lstatSync } from "node:fs";
+import { lstatSync, createReadStream } from "node:fs";
+import { readBoundedUtf8 } from './bounded-read.ts';
 import { assertSafeStateDirectory, canonicalPath, isWithin } from "./security-config.ts";
 import type { ChatMessage, ChatUsage, ToolCall } from "./types.ts";
 // Type-only: the claim vocabulary is shared with genes (D60 established it names
@@ -729,6 +730,8 @@ export interface SessionStoreOptions {
    * when the caller keeps its own copy or can tolerate losing recent turns.
    */
   durability?: "flush" | "relaxed";
+  /** Optional actual-byte ceiling for read-only hosts; no limit by default. */
+  maxReadBytes?: number;
 }
 
 export interface InspectionResult {
@@ -769,7 +772,11 @@ export class SessionStore {
    */
   readonly durability: "flush" | "relaxed";
 
+  private readonly maxReadBytes?: number;
+
   constructor(options: SessionStoreOptions) {
+    if (options.maxReadBytes !== undefined && (!Number.isSafeInteger(options.maxReadBytes) || options.maxReadBytes <= 0)) throw new Error('invalid session read limit');
+    this.maxReadBytes = options.maxReadBytes;
     this.root = assertSafeStateDirectory(options.root);
     this.durability = options.durability ?? "flush";
   }
@@ -1116,7 +1123,9 @@ export class SessionStore {
   async inspect(sessionId: string): Promise<InspectionResult> {
     let text: string;
     try {
-      text = await readFile(this.pathFor(sessionId), "utf8");
+      const file = this.pathFor(sessionId);
+      text = this.maxReadBytes === undefined ? await readFile(file, "utf8")
+        : await readBoundedUtf8(createReadStream(file), this.maxReadBytes, 'session');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { events: [], eventLines: [], external: [], problems: [] };
       throw error;

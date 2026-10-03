@@ -55,6 +55,18 @@ ipcMain.handle('sessions:list', async (event) => {
   }
 });
 
+ipcMain.handle('sessions:history', async (event, id) => {
+  trustedWindow(event);
+  try {
+    const { desktopHistory } = await import('../src/desktop-sessions.ts');
+    const result = await desktopHistory(sessionHome, id);
+    trustedWindow(event);
+    return result;
+  } catch (_) {
+    throw new Error('历史读取失败：会话不存在、损坏、受保护或超过 1 MiB；不会自动修复');
+  }
+});
+
 ipcMain.handle('desktop:info', (event) => {
   trustedWindow(event);
   return {

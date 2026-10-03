@@ -67,6 +67,35 @@
     }).join('');
   }
 
+  var historyRequest = 0;
+  $('#historyDialog').addEventListener('close', function() { historyRequest++; $('#historyBody').replaceChildren(); });
+  async function openHistory(id) {
+    var request = ++historyRequest, dialog = $('#historyDialog'), body = $('#historyBody');
+    body.replaceChildren();
+    $('#historyTitle').textContent = '会话历史 · ' + id;
+    $('#historyStatus').textContent = '读取中…';
+    if (!dialog.open) dialog.showModal();
+    try {
+      var result = await window.personalAgentDesktop.readHistory(id);
+      if (request !== historyRequest || !dialog.open) return;
+      $('#historyStatus').textContent = '只读预览，不发送、不重放工具。共 ' + result.total + ' 条消息' + (result.truncated ? '，仅显示最后 200 条' : '');
+      result.messages.forEach(function(message) {
+        var section = document.createElement('section'), heading = document.createElement('h3'), text = document.createElement('pre');
+        heading.textContent = message.role;
+        text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere';
+        text.textContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2);
+        section.append(heading, text);
+        if (message.toolCalls && message.toolCalls.length) {
+          var calls = document.createElement('pre'); calls.style.whiteSpace = 'pre-wrap'; calls.style.overflowWrap = 'anywhere';
+          calls.textContent = '工具调用记录（未执行）\n' + JSON.stringify(message.toolCalls, null, 2); section.append(calls);
+        }
+        body.append(section);
+      });
+    } catch (_) {
+      if (request === historyRequest) $('#historyStatus').textContent = '读取失败：会话不存在、损坏、受保护或超过 1 MiB；未修改日志。关闭后可重试。';
+    }
+  }
+
   async function refreshSessions() {
     var button = $('#refreshSessions'), status = $('#sessionListStatus'), host = $('#savedSessions');
     if (button.disabled) return;
@@ -81,13 +110,14 @@
     try {
       var result = await bridge.listSessions();
       result.ids.forEach(function(id) {
-        var row = document.createElement('div');
+        var row = document.createElement('button');
+        row.addEventListener('click', function() { void openHistory(id); });
         row.className = 'chat-row';
         var name = document.createElement('span');
         name.className = 'chat-name'; name.textContent = id; row.title = id;
         row.append(name); host.append(row);
       });
-      status.textContent = result.total ? '已保存 ' + result.total + ' 个会话' + (result.truncated ? '（仅显示前 100 个）' : '') + ' · 仅 ID，历史打开未接线' : '尚无已保存会话';
+      status.textContent = result.total ? '已保存 ' + result.total + ' 个会话' + (result.truncated ? '（仅显示前 100 个）' : '') + ' · 点击只读预览' : '尚无已保存会话';
     } catch (_) {
       status.textContent = '会话读取失败，请检查宿主 PERSONAL_AGENT_HOME 与目录权限；点击刷新重试';
     } finally { button.disabled = false; }

@@ -48,7 +48,7 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     sender.mainFrame.url = 'https://example.com/';
     await assert.rejects(async () => fn(valid, 'min'), /Untrusted desktop sender/);
     sender.mainFrame.url = url + '#settings';
-    if (fn !== handlers.get('sessions:list')) await assert.doesNotReject(async () => fn(valid, 'min'));
+    if (fn !== handlers.get('sessions:list') && fn !== handlers.get('sessions:history')) await assert.doesNotReject(async () => fn(valid, 'min'));
     sender.mainFrame.url = url;
   }
 });
@@ -69,6 +69,8 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls, [['desktop:info']]);
     await api.listSessions('ignored-path');
     assert.deepEqual(calls[1], ['sessions:list']);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'listSessions', 'onMaximized', 'platform', 'windowAction']);
+    await api.readHistory('demo', 'ignored-path');
+    assert.deepEqual(calls[2], ['sessions:history', 'demo']);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'listSessions', 'onMaximized', 'platform', 'readHistory', 'windowAction']);
   }
 });

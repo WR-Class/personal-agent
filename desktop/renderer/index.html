@@ -175,7 +175,7 @@
         </div>
         <div class="grp">
           <button class="grp-row" id="refreshSessions" title="刷新只读会话列表"><span class="grp-name">本地会话</span><span class="grp-path">刷新</span></button>
-          <div id="sessionListStatus" role="status">仅列出已保存 ID；历史打开尚未接线</div>
+          <div id="sessionListStatus" role="status">点击已保存会话，打开只读历史预览</div>
           <div id="savedSessions"></div>
         </div>
         <div class="grp-path">以下为原型示例任务（未接线）</div>
@@ -582,6 +582,12 @@ src/pages/pricing/plans.ts</div>
   </div>
 </div>
 
+<dialog id="historyDialog" aria-labelledby="historyTitle" style="margin:auto;width:min(800px,90vw);max-height:80vh;padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text-primary)">
+  <form method="dialog"><button autofocus class="set-btn">关闭历史预览</button></form>
+  <h2 id="historyTitle">会话历史（只读）</h2>
+  <p id="historyStatus" role="status"></p>
+  <div id="historyBody"></div>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script src="app.js"></script>
