@@ -4,19 +4,28 @@
   var $$ = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
 
   /* ===================== 数据 ===================== */
-  var GROUPS = [];
-  /* 筛选状态：all / run / ok / err —— 对应任务运行状态 */
+  var sessions = [], savedWorkspaces = [], selectedSessionId = null, refreshSequence = 0;
   var filterState = { status:'all' };
-  var FILTER_LABEL = { all:'全部任务', run:'进行中', ok:'已完成', err:'失败' };
-  function passFilter(it){ return filterState.status === 'all' || it.st === filterState.status; }
-
-  /* 全量任务索引，供任务搜索使用 */
-  var TASK_INDEX = [];
-  GROUPS.forEach(function(g){
-    g.items.forEach(function(it){
-      TASK_INDEX.push({ t:it.t, time:it.time, st:it.st, group:g.name, path:g.path });
-    });
-  });
+  var FILTER_LABEL = { all:'全部任务', ok:'完成', err:'未完成/失败', unknown:'状态未知（旧记录）' };
+  function sessionStatus(s){ return s.indexed === false ? 'unknown' : s.failed === true ? 'err' : s.failed === false ? 'ok' : 'unknown'; }
+  var PREF_KEY = 'personal-agent.ui.v1';
+  var prefs = { version:1, theme:'light', font:0, send:'Enter', compact:false };
+  try {
+    var stored = JSON.parse(localStorage.getItem(PREF_KEY));
+    if (stored && stored.version === 1) {
+      if (['light','dark'].includes(stored.theme)) prefs.theme = stored.theme;
+      if ([-1,0,1].includes(stored.font)) prefs.font = stored.font;
+      if (['Enter','Ctrl+Enter'].includes(stored.send)) prefs.send = stored.send;
+      if (typeof stored.compact === 'boolean') prefs.compact = stored.compact;
+    }
+  } catch (_) {} // Invalid/blocked storage falls back to non-secret defaults.
+  function savePrefs(){ try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (_) { toast('偏好仅本次有效：本地存储不可用'); } }
+  function openWorkspace(mode){ window.dispatchEvent(new CustomEvent('workspace-open', {detail:{mode:mode}})); }
+  function applyCompact(){ document.documentElement.classList.toggle('ui-compact', prefs.compact); }
+  document.documentElement.setAttribute('data-theme', prefs.theme);
+  var compactStyle = document.createElement('style');
+  compactStyle.textContent = '.ui-compact .home-hero,.ui-compact .home-sub{display:none}.ui-compact .session-row{padding:4px 10px}.ui-compact .msg{margin-bottom:8px}.set-row [disabled]{opacity:.55;cursor:not-allowed}';
+  document.head.append(compactStyle); applyCompact();
   var SCENES = {
     working:{ ph:'描述你想完成的任务…  例如：把这份季度财报整理成可分享的网页', label:'日常办公' },
     coding: { ph:'描述你想实现的功能…  例如：给定价页加一个席位滑块，实时算总价', label:'代码开发' },
@@ -26,54 +35,43 @@
   /* ===================== 侧栏渲染 ===================== */
   function ico(id, cls){ return '<svg class="ico '+(cls||'')+'"><use href="#'+id+'"/></svg>'; }
 
-  function renderGroups(){
-    var host = $('#taskGroups');
-    host.innerHTML = GROUPS.map(function(g, gi){
-      var items = g.items.map(function(it, ii){ return { it:it, ii:ii }; })
-                         .filter(function(o){ return passFilter(o.it); });
-      if (!items.length) return '';
-      var rows = items.map(function(o){
-        var it = o.it, ii = o.ii;
-        return '<button class="chat-row'+(it.on?' is-on':'')+'" data-g="'+gi+'" data-i="'+ii+'">'+
-                 '<span class="dot'+(it.st?' dot--'+it.st:'')+'"></span>'+
-                 '<span class="chat-name">'+it.t+'</span>'+
-                 '<span class="chat-time">'+it.time+'</span>'+
-               '</button>';
-      }).join('');
-      return '<div class="grp'+(g.open?'':' is-collapsed')+'" data-g="'+gi+'">'+
-               '<button class="grp-row">'+
-                 ico('i-chev-d','twist')+
-                 ico('i-folder')+
-                 '<span class="grp-name">'+g.name+'</span>'+
-                 '<span class="grp-path">'+g.path+'</span>'+
-                 '<span class="grp-count">'+items.length+'</span>'+
-               '</button>'+
-               '<div class="grp-list">'+rows+'</div>'+
-             '</div>';
-    }).join('');
-  }
-
-  async function refreshSessions() {
-    if (!window.personalAgentDesktop?.listChats) return;
+  function renderSessions(){
     const host = $('#taskGroups');
+    const expanded = new Map($$('.session-group', host).map(g => [g.dataset.root, g.open]));
+    const roots = [...new Set([...savedWorkspaces, ...sessions.map(s => s.workspaceRoot)].filter(Boolean))];
+    host.replaceChildren();
+    for (const root of [null, ...roots]) {
+      const items = sessions.filter(s => (s.workspaceRoot || null) === root && (filterState.status === 'all' || sessionStatus(s) === filterState.status));
+      if (!root && !items.length) continue;
+      const group = document.createElement('details'); group.className = 'session-group'; group.dataset.root = root || ''; group.open = expanded.get(root || '') !== false;
+      const head = document.createElement('summary'); head.textContent = (root ? '▱ ' + root.split(/[\\/]/).filter(Boolean).pop() : '会话') + ' (' + items.length + ')'; head.title = root || '未关联工作区的历史'; group.append(head);
+      for (const s of items) {
+        const b = document.createElement('button'); b.className = 'session-row'; b.dataset.session = s.id; b.textContent = s.title; b.title = s.title + ' · ' + FILTER_LABEL[sessionStatus(s)];
+        const state = document.createElement('small'); state.textContent = ' · ' + FILTER_LABEL[sessionStatus(s)]; b.append(state);
+        b.classList.toggle('is-on', s.id === selectedSessionId);
+        b.onclick = () => void openSession(s.id); group.append(b);
+      }
+      if (!items.length) { const note = document.createElement('small'); note.textContent = '此文件夹暂无符合筛选的会话'; group.append(note); }
+      host.append(group);
+    }
+    if (!host.children.length) host.textContent = '暂无符合筛选的会话';
+  }
+  async function openSession(id){
+    if (await mainChat.open(id)) { ++refreshSequence; selectedSessionId = id; renderSessions(); }
+  }
+  async function refreshSessions() {
+    const sequence = ++refreshSequence;
+    if (!window.personalAgentDesktop?.listChats) { $('#taskGroups').textContent = '历史仅在桌面客户端可用'; return; }
     try {
       const data = await window.personalAgentDesktop.listChats();
-      const roots = [...new Set([...data.workspaces, ...data.sessions.map(s => s.workspaceRoot)].filter(Boolean))];
-      host.replaceChildren();
-      for (const root of [null, ...roots]) {
-        const sessions = data.sessions.filter(s => (s.workspaceRoot || null) === root);
-        if (!root && !sessions.length) continue;
-        const group = document.createElement('details'); group.className = 'session-group'; group.open = true;
-        const head = document.createElement('summary'); head.textContent = (root ? '▱ ' + root.split(/[\\/]/).filter(Boolean).pop() : '会话') + ' (' + sessions.length + ')'; head.title = root || '未关联工作区的历史'; group.append(head);
-        for (const s of sessions) {
-          const b = document.createElement('button'); b.className = 'session-row'; b.dataset.session = s.id; b.textContent = s.title; b.title = s.title;
-          b.onclick = async () => { if (await mainChat.open(s.id)) { host.querySelectorAll('.is-on').forEach(n => n.classList.remove('is-on')); b.classList.add('is-on'); } };
-          group.append(b);
-        }
-        host.append(group);
-      }
-      if (!host.children.length) host.textContent = '暂无会话';
-    } catch (_) { host.textContent = '会话列表读取失败；历史文件未修改'; }
+      if (sequence !== refreshSequence) return;
+      sessions = data.sessions; savedWorkspaces = data.workspaces;
+      if (Object.prototype.hasOwnProperty.call(data, 'activeSessionId')) selectedSessionId = data.activeSessionId;
+      renderSessions();
+      if (searchScrim?.classList.contains('is-on')) renderTs(tsInput.value);
+    } catch (_) {
+      if (sequence === refreshSequence) toast('会话列表读取失败；保留现有列表与历史文件');
+    }
   }
   window.addEventListener('workspace-changed', async e => { if (e.detail?.changed) await newTask(); await refreshSessions(); });
 
@@ -94,7 +92,7 @@
     $('#tbTitle').textContent = 'JM · 新建任务';
   }
 
-  function togglePanel() {} // Removed prototype panel.
+  function togglePanel(){ openWorkspace('toggle'); }
 
   /* ===================== 输入框 ===================== */
   function autoGrow(ta){
@@ -109,7 +107,7 @@
   function bindComposer(ta, btn, onSend){
     ta.addEventListener('input', function(){ autoGrow(ta); syncSend(ta, btn); });
     ta.addEventListener('keydown', function(e){
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229 && (prefs.send === 'Ctrl+Enter' ? e.ctrlKey && !e.metaKey : !e.ctrlKey && !e.metaKey)){
         e.preventDefault();
         if (ta.value.trim()) onSend(ta.value.trim());
       }
@@ -125,7 +123,7 @@
   bindComposer($('#taChat'), $('#sendChat'), function(v){ void mainChat.send(v, $('#taChat')); });
   $('#btnStop').addEventListener('click', function(){ mainChat.stop(); });
   async function newTask() {
-    if (await mainChat.reset()) { showHome(); $('#taHome').focus(); toast('已新建空白会话'); }
+    if (await mainChat.reset()) { ++refreshSequence; selectedSessionId = null; renderSessions(); showHome(); $('#taHome').focus(); toast('已新建空白会话'); }
   }
 
   /* ===================== 场景标签 ===================== */
@@ -137,7 +135,7 @@
     var ta = $('#taHome');
     ta.placeholder = s.ph;
     ta.focus();
-    toast('已切换到「' + s.label + '」场景');
+    toast('「' + s.label + '」仅更换输入提示，不改变模型或能力');
   });
 
   /* ===================== 模式切换 ===================== */
@@ -146,25 +144,13 @@
     var bar = m.parentElement;
     $$('.chip-btn[data-mode]', bar).forEach(function(x){ x.classList.remove('is-on'); });
     m.classList.add('is-on');
-    toast('当前仅文字问答；计划与工具权限入口仍未接线');
+    toast('当前仅文字问答；计划模式未实现；手动工具权限在输入框下方');
   });
 
   /* ===================== 侧栏交互 ===================== */
-  $('#taskGroups').addEventListener('click', function(e){
-    var gr = e.target.closest('.grp-row');
-    if (gr){
-      var g = gr.closest('.grp');
-      g.classList.toggle('is-collapsed');
-      GROUPS[+g.dataset.g].open = !g.classList.contains('is-collapsed');
-      return;
-    }
-    var row = e.target.closest('.chat-row');
-    if (row){
-      $$('.chat-row').forEach(function(r){ r.classList.remove('is-on'); });
-      row.classList.add('is-on');
-      showChat(row.querySelector('.chat-name').textContent);
-    }
-  });
+  $$('.nav-badge').forEach(b => b.remove());
+  $('#sceneTabs').title = '场景仅更换输入提示，不切换模型或工具能力';
+  const sceneNote = document.createElement('small'); sceneNote.textContent = '场景仅更换输入提示，不切换模型或工具能力。'; $('#sceneTabs').after(sceneNote);
 
   $('.sec-head')?.addEventListener('click', function(){
     var n = this.nextElementSibling;
@@ -199,8 +185,10 @@
       $$('.nav-sub-item').forEach(function(x){ x.classList.remove('is-on'); });
       setMore(false);
       b.classList.add('is-on');
-      var map = { assistant:'助理', project:'项目', expert:'专家', automation:'定时任务' };
-      toast('未接线：' + map[b.dataset.nav]);
+      if (b.dataset.nav === 'assistant') { showHome(); return; }
+      if (b.dataset.nav === 'project') { openWorkspace('start'); return; }
+      var map = { expert:'专家', automation:'定时任务' };
+      toast('未实现：' + map[b.dataset.nav]);
     });
   });
 
@@ -210,7 +198,8 @@
       b.classList.add('is-on');
       $$('.nav-item').forEach(function(x){ x.classList.remove('is-on'); });
       $('#navMore').classList.add('is-on');
-      toast('未接线：' + $('span', b).textContent);
+      if (b.dataset.sub === 'files') { openWorkspace('files'); return; }
+      toast('未实现：' + $('span', b).textContent);
     });
   });
 
@@ -273,16 +262,16 @@
     { c:'navigation', l:'定位当前任务',     k:'Ctrl+Shift+E', e:true },
     { c:'editing',    l:'发送消息',         k:'Enter',        e:true },
     { c:'editing',    l:'输入时换行',       k:'Shift+Enter',  e:true },
-    { c:'editing',    l:'停止生成',         k:'Escape',       e:true },
-    { c:'editing',    l:'对话内搜索',       k:'Ctrl+F',       e:true },
-    { c:'editing',    l:'语音录制开关',     k:'Ctrl+D',       e:true },
-    { c:'editing',    l:'唤起选择器',       k:'@',            e:false },
-    { c:'editing',    l:'唤起斜杠命令',     k:'/',            e:false },
+    { c:'editing',    l:'停止生成（未实现）', k:'Escape',       e:false },
+    { c:'editing',    l:'对话内搜索（未实现）', k:'Ctrl+F',     e:false },
+    { c:'editing',    l:'语音录制（未实现）', k:'Ctrl+D',       e:false },
+    { c:'editing',    l:'选择器（未实现）', k:'@',              e:false },
+    { c:'editing',    l:'斜杠命令（未实现）', k:'/',             e:false },
     { c:'window',     l:'打开设置',         k:'Ctrl+,',       e:true },
     { c:'window',     l:'切换左侧栏',       k:'Ctrl+B',       e:true },
-    { c:'window',     l:'切换右侧产物面板', k:'Ctrl+Shift+B', e:true },
+    { c:'window',     l:'切换工作区面板',   k:'Ctrl+Shift+B', e:true },
     { c:'window',     l:'进入/退出全屏',    k:'F11',          e:true },
-    { c:'window',     l:'唤起/隐藏主窗口',  k:'Shift+Alt+W',  e:true }
+    { c:'window',     l:'唤起/隐藏主窗口（未实现）', k:'Shift+Alt+W', e:false }
   ];
 
   var PANEL_DESC = {
@@ -307,16 +296,10 @@
       (d ? '<div class="set-row-d">' + d + '</div>' : '') + '</div>' +
       '<div class="set-row-ctl">' + ctl + '</div></div>';
   }
-  function sw(on){ return '<span class="sw' + (on ? ' is-on' : '') + '"></span>'; }
   function seg(opts, active){
     return '<span class="seg">' + opts.map(function(o){
       return '<button data-seg="' + o + '"' + (o === active ? ' class="is-on"' : '') + '>' + o + '</button>';
     }).join('') + '</span>';
-  }
-  function sel(opts, active){
-    return '<select class="set-sel">' + opts.map(function(o){
-      return '<option' + (o === active ? ' selected' : '') + '>' + o + '</option>';
-    }).join('') + '</select>';
   }
   function txt(v){ return '<span class="set-txt">' + v + '</span>'; }
   function kbd(b){
@@ -334,32 +317,14 @@
   var PANELS = {};
 
   PANELS.settings = function(){
-    return sSec('基本设置')
+    return sSec('本地界面偏好（自动保存，不含密钥）')
       + sRow('主题', '选择应用程序的显示主题。', seg(['浅色','深色'], isDark() ? '深色' : '浅色'))
       + sRow('字体大小', '调整界面与内容的文字大小。', seg(['小','默认','大'], ['小','默认','大'][fontLevel + 1]))
-      + sRow('简洁模式', '开启后将简化对话界面显示，隐藏部分装饰性元素。', sw(false))
-      + sRow('显示语言', '设置应用程序界面的显示语言。', sel(['简体中文','繁體中文','English','日本語'], '简体中文'))
-      + sRow('发送消息', '设置聊天输入框中发送消息的快捷键。', seg(['Enter','Ctrl+Enter'], 'Enter'))
-      + sSec('通知')
-      + sRow('客户端通知', '运营消息优先在应用内显示，应用切换到后台以后自动转桌面通知', sw(true))
-      + sRow('桌面通知', '任务完成或有新消息时，通过系统弹窗提醒你', sw(false))
-      + sRow('通知提示音', '收到桌面或应用内通知时播放的提示音', sel(['无音效','晴朗','沉稳','灵动'], '无音效'))
-      + sSec('权限与安全')
-      + sRow('沙箱安全', '关闭后，您对自己的数据安全负责，AI 对工作空间外文件的修改和删除可能会自动执行，请谨慎操作。默认权限下，仍然会保留对高危指令的确认、删除文件的确认等基础安全机制。', sw(true))
-      + sRow('专家与技能推荐', '每次启动新任务时，为你推荐适合完成任务的专家与技能', sw(true))
-      + sRow('自动安装可信技能', '安全检测通过后自动安装，高风险项始终要求手动确认', sw(true))
-      + sSec('通用')
-      + sRow('开机自启', '开启后 Personal Agent 会在你登录电脑后自动启动。', sw(false))
-      + sRow('启动强制自动更新', '开启后 Personal Agent 启动时若检测到新版本，会自动下载并重启升级，无需手动确认。', sw(false))
-      + sRow('链接打开方式', '按需模式下，本地预览链接在 Personal Agent 内置浏览器打开，其他链接默认使用系统浏览器；按住修饰键点击始终外部打开。', sel(['按需（默认）','始终内置','始终外部'], '按需（默认）'))
-      + sRow('网络代理', '配置 Personal Agent 访问网络的方式。修改后立即生效，无需重启。', sel(['直接连接','跟随系统','手动配置'], '直接连接'))
-      + sRow('锁屏远程', '选择锁屏后的运行方式，保障远程控制与后台 Agent 任务持续执行', sel(['关闭','熄屏后保持唤醒','保持屏幕常亮'], '熄屏后保持唤醒'))
-      + sSec('存储')
-      + sRow('系统缓存目录', '未接线：尚未读取实际缓存目录', txt('打开目录'))
-      + sRow('任务保留期限', '过期会清理任务对话记录；仅对新任务生效，已有任务不受影响。', sel(['30 天','60 天','90 天','永久保留'], '90 天'))
-      + sRow('默认工作空间存储路径', '新建任务、工作空间时将自动存放在该路径下；修改后不影响已有数据。', txt('未接线：尚未选择工作区'))
-      + sSec('隐私')
-      + sRow('体验优化计划', '允许使用你的对话数据帮助改进模型。数据会先加密脱敏，且无法关联到你个人。', sw(false));
+      + sRow('简洁模式', '隐藏首页装饰，缩小会话列表间距；不隐藏消息。', '<button class="set-btn" id="compactToggle" aria-pressed="' + prefs.compact + '">' + (prefs.compact ? '已开启' : '已关闭') + '</button>')
+      + sRow('发送消息', 'Shift+Enter 始终换行；输入法组合期间不发送。', seg(['Enter','Ctrl+Enter'], prefs.send))
+      + sSec('权限') + sRow('手动工作区工具', '权限在输入框下方控制；不是 OS 沙箱，不向模型开放工具。', '<button class="set-btn" data-permissions>查看权限入口</button>')
+      + sSec('尚未实现')
+      + ['显示语言','客户端通知','桌面通知','通知提示音','专家与技能推荐','自动安装可信技能','开机自启','自动更新','链接打开方式','网络代理','锁屏远程','系统缓存目录','任务保留期限','默认工作空间存储路径','体验优化计划'].map(function(label){ return sRow(label, '未实现，不保存或执行此选项。', '<button class="set-btn" disabled>未实现</button>'); }).join('');
   };
 
   PANELS.appearance = function(){
@@ -372,40 +337,16 @@
       + '<div class="set-ph-note" style="text-align:left;padding-left:2px">换个皮肤，换种心情 —— 限时主题与个性化皮肤在真实客户端中按版本开放。</div>';
   };
 
-  PANELS.models = function(){
-    return sSec('自定义模型')
-      + '<div class="set-empty"><div class="set-empty-t">还没有配置自定义模型</div>'
-      + '<div class="set-empty-d">未接线：此处仅为模型配置设计，不保存配置，不读取或传输 API Key。</div>'
-      + '<button class="set-btn set-btn--primary">添加模型</button></div>'
-      + sSec('字段说明')
-      + sRow('供应商', '仅支持 OpenAI 兼容协议 API。', txt('OpenAI 兼容'))
-      + sRow('模型名称', '输入模型参数值，例如 gpt-4o 或 openai/gpt-4o', txt('gpt-4o'))
-      + sRow('接口地址', 'https://api.example.com/v1/chat/completions', txt('https://…/v1'))
-      + sRow('API Key', '输入你的 API Key。本地部署无需 API Key。', txt('sk-••••••••'))
-      + sSec('高级配置')
-      + sRow('最大输入 Token', '单次请求可接受的最大上下文长度。留空时跟随提供商默认值。', txt('使用提供商默认值'))
-      + sRow('最大输出 Token', '单次回复可生成的最大 Token 数。留空时跟随提供商默认值。', txt('使用提供商默认值'))
-      + sRow('思考模式', '将该模型标记为思考模型，客户端会据此开启相关能力和交互。', sw(false))
-      + sRow('图片输入', '允许在聊天时向该模型发送图片附件。', sw(false))
-      + sRow('工具调用', '允许模型调用智能体运行时暴露出来的工具和函数。', sw(true))
-      + sRow('自定义协议', '开启后将直接使用填写的接口地址，不再自动补全 /chat/completions 路径。', sw(false))
-      + sSec('本地模型')
-      + sRow('本地运行的 AI 模型', '下载并管理本地运行的 AI 模型，支持 GPU / CPU 推理引擎与硬件要求校验。', txt('未下载'))
-      + sRow('本地配置文件', 'models.json', txt('打开'));
-  };
+  PANELS.models = function(){ return ''; }; // Real provider view owns this panel's content and lifecycle.
 
   PANELS.securityCenter = function(){
-    return sSec('沙箱与安全')
-      + sRow('沙箱安全', '关闭后，您对自己的数据安全负责，AI 对工作空间外文件的修改和删除可能会自动执行，请谨慎操作。', sw(true))
-      + sSec('数据安全')
-      + sRow('数据脱敏', '上传到云端的对话数据会先加密脱敏，且无法关联到你个人。', sw(true))
-      + sSec('运行时')
-      + sRow('高危指令确认', '对高危指令保留二次确认。', sw(true))
-      + sSec('审计')
-      + sRow('审计日志', '记录工具调用与文件写入，便于事后追溯。', sw(false))
-      + sSec('实验性')
-      + sRow('开发者模式', '开放调试入口与详细日志。', sw(false));
+    return sSec('真实安全边界')
+      + sRow('模型会话', '文字会发送到所选模型服务并保存本地历史；不承诺自动脱敏，不自动上传工作区文件。', txt('文字问答 · 模型工具未接线'))
+      + sRow('手动工具权限', '只读禁止命令；完全访问允许手动命令访问工作区外，不是 OS 沙箱。权限与确认由工作区工具管理。', '<button class="set-btn" data-permissions>查看权限入口</button>')
+      + sRow('渲染器隔离', 'Electron 渲染器隔离与本地命令权限不同；实际隔离状态见关于页。', txt('以运行信息为准'))
+      + sRow('数据脱敏 / 安全审计面板', '未实现，不提供虚假开关或安全保证。', '<button class="set-btn" disabled>未实现</button>');
   };
+  PANELS.systemPermissions = PANELS.securityCenter;
 
   PANELS.keyboardShortcuts = function(){
     var q = scQuery.toLowerCase();
@@ -413,7 +354,8 @@
       + '<div class="sc-tools">'
       + '<input class="sc-search" id="scSearch" placeholder="搜索快捷键" value="' + esc(scQuery) + '">'
       + '<span class="sc-count">共 ' + SC.length + ' 条</span>'
-      + '<button class="set-btn" id="scReset">全部恢复默认</button></div>';
+      + '<button class="set-btn" disabled>自定义按键 / 重映射未实现</button></div>';
+    SC.forEach(function(x){ if (x.l === '发送消息') x.k = prefs.send; });
     SC_CATS.forEach(function(cat){
       var rows = SC.filter(function(x){
         return x.c === cat.id && (!q || x.l.toLowerCase().indexOf(q) > -1 || x.k.toLowerCase().indexOf(q) > -1);
@@ -439,8 +381,18 @@
       + '<div class="set-ph-note">未接线：保留原型功能入口，后续接入真实能力。</div></div>';
   }
 
-  var providerSettingsView;
+  var providerSettingsView, settingsSequence = 0;
+  async function renderInfo(host, sequence){
+    const output = document.createElement('pre'); output.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere'; output.textContent = '正在读取实际桌面运行信息…'; host.append(output);
+    try {
+      const info = await window.personalAgentDesktop?.getInfo?.();
+      if (sequence !== settingsSequence || !output.isConnected) return;
+      output.textContent = info ? JSON.stringify(info, null, 2) : '浏览器预览：无桌面运行信息';
+    } catch (_) { if (sequence === settingsSequence) output.textContent = '桌面运行信息读取失败，请重试'; }
+  }
+  PANELS.helpFeedback = PANELS.getHelp = function(){ return sSec('桌面实际运行信息') + '<p>模型设置配置文字问答；项目 / 更多 → 我的文件打开手动工作区工具。场景仅改变输入提示。模型工具、停止生成、语音、发布分享、账号与云服务未实现。</p>'; };
   function renderSettings(id){
+    const sequence = ++settingsSequence;
     if (providerSettingsView) { providerSettingsView.destroy(); providerSettingsView = null; }
     if (id) currentTab = id;
     var nav = '';
@@ -456,12 +408,13 @@
     $('#setNav').innerHTML = nav;
     var it = SET_ITEMS.filter(function(x){ return x.id === currentTab; })[0];
     $('#setTitle').textContent = it ? it.label : '设置';
-    $('#setBody').innerHTML = '<p role="status">未接线：除主题与字号外，本页为界面演示，不改变运行时权限，不保存配置。</p>' + renderPanel(currentTab);
+    $('#setBody').innerHTML = renderPanel(currentTab);
     if (currentTab === 'models') providerSettingsView = window.mountProviderSettings($('#setBody'));
+    if (['helpFeedback','getHelp'].includes(currentTab)) void renderInfo($('#setBody'), sequence);
     $('#setBody').scrollTop = 0;
   }
   function openSettings(tab){ renderSettings(tab || 'settings'); setScrim.classList.add('is-on'); }
-  function closeSettings(){ setScrim.classList.remove('is-on'); }
+  function closeSettings(){ setScrim.classList.remove('is-on'); ++settingsSequence; if (providerSettingsView) { providerSettingsView.destroy(); providerSettingsView = null; } }
 
   function applyTheme(mode){
     if ((mode === 'dark') !== isDark()) toggleTheme();
@@ -473,7 +426,9 @@
     if (b) renderSettings(b.dataset.tab);
   });
   $('#setBody').addEventListener('click', function(e){
-    if (currentTab === 'models') return;
+    if (currentTab === 'models' || e.target.closest('[disabled]')) return;
+    if (e.target.closest('[data-permissions]')) { closeSettings(); showHome(); openWorkspace('start'); toast('在输入框下方选择本地工具权限；完全访问不是 OS 沙箱'); return; }
+    if (e.target.closest('#compactToggle')) { prefs.compact = !prefs.compact; applyCompact(); savePrefs(); renderSettings(currentTab); return; }
     var tp = e.target.closest('[data-theme-pick]');
     if (tp){ applyTheme(tp.dataset.themePick); return; }
     var sg = e.target.closest('.seg button');
@@ -486,12 +441,10 @@
         setFontSize(['小','默认','大'].indexOf(sg.textContent) - 1);
       }
       if (lbl && lbl.textContent === '主题') applyTheme(sg.textContent === '深色' ? 'dark' : 'light');
+      if (lbl && lbl.textContent === '发送消息') { prefs.send = sg.textContent; savePrefs(); }
       return;
     }
-    var swEl = e.target.closest('.sw');
-    if (swEl){ toast('未接线：不会改变真实配置或权限'); return; }
-    if (e.target.closest('.set-btn:not(#scReset), .set-txt')){ toast('未接线：配置操作'); return; }
-    if (e.target.closest('#scReset')){ scQuery = ''; renderSettings('keyboardShortcuts'); toast('所有快捷键已恢复至初始态'); return; }
+    if (e.target.closest('.set-btn, .set-txt')) toast('未实现：此项没有配置操作');
   });
   $('#setBody').addEventListener('input', function(e){
     if (e.target.id !== 'scSearch') return;
@@ -507,10 +460,10 @@
   /* ===================== 命令面板 ===================== */
   var palItems = [
     { sec:'任务', ico:'i-sparkle', label:'新建任务',           k:'Ctrl N', act:function(){ void newTask(); } },
-    { sec:'视图', ico:'i-globe',   label:'打开浏览器面板',      k:'',       act:function(){ showPane('browser'); } },
-    { sec:'视图', ico:'i-package', label:'打开产物面板',        k:'',       act:function(){ showPane('art'); } },
-    { sec:'视图', ico:'i-folder',  label:'打开文件树',          k:'',       act:function(){ showPane('file'); } },
-    { sec:'视图', ico:'i-terminal',label:'打开终端',            k:'',       act:function(){ showPane('term'); } },
+    { sec:'视图', ico:'i-globe',   label:'打开浏览器面板',      k:'',       act:function(){ openWorkspace('browser'); } },
+    { sec:'视图', ico:'i-package', label:'产物面板（未实现）',  k:'',       act:function(){ toast('未实现：产物面板；不等同工作区工具'); } },
+    { sec:'视图', ico:'i-folder',  label:'打开文件树',          k:'',       act:function(){ openWorkspace('files'); } },
+    { sec:'视图', ico:'i-terminal',label:'打开终端',            k:'',       act:function(){ openWorkspace('terminal'); } },
     { sec:'设置', ico:'i-wand',    label:'打开外观设置',       k:'',        act:function(){ openSettings('appearance'); } },
   ];
   var palScrim = $('#scrim'), palInput = $('#palInput'), palList = $('#palList'), palIdx = 0, palView = palItems;
@@ -552,6 +505,7 @@
   function openMenu(anchor, items){
     menu.className = 'menu';
     menu.innerHTML = items.map(function(it, i){
+      if (it.sep) return '<div class="menu-sep"></div>';
       return '<button class="menu-item" data-i="' + i + '">' + ico(it.ico) + it.label +
              (it.k ? '<span class="k">' + it.k + '</span>' : '') + '</button>';
     }).join('');
@@ -570,15 +524,40 @@
   });
   function closeMenu(){ menu.classList.remove('is-on'); menu.className = 'menu'; mbOpen = null; $$('.mb-menu').forEach(function(b){ b.classList.remove('is-on'); }); }
 
+  async function copyText(text){
+    try {
+      try { await navigator.clipboard.writeText(text); }
+      catch (error) {
+        if (!window.personalAgentDesktop?.desktopCopy) throw error;
+        const result = await window.personalAgentDesktop.desktopCopy(text);
+        if (!result?.ok) throw Error('clipboard unavailable');
+      }
+      toast('已复制到剪贴板');
+    } catch (_) { toast('复制失败：剪贴板不可用'); }
+  }
+  function copyConversation(){
+    const live = $('#liveChatList');
+    if (!vChat.classList.contains('is-on') || !live || live.hidden || !live.innerText.trim()) { toast('没有可复制的真实对话'); return; }
+    void copyText(live.innerText);
+  }
+  const copyButton = $('.chat-head [title="分享"]');
+  copyButton.id = 'btnCopyConversation'; copyButton.title = '复制对话'; copyButton.setAttribute('aria-label','复制对话'); copyButton.textContent = '复制对话'; copyButton.style.width = 'auto'; copyButton.onclick = copyConversation;
+  const historyButton = $('.chat-head [title="历史"]'); historyButton.id = 'btnChatHistory'; historyButton.onclick = openTaskSearch;
+  const chatMore = $('.chat-head [title="更多"]'); chatMore.id = 'btnChatMore';
+  chatMore.onclick = function(e){ e.stopPropagation(); openMenu(this, [
+    {ico:'i-plus',label:'新建任务',act:newTask}, {ico:'i-history',label:'历史任务',act:openTaskSearch}, {ico:'i-copy',label:'复制对话',act:copyConversation}
+  ]); };
+  $('.side-foot .icon-btn').onclick = function(e){ e.stopPropagation(); openMenu(this, [
+    {ico:'i-people',label:'个人主页（未实现）',act:function(){openSettings('account');}}, {ico:'i-settings',label:'设置',act:function(){openSettings('settings');}}
+  ]); };
   $('#taskGroups').addEventListener('contextmenu', function(e){
-    var row = e.target.closest('.chat-row'); if (!row) return;
+    var row = e.target.closest('.session-row'); if (!row) return;
     e.preventDefault();
+    const session = sessions.find(s => s.id === row.dataset.session); if (!session) return;
     openMenu(row, [
-      { ico:'i-edit',  label:'重命名', k:'F2', act:function(){ toast('未接线：重命名'); } },
-      { ico:'i-pin',   label:'置顶',        act:function(){ toast('未接线：置顶'); } },
-      { ico:'i-copy',  label:'复制链接',    act:function(){ toast('未接线：复制链接'); } },
-      { ico:'i-share', label:'分享',        act:function(){ toast('未接线：分享'); } },
-      { ico:'i-trash', label:'删除', k:'Del', act:function(){ toast('未接线：删除任务'); } }
+      { ico:'i-history', label:'打开会话', act:function(){ void openSession(session.id); } },
+      { ico:'i-copy', label:'复制标题', act:function(){ void copyText(session.title); } },
+      { ico:'i-copy', label:'复制会话 ID', act:function(){ void copyText(session.id); } }
     ]);
   });
 
@@ -590,7 +569,7 @@
   function toggleTheme(){
     var root = document.documentElement;
     var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-    root.setAttribute('data-theme', next);
+    root.setAttribute('data-theme', next); prefs.theme = next; savePrefs();
     var ico = $('#icoTheme');   /* 标题栏切换按钮已移除，仅在存在时同步图标 */
     if (ico) ico.innerHTML = '<use href="#' + (next === 'dark' ? 'i-sun' : 'i-moon') + '"/>';
     toast(next === 'dark' ? '已切换到深色主题' : '已切换到浅色主题');
@@ -606,25 +585,32 @@
   }
 
   /* ===================== 快捷键辅助 ===================== */
-  var fontLevel = 0;
-  function setFontSize(lv){
+  var fontLevel = prefs.font;
+  function setFontSize(lv, initial){
     lv = Math.max(-1, Math.min(1, lv));
     fontLevel = lv;
     var d = lv;                                   /* -1 小 / 0 默认 / 1 大 */
     document.documentElement.style.setProperty('--fs-base',    (13 + d) + 'px');
     document.documentElement.style.setProperty('--fs-body',    (14 + d) + 'px');
     document.documentElement.style.setProperty('--fs-caption', (12 + d) + 'px');
-    toast(d === 0 ? '内容字号：默认' : (d > 0 ? '内容字号：大' : '内容字号：小'));
+    if (!initial) { prefs.font = lv; savePrefs(); toast(d === 0 ? '内容字号：默认' : (d > 0 ? '内容字号：大' : '内容字号：小')); }
   }
+  setFontSize(fontLevel, true);
   function stepTask(dir){
-    var rows = $$('.chat-row');
-    if (!rows.length) return;
-    var i = -1;
-    rows.forEach(function(r, k){ if (r.classList.contains('is-on')) i = k; });
-    i = i < 0 ? 0 : (i + dir + rows.length) % rows.length;
-    rows.forEach(function(r){ r.classList.remove('is-on'); });
-    rows[i].classList.add('is-on');
-    showChat($('.chat-name', rows[i]).textContent);
+    const rows = $$('.session-row');
+    if (!rows.length) { toast('没有符合筛选的任务'); return; }
+    const current = rows.findIndex(r => r.dataset.session === selectedSessionId);
+    const row = rows[current < 0 ? 0 : (current + dir + rows.length) % rows.length];
+    row.closest('details').open = true; void openSession(row.dataset.session);
+  }
+  function locateCurrent(){
+    if (!selectedSessionId) { toast('当前会话尚无历史记录'); return; }
+    if (filterState.status !== 'all') setFilter('all');
+    const row = $$('.session-row').find(r => r.dataset.session === selectedSessionId);
+    if (!row) { toast('当前会话不在历史列表中'); return; }
+    sidebar.classList.remove('is-collapsed'); if (innerWidth <= 900) sidebar.classList.add('is-open');
+    $('#icoCollapse').innerHTML = '<use href="#i-panel-l"/>';
+    row.closest('details').open = true; row.scrollIntoView({block:'nearest'}); row.focus();
   }
 
   /* ===================== 快捷键 ===================== */
@@ -638,7 +624,7 @@
     if (mod && e.shiftKey && e.key.toLowerCase() === 'p'){ e.preventDefault(); openPal(); return; }        /* 原型附加：命令面板 */
     if (mod && e.shiftKey && e.key.toLowerCase() === 'b'){ e.preventDefault(); togglePanel(); return; }     /* toggle-artifacts */
     if (mod && e.shiftKey && e.key.toLowerCase() === 'n'){ e.preventDefault(); void newTask(); return; }
-    if (mod && e.shiftKey && e.key.toLowerCase() === 'e'){ e.preventDefault(); toast('已定位当前任务'); return; }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'e'){ e.preventDefault(); locateCurrent(); return; }
     if (mod && e.key.toLowerCase() === 'k'){ e.preventDefault(); openTaskSearch(); return; }                /* open-global-search */
     if (mod && e.key.toLowerCase() === 'b'){ e.preventDefault(); toggleSidebarCollapse(); return; }         /* toggle-sidebar */
     if (mod && e.key === ','){ e.preventDefault(); openSettings('settings'); return; }                      /* open-settings */
@@ -733,9 +719,9 @@
     }
     try {
       var info = await bridge.getInfo();
-      $('#sbConnection').textContent = '桌面已就绪 · Agent 未接线';
-      $('#sbIsolation').textContent = info.sandboxed && info.contextIsolated ? '渲染器已隔离 · 工具权限未接线' : '警告：渲染器隔离未启用';
-      if (showVersion) toast('Personal Agent ' + info.appVersion + ' · Electron ' + info.electron + ' · Chromium ' + info.chrome + ' · Node ' + info.node + ' · ' + info.platform + ' · 界面基于用户提供的 WorkBuddy 原型');
+      $('#sbConnection').textContent = '文字聊天已就绪 · Agent 模型工具未接线';
+      $('#sbIsolation').textContent = info.sandboxed && info.contextIsolated ? '渲染器已隔离 · 手动工具使用工作区权限' : '警告：渲染器隔离未启用';
+      if (showVersion) openSettings('helpFeedback');
     } catch (_) {
       $('#sbConnection').textContent = '桌面信息读取失败 · Agent 未接线';
       $('#sbIsolation').textContent = '隔离状态未知';
@@ -744,17 +730,26 @@
   }
   void desktopInfo(false);
 
+  /* Preserve native editing focus/selection when opening and using menus. */
+  document.addEventListener('pointerdown', function(e){ if (e.target.closest('.mb-menu, .menu-item')) e.preventDefault(); });
+  async function editAction(action){
+    try {
+      if (!window.personalAgentDesktop?.desktopAction) { toast('编辑菜单仅在桌面客户端可用'); return; }
+      const result = await window.personalAgentDesktop.desktopAction(action);
+      if (!result?.ok) toast('编辑操作失败');
+    } catch (_) { toast('编辑操作失败'); }
+  }
   /* ---- 顶部菜单定义 ---- */
   var MENUS = {
     edit: [
-      { label:'撤销', k:'Ctrl+Z', act:function(){ toast('菜单未接线；输入框可使用 Ctrl+Z'); } },
-      { label:'重做', k:'Ctrl+Y', act:function(){ toast('菜单未接线；输入框可使用 Ctrl+Y'); } },
+      { label:'撤销', k:'Ctrl+Z', act:function(){ void editAction('undo'); } },
+      { label:'重做', k:'Ctrl+Y', act:function(){ void editAction('redo'); } },
       { sep:true },
-      { label:'剪切', k:'Ctrl+X', act:function(){ toast('菜单未接线；输入框可使用 Ctrl+X'); } },
-      { label:'复制', k:'Ctrl+C', act:function(){ toast('菜单未接线；选中文本可使用 Ctrl+C'); } },
-      { label:'粘贴', k:'Ctrl+V', act:function(){ toast('菜单未接线；输入框可使用 Ctrl+V'); } },
+      { label:'剪切', k:'Ctrl+X', act:function(){ void editAction('cut'); } },
+      { label:'复制', k:'Ctrl+C', act:function(){ void editAction('copy'); } },
+      { label:'粘贴', k:'Ctrl+V', act:function(){ void editAction('paste'); } },
       { sep:true },
-      { label:'全选', k:'Ctrl+A', act:function(){ toast('菜单未接线；输入框可使用 Ctrl+A'); } },
+      { label:'全选', k:'Ctrl+A', act:function(){ void editAction('selectAll'); } },
       { label:'查找任务', k:'Ctrl+K', act:function(){ openTaskSearch(); } }
     ],
     window: [
@@ -768,8 +763,8 @@
       { label:'关闭窗口', k:'Ctrl+W', act:function(){ winAction('close'); } }
     ],
     help: [
-      { label:'使用文档', act:function(){ toast('未接线：使用文档'); } },
-      { label:'诊断工具', act:function(){ toast('未接线：诊断工具'); } },
+      { label:'使用帮助 / 运行信息', act:function(){ openSettings('getHelp'); } },
+      { label:'诊断工具', act:function(){ openSettings('helpFeedback'); } },
       { label:'资源占用', act:function(){ toast('未接线：资源占用'); } },
       { label:'打开日志目录(L)', act:function(){ toast('未接线：日志目录'); } },
       { label:'意见反馈', act:function(){ toast('未接线：意见反馈'); } }
@@ -829,7 +824,7 @@
     filterState.status = k;
     $('#filterDot').style.display = (k === 'all') ? 'none' : '';
     $('#btnFilter').classList.toggle('is-on', k !== 'all');
-    renderGroups();
+    renderSessions();
     toast('筛选：' + FILTER_LABEL[k]);
   }
   $('#btnFilter').addEventListener('click', function(e){
@@ -837,7 +832,7 @@
     var self = this;
     var opts = [
       { k:'all', ico:'i-grid'  },
-      { k:'run', ico:'i-clock' },
+      { k:'unknown', ico:'i-clock' },
       { k:'ok',  ico:'i-check' },
       { k:'err', ico:'i-close' }
     ];
@@ -868,28 +863,26 @@
   function renderTs(q){
     q = (q || '').trim();
     var ql = q.toLowerCase();
-    tsView = TASK_INDEX.filter(function(t){
-      return !ql || t.t.toLowerCase().indexOf(ql) > -1
-                  || t.group.toLowerCase().indexOf(ql) > -1
-                  || t.path.toLowerCase().indexOf(ql) > -1;
+    const previousId = tsView[tsIdx]?.id;
+    tsView = sessions.filter(function(t){
+      return !ql || t.title.toLowerCase().includes(ql) || (t.workspaceRoot || '').toLowerCase().includes(ql);
     });
-    tsIdx = 0;
-    $('#tsCount').textContent = q ? (tsView.length + ' 条结果') : (TASK_INDEX.length + ' 个任务');
+    tsIdx = Math.max(0, tsView.findIndex(t => t.id === previousId));
+    $('#tsCount').textContent = q ? (tsView.length + ' 条结果') : (sessions.length + ' 个任务');
     if (!tsView.length){
       tsList.innerHTML = '<div class="ts-empty">没有匹配「' + esc(q) + '」的任务</div>';
       return;
     }
-    var html = '', last = '';
+    var html = '', last = null;
     tsView.forEach(function(t, i){
-      if (t.group !== last){
-        html += '<div class="ts-grp">' + ico('i-folder') + '<span>' + esc(t.group) + '</span>' +
-                '<span class="ts-path">' + esc(t.path) + '</span></div>';
-        last = t.group;
+      const root = t.workspaceRoot || '未关联工作区';
+      if (root !== last){
+        html += '<div class="ts-grp">' + ico('i-folder') + '<span>' + hl(root, q) + '</span></div>';
+        last = root;
       }
-      html += '<button class="ts-row' + (i === 0 ? ' is-on' : '') + '" data-i="' + i + '">' +
-                '<span class="dot' + (t.st ? ' dot--' + t.st : '') + '"></span>' +
-                '<span class="nm">' + hl(t.t, q) + '</span>' +
-                '<span class="tm">' + esc(t.time) + '</span>' +
+      html += '<button class="ts-row' + (i === tsIdx ? ' is-on' : '') + '" data-i="' + i + '">' +
+                '<span class="nm">' + hl(t.title, q) + '</span>' +
+                '<span class="tm">' + esc(FILTER_LABEL[sessionStatus(t)]) + '</span>' +
               '</button>';
     });
     tsList.innerHTML = html;
@@ -904,13 +897,12 @@
   function openTsCurrent(){
     var t = tsView[tsIdx]; if (!t) return;
     closeTaskSearch();
-    showChat(t.t);
-    toast('打开任务：' + t.t);
+    void openSession(t.id);
   }
   function openTaskSearch(){
     searchScrim.classList.add('is-on');
     tsInput.value = '';
-    renderTs('');
+    renderTs(''); void refreshSessions();
     setTimeout(function(){ tsInput.focus(); }, 40);
   }
   function closeTaskSearch(){ searchScrim.classList.remove('is-on'); }
@@ -930,7 +922,7 @@
   // Token usage stays explicitly unwired until supplied by the real runtime.
 
   /* ===================== 初始化 ===================== */
-  renderGroups();
+  renderSessions();
 
   /* ===================== Hash 深链路由 ===================== */
   /* #chat #art #file #term #browser #pick #dark 便于逐屏直达与截图核验 */

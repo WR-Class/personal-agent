@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, WebContentsView } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, WebContentsView, clipboard } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const entry = path.join(__dirname, 'renderer', 'index.html');
@@ -104,7 +104,7 @@ ipcMain.handle('chat:list', async event => {
   const { desktopSessions } = await import('../src/desktop-sessions.ts');
   const old = await desktopSessions(sessionHome); trustedWindow(event);
   const known = new Set(indexed.sessions.map(s => s.id));
-  return { ...indexed, sessions: [...indexed.sessions, ...old.ids.filter(id => !known.has(id)).map(id => ({ id, title: id, workspaceRoot: null, updatedAt: '', failed: true }))] };
+  return { ...indexed, activeSessionId: conversations.get(event.sender)?.id || null, sessions: [...indexed.sessions.map(s => ({ ...s, indexed: true })), ...old.ids.filter(id => !known.has(id)).map(id => ({ id, title: id, workspaceRoot: null, updatedAt: '', failed: true, indexed: false }))] };
 });
 ipcMain.handle('chat:open', async (event, id) => {
   const win = trustedWindow(event);
@@ -221,6 +221,21 @@ ipcMain.handle('runtime:echo', async (event, input) => {
   } catch (_) {
     throw new Error('离线测试失败；输入须为 1–8192 字节。可能已保存部分日志，请刷新会话检查，不会自动重试。');
   } finally { echoBusy = false; }
+});
+
+ipcMain.handle('desktop:copy', (event, text) => {
+  trustedWindow(event);
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 1024 * 1024) throw new Error('Copy text exceeds 1 MiB');
+  clipboard.writeText(text);
+  return { ok: true };
+});
+
+// Editing is scoped to the trusted shell's focused frame; no arbitrary method invocation.
+ipcMain.handle('desktop:edit', (event, action) => {
+  const win = trustedWindow(event);
+  if (!['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll'].includes(action)) throw new Error('Unknown edit action');
+  win.webContents[action]();
+  return { ok: true };
 });
 
 ipcMain.handle('desktop:info', (event) => {

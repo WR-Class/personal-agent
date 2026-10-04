@@ -17,10 +17,11 @@ test('unwired usage is not overwritten by prototype timers', () => {
 test('desktop info and window actions share fail-closed sender validation', async () => {
   const handlers = new Map<string, Function>();
   const windows: any[] = [];
+  const editActions: string[] = []; let copied = '';
   class Window {
     webContents: any;
     constructor() {
-      this.webContents = { mainFrame: { url: pathToFileURL(path.join(desktop, 'renderer/index.html')).href }, setWindowOpenHandler() {}, on() {} };
+      this.webContents = { undo() { editActions.push('undo'); }, copy() { editActions.push('copy'); }, mainFrame: { url: pathToFileURL(path.join(desktop, 'renderer/index.html')).href }, setWindowOpenHandler() {}, on() {} };
       windows.push(this);
     }
     static fromWebContents(sender: any) { return windows.find(w => w.webContents === sender); }
@@ -28,6 +29,7 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     minimize() {} isMaximized() { return false; }
   }
   const electron = {
+    clipboard: { writeText(text: string) { copied = text; } },
     app: { getVersion: () => '0.1.0', whenReady: () => Promise.resolve(), on() {} },
     BrowserWindow: Window, ipcMain: { handle: (name: string, fn: Function) => handlers.set(name, fn) },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} } },
@@ -62,6 +64,14 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     if (fn === handlers.get('desktop:info') || fn === handlers.get('window:action')) await assert.doesNotReject(async () => fn(valid, 'min'));
     sender.mainFrame.url = url;
   }
+  const edit = handlers.get('desktop:edit')!;
+  assert.throws(() => edit(valid, 'executeJavaScript'), /Unknown edit action/);
+  edit(valid, 'undo'); edit(valid, 'copy');
+  assert.deepEqual(editActions, ['undo', 'copy']);
+  const copy = handlers.get('desktop:copy')!;
+  copy(valid, '真实对话'); assert.equal(copied, '真实对话');
+  assert.throws(() => copy(valid, {}), /Copy text/);
+  assert.throws(() => copy(valid, '字'.repeat(400000)), /1 MiB/);
   const preview = handlers.get('runtime:provider')!, send = handlers.get('runtime:model')!;
   const settle = async (p: Promise<any>) => { await Promise.resolve(); previews.shift()!({ baseUrl: 'https://example.test/v1', model: 'test' }); return p; };
   await assert.rejects(send(valid, 'hi'), /重新查看/);
@@ -137,6 +147,10 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[8], ['chat:send', 'hi', 45]); assert.deepEqual(calls[9], ['chat:reset']);
     await api.workspace('files', { relative: 'src' }, 'ignored');
     assert.deepEqual(calls[10], ['workspace:action', 'files', { relative: 'src' }]);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listChats', 'listSessions', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
+    await api.desktopAction('copy', 'ignored');
+    assert.deepEqual(calls[11], ['desktop:edit', 'copy']);
+    await api.desktopCopy('text', 'ignored');
+    assert.deepEqual(calls[12], ['desktop:copy', 'text']);
+    assert.deepEqual(Object.keys(api).sort(), ['desktopAction', 'desktopCopy', 'getInfo', 'getProvider', 'listChats', 'listSessions', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
   }
 });

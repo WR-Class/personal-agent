@@ -15,7 +15,7 @@ const { spawn } = require('node:child_process');
   try{
     let occupied=false;try{await fetch('http://127.0.0.1:9225/json/list');occupied=true;}catch{}assert.equal(occupied,false,'test debug port is already occupied');
     const env={...process.env,PERSONAL_AGENT_HOME:home};delete env.ELECTRON_RUN_AS_NODE;
-    child=spawn(process.execPath,['desktop/launch.cjs','--remote-debugging-address=127.0.0.1','--remote-debugging-port=9225'],{cwd:root,env,stdio:'inherit'});
+    child=spawn(process.execPath,['desktop/launch.cjs','--user-data-dir='+path.join(home,'electron-profile'),'--remote-debugging-address=127.0.0.1','--remote-debugging-port=9225'],{cwd:root,env,stdio:'inherit'});
     async function target(match){for(let i=0;i<100;i++){try{const pages=await(await fetch('http://127.0.0.1:9225/json/list')).json();const p=pages.find(match);if(p)return p;}catch{}await new Promise(r=>setTimeout(r,100));}throw Error('page not found');}
     ws=await connect((await target(p=>p.url.endsWith('/desktop/renderer/index.html'))).webSocketDebuggerUrl);
     assert.equal((await evaluate(ws,`personalAgentDesktop.workspace('state')`)).data.permission,'read');

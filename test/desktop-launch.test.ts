@@ -66,8 +66,12 @@ test('desktop removes demo panels but retains navigation, own branding and sandb
   assert.match(html, /<title>Personal Agent — Agent 客户端<\/title>/);
   assert.match(html, /class="tb-mark">PA</);
   assert.doesNotMatch(html, /WorkBuddy|>WB</);
-  assert.match(js, /用户提供的 WorkBuddy 原型/);
-  assert.ok((js.match(/未接线/g) || []).length >= 33);
+  // Real wiring replaces placeholder count: do not require a minimum number of dead buttons.
+  assert.doesNotMatch(js, /TASK_INDEX|var GROUPS|function showPane/);
+  assert.match(js, /personal-agent\.ui\.v1/);
+  assert.match(js, /listChats\(\)/);
+  assert.match(js, /未实现，不保存或执行此选项/);
+  assert.match(js, /模型工具仍未接线|不向模型开放工具/);
   assert.match(main, /sandbox: true/);
   assert.match(main, /contextIsolation: true, nodeIntegration: false/);
 });

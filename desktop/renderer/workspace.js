@@ -62,6 +62,20 @@
   async function browser(){mode='browser';content.replaceChildren();const bar=node('form','','workspace-toolbar'),back=node('button','←'),reload=node('button','↻'),url=node('input'),go=node('button','打开');back.type=reload.type='button';go.type='submit';url.placeholder='https://example.com';url.setAttribute('aria-label','网页地址');bar.append(back,reload,url,go);browserSlot=node('div','','workspace-browser');content.append(bar,browserSlot);bar.onsubmit=e=>{e.preventDefault();void run(async()=>{go.disabled=true;go.textContent='加载中…';try{const result=await call('browser-open',{url:url.value});url.value=result.url;browserReady=true;bounds();}finally{go.disabled=false;go.textContent='打开';}});};back.onclick=()=>run(()=>call('browser-back'));reload.onclick=()=>run(()=>call('browser-reload'));}
   new ResizeObserver(bounds).observe(panel);window.addEventListener('resize',bounds);
   new MutationObserver(bounds).observe(document.body,{subtree:true,attributes:true,attributeFilter:['class','open']});
+  // All existing menu/navigation entries reuse these same user-operated tools.
+  window.addEventListener('workspace-open', e => {
+    const target = e.detail?.mode;
+    if (!['start','files','terminal','browser','toggle'].includes(target)) return;
+    if (target === 'toggle') { toggle.click(); return; }
+    show();
+    void run(async () => {
+      state = await call('state'); sync();
+      if (target === 'files') { if (!state.root) { await start(); error.textContent = '请先在输入框下方选择工作区目录'; } else await files(''); }
+      else if (target === 'terminal') await terminal();
+      else if (target === 'browser') await browser();
+      else await start();
+    });
+  });
   window.addEventListener('workspace-sync',()=>void run(async()=>{state=await call('state');sync();}));
   void run(async()=>{state=await call('state');sync();});
 })();

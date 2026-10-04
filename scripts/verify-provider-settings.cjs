@@ -29,7 +29,7 @@ const { spawn } = require('node:child_process');
     assert.equal(occupied, false, 'close the existing debug desktop before this test');
     const env = { ...process.env, PERSONAL_AGENT_HOME: home };
     for (const key of ['PERSONAL_AGENT_BASE_URL', 'PERSONAL_AGENT_MODEL', 'PERSONAL_AGENT_API_KEY', 'ELECTRON_RUN_AS_NODE']) delete env[key];
-    child = spawn(process.execPath, ['desktop/launch.cjs', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9224'], { cwd: root, env, stdio: 'inherit' });
+    child = spawn(process.execPath, ['desktop/launch.cjs', '--user-data-dir=' + path.join(home, 'electron-profile'), '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9224'], { cwd: root, env, stdio: 'inherit' });
     exited = new Promise(resolve => child.once('exit', resolve));
     let page;
     for (let i = 0; i < 100 && !page; i++) {
@@ -194,7 +194,8 @@ const { spawn } = require('node:child_process');
     const restoredShot = await cdp('Page.captureScreenshot', {format:'png'}); await fs.writeFile(path.join(artifacts,'workspace-chat-restored.png'),Buffer.from(restoredShot.data,'base64'));
     assert.deepEqual(prompts.at(-1).filter(m=>m.role==='user').map(m=>m.content), ['remember ALPHA','what did I say?','resume ALPHA']);
     assert.equal((await evaluate(`personalAgentDesktop.listChats()`)).sessions.length,3);
-    console.log('PASS main chat: two-turn context, fresh session isolation, persisted sessions, failed-turn retry blocked; POST=', sends);
+    console.log('PASS main chat: context, fresh-session isolation, persisted sessions, failure recovery in new session; POST=', sends);
+    await require('./ui-wiring-checks.cjs')({evaluate,until,cdp,alphaId:alpha.id});
     console.log('Screenshots:', path.join(artifacts, 'provider-settings.png'), path.join(artifacts, 'main-chat.png'));
     // Closing the renderer destroys its CDP context before Runtime.evaluate replies.
     ws.send(JSON.stringify({ id: ++id, method: 'Runtime.evaluate', params: { expression: `personalAgentDesktop.windowAction('close')` } }));
