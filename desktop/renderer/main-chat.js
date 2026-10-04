@@ -39,7 +39,8 @@
     const sample = document.querySelector('.chat-list');
     const list = document.createElement('div'); list.className = 'chat-list'; list.id = 'liveChatList'; list.hidden = true; list.style.display = 'none'; sample.after(list);
     let busy = false, started = false, failed = false, example = false, confirmed = '', title = '', loading = 0;
-    const selectors = [], statuses = [];
+    const selectors = [], statuses = [], probes = [];
+    let probing = false;
     const homeStop = document.getElementById('btnStop').cloneNode(true); homeStop.id = 'btnStopHome';
     homeStop.onclick = () => { if (busy) void api.stopChat(); };
     document.querySelector('#sendHome').before(homeStop);
@@ -48,20 +49,21 @@
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap';
       const label = document.createElement('label'); label.textContent = '模型 '; label.htmlFor = id + 'Model';
       const select = document.createElement('select'); select.id = id + 'Model'; select.className = 'set-sel'; select.style.maxWidth = '100%'; label.append(select); row.append(label);
-      const status = document.createElement('span'); status.setAttribute('role', 'status'); status.style.cssText = 'font-size:12px;color:var(--text-secondary)'; row.append(status);
+      const statusNode = document.createElement('span'); statusNode.setAttribute('role', 'status'); statusNode.style.cssText = 'font-size:12px;color:var(--text-secondary)'; row.append(statusNode);
       const probe = document.createElement('button'); probe.type = 'button'; probe.textContent = '检测工具'; probe.title = '向当前模型发送一次合成工具请求，可能计费；不读取或上传项目文件';
+      probe.dataset.action = 'test-tools'; probes.push(probe);
       probe.onclick = async () => {
-        if (busy) return;
+        if (busy || probing) { status('请等待当前请求或检测完成'); return; }
         const value = selectors[0].value;
         if (!value) { status('请先在模型设置中保存并选择提供商'); return; }
-        probe.disabled = true; status('正在检测工具协议（合成请求，不读项目文件）…');
+        probing = true; lock(); status('正在检测工具协议 · 最长约 30 秒 · 合成请求，不读项目文件…');
         try { const r = await api.providerSettings('test-tools', JSON.parse(value)); status(r.ok ? r.data.detail + (r.data.response ? ' 回复：' + r.data.response : '') : r.error); }
-        catch { status('工具检测失败，请检查模型配置'); } finally { probe.disabled = false; }
+        catch { status('工具检测失败，请检查模型配置'); } finally { probing = false; lock(); }
       };
       row.append(probe);
-      row.className = 'composer-model'; row.style.cssText = ''; status.className = 'composer-status';
-      const composer = input.closest('.composer'); composer.querySelector('.send').before(row); composer.append(status);
-      selectors.push(select); statuses.push(status); input.maxLength = 8192;
+      row.className = 'composer-model'; row.style.cssText = ''; statusNode.className = 'composer-status';
+      const composer = input.closest('.composer'); composer.querySelector('.send').before(row); composer.append(statusNode);
+      selectors.push(select); statuses.push(statusNode); input.maxLength = 8192;
       select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; void updateDestination(); };
     }
     function status(text) { statuses.forEach(s => { s.textContent = text; }); }
@@ -82,7 +84,7 @@
       selectors.forEach(s => { s.title = provider ? '发送到 ' + provider.baseUrl + ' · 消息及已启用工具读取的文件会发送到此服务并保存本地历史；可能计费' : '使用 CLI / 环境模型配置'; });
     }
     async function open(id) {
-      if (busy) return false;
+      if (busy || probing) return false;
       busy = true; lock(); status('读取会话…');
       try {
         const saved = await api.openChat(id);
@@ -104,9 +106,10 @@
       finally { busy = false; lock(); }
     }
     function lock() {
-      selectors.forEach(s => { s.disabled = busy || started; });
-      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy;
-      document.getElementById('btnNew').disabled = busy;
+      selectors.forEach(s => { s.disabled = busy || probing || started; });
+      probes.forEach(p => { p.disabled = busy || probing; p.textContent = probing ? '检测中…' : '检测工具'; });
+      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy || probing;
+      document.getElementById('btnNew').disabled = busy || probing;
       document.getElementById('btnStop').disabled = !busy; homeStop.disabled = !busy;
     }
     async function load() {
@@ -135,7 +138,7 @@
     }
     function showLive() { sample.hidden = true; sample.style.display = 'none'; list.hidden = false; list.style.display = 'flex'; showChat(title, true); }
     async function send(text, input) {
-      if (busy) return;
+      if (busy || probing) return;
       if (example) example = false;
       if (!api) { status('请启动桌面客户端'); return; }
       if (!text.trim() || new TextEncoder().encode(text).length > 8192) { status('请输入 1–8192 UTF-8 字节文本'); return; }
@@ -177,7 +180,7 @@
       } finally { busy = false; lock(); }
     }
     async function reset() {
-      if (busy) { status('请求进行中，请等待完成后新建任务'); return false; }
+      if (busy || probing) { status('请求进行中，请等待完成后新建任务'); return false; }
       busy = true; lock();
       try {
         if (api) await api.resetChat();

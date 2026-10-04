@@ -9,7 +9,7 @@ const { spawn } = require('node:child_process');
   await fs.mkdir(artifacts, { recursive: true });
   const home = await fs.mkdtemp(path.join(artifacts, 'provider-ui-'));
   let gets = 0, sends = 0, ws, child;
-  const prompts = []; let failChat = false, toolScenario = null, toolStep = 0;
+  const prompts = []; let failChat = false, toolScenario = null, toolStep = 0, probeMode = null, probeRequests = 0, finishProbe;
   const server = http.createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer local-fixture-only');
     res.setHeader('Content-Type', 'application/json');
@@ -17,6 +17,18 @@ const { spawn } = require('node:child_process');
     assert.equal(req.url, '/v1/chat/completions');
     let body = ''; for await (const c of req) body += c;
     const p = JSON.parse(body); assert.equal(p.model, 'fixture-model'); sends++;
+    if (probeMode) {
+      probeRequests++;
+      assert.equal(p.messages.length,1); assert.match(p.messages[0].content,/synthetic fixture/);
+      assert.deepEqual(p.tools.map(t=>t.function.name),['list_directory']);
+      const outcome = probeMode;
+      finishProbe = () => {
+        if (outcome === 'error') { res.writeHead(503); res.end('{}'); return; }
+        const message = outcome === 'good' ? {role:'assistant',content:'',tool_calls:[{id:'probe',type:'function',function:{name:'list_directory',arguments:'{"path":"."}'}}]} : {role:'assistant',content:'Only read_tabular and system_todo_write are available <script>bad()</script>'};
+        res.end(JSON.stringify({model:'fixture-model',choices:[{message,finish_reason:outcome==='good'?'tool_calls':'stop'}]}));
+      };
+      return;
+    }
     if (toolScenario) {
       assert.ok(p.tools.some(t=>t.function.name==='read_file'));
       assert.ok(!p.tools.some(t=>t.function.name==='run_command'));
@@ -238,6 +250,24 @@ const { spawn } = require('node:child_process');
     assert.equal((await evaluate(`personalAgentDesktop.workspace('state')`)).data.modelTools,'off');
     assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('WORKSPACE TOOL INPUT')`),'history retains actual tool output');
     console.log('PASS model file tools: opt-in, read, forged write denial, approved create, declined edit, stop pending approval, persisted tool results');
+    // Click the actual visible button: invoking IPC directly missed the status-node shadowing bug.
+    for (const [mode,expected] of [['good','正确的结构化工具调用'],['text','没有返回所声明'],['error','无法判定']]) {
+      probeMode=mode; finishProbe=undefined;
+      const beforeProbe=probeRequests, sessionCount=(await evaluate(`personalAgentDesktop.listChats()`)).sessions.length;
+      const point=await evaluate(`(()=>{const b=document.querySelector('#taChat').closest('.composer').querySelector('[data-action="test-tools"]');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+      await cdp('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+      await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+      await until(`document.querySelector('#taChat').closest('.composer').querySelector('.composer-status').textContent.includes('正在检测工具协议')`);
+      assert.ok(await evaluate(`Array.from(document.querySelectorAll('[data-action="test-tools"]')).every(b=>b.disabled&&b.textContent==='检测中…')`));
+      for(let i=0;i<100&&!finishProbe;i++)await new Promise(r=>setTimeout(r,50));
+      assert.equal(probeRequests,beforeProbe+1,'one real click sends exactly one diagnostic request');
+      assert.ok(finishProbe); finishProbe();
+      await until(`document.querySelector('#taChat').closest('.composer').querySelector('.composer-status').textContent.includes(${JSON.stringify(expected)})&&!document.querySelector('[data-action="test-tools"]').disabled`);
+      assert.equal(await evaluate(`!!document.querySelector('.composer-status script')`),false);
+      assert.equal((await evaluate(`personalAgentDesktop.listChats()`)).sessions.length,sessionCount,'probe does not create conversation or execute tools');
+      probeMode=null;
+    }
+    console.log('PASS actual 检测工具 click: pending feedback, single IPC/HTTP, structured success, text-only mismatch, request failure and re-enabled controls');
     console.log('Screenshots:', path.join(artifacts, 'provider-settings.png'), path.join(artifacts, 'main-chat.png'));
     // Closing the renderer destroys its CDP context before Runtime.evaluate replies.
     ws.send(JSON.stringify({ id: ++id, method: 'Runtime.evaluate', params: { expression: `personalAgentDesktop.windowAction('close')` } }));
