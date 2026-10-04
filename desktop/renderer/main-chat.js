@@ -40,6 +40,9 @@
     const list = document.createElement('div'); list.className = 'chat-list'; list.id = 'liveChatList'; list.hidden = true; list.style.display = 'none'; sample.after(list);
     let busy = false, started = false, failed = false, example = false, confirmed = '', title = '', loading = 0;
     const selectors = [], statuses = [];
+    const homeStop = document.getElementById('btnStop').cloneNode(true); homeStop.id = 'btnStopHome';
+    homeStop.onclick = () => { if (busy) void api.stopChat(); };
+    document.querySelector('#sendHome').before(homeStop);
     for (const id of ['taHome', 'taChat']) {
       const input = document.getElementById(id), row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap';
@@ -52,13 +55,21 @@
       select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; void updateDestination(); };
     }
     function status(text) { statuses.forEach(s => { s.textContent = text; }); }
+    api?.onChatActivity?.(e => { if (busy) status(e.type === 'model' ? '正在请求模型…' : `工具 ${e.name || ''} · ${e.type === 'tool-start' ? '执行中' : e.isError ? '失败/拒绝' : '完成'}`); });
+    function toolMessage(item) {
+      const body = message('工具 · ' + (item.name || item.callId || ''), '');
+      const details = document.createElement('details'), summary = document.createElement('summary'), pre = document.createElement('pre');
+      summary.textContent = item.kind === 'call' ? '请求参数' : item.isError ? '失败/拒绝' : '执行结果';
+      pre.textContent = String(item.kind === 'call' ? item.arguments : item.content).slice(0, 65536);
+      pre.style.cssText = 'white-space:pre-wrap;max-height:260px;overflow:auto'; details.append(summary, pre); body.append(details);
+    }
     async function updateDestination() {
       const value = selectors[0].value;
       const r = await api.providerSettings('list');
       if (!r.ok || selectors[0].value !== value) return;
       const chosen = value ? JSON.parse(value) : null;
       const provider = r.data.providers.find(p => p.id === chosen?.id);
-      selectors.forEach(s => { s.title = provider ? '发送到 ' + provider.baseUrl + ' · 消息会发送到此服务并保存本地历史；可能计费，不自动上传工作区文件' : '使用 CLI / 环境模型配置'; });
+      selectors.forEach(s => { s.title = provider ? '发送到 ' + provider.baseUrl + ' · 消息及已启用工具读取的文件会发送到此服务并保存本地历史；可能计费' : '使用 CLI / 环境模型配置'; });
     }
     async function open(id) {
       if (busy) return false;
@@ -69,8 +80,11 @@
         const value = saved.selection ? JSON.stringify(saved.selection) : '';
         selectors.forEach(s => { s.value = value; });
         list.replaceChildren();
+        const calls = new Map();
         for (const m of saved.messages) {
-          if (!['user', 'assistant'].includes(m.role)) continue;
+          if (m.toolCalls) for (const c of m.toolCalls) { calls.set(c.id, c.name); toolMessage({kind:'call',callId:c.id,name:c.name,arguments:c.arguments}); }
+          if (m.role === 'tool') { toolMessage({kind:'result',callId:m.toolCallId,name:calls.get(m.toolCallId),content:m.content,isError:m.isError}); continue; }
+          if (!['user', 'assistant'].includes(m.role) || (!m.content && m.toolCalls?.length)) continue;
           const n = message(m.role === 'user' ? '你' : 'Personal Agent', m.content);
           if (m.role === 'assistant') window.renderReply(n, m.content);
         }
@@ -83,6 +97,7 @@
       selectors.forEach(s => { s.disabled = busy || started; });
       for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy;
       document.getElementById('btnNew').disabled = busy;
+      document.getElementById('btnStop').disabled = !busy; homeStop.disabled = !busy;
     }
     async function load() {
       const sequence = ++loading;
@@ -135,13 +150,16 @@
         if (!started) { list.replaceChildren(); title = text.slice(0, 24); }
         showLive(); message('你', text); reply = message('Personal Agent', '正在回复…');
         input.value = ''; input.style.height = 'auto';
-        status('请求中 · 最长 60 秒 · 暂不支持停止'); sent = true; started = true;
+        status('请求中 · 文件工具模式最长 180 秒 · 可以停止'); sent = true; started = true;
         const result = await api.sendChat(text, preview.token);
-        window.renderReply(reply, result.content); status((restarted ? '已自动新建会话 · ' : '') + (failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具'));
+        if (result.transcript?.length) { reply.closest('.msg').remove(); result.transcript.forEach(toolMessage); reply = message('Personal Agent', ''); }
+        if (result.error) failed = true;
+        window.renderReply(reply, result.error || result.content);
+        status(result.error ? '请求未完成 · 已执行操作不会自动回滚；查看工具记录和工作区' : (restarted ? '已自动新建会话 · ' : '') + '已保存 · 可继续追问');
         document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
         await refreshSessions().catch(() => {});
       } catch (_) {
-        if (sent) { failed = true; if (reply) reply.textContent = '请求失败，可能已计费或保存部分日志。请检查历史；继续输入将自动新建会话，不会自动重试。'; }
+        if (sent) { failed = true; if (reply) reply.textContent = '请求失败或已停止，可能已计费或执行部分工具。请检查历史和文件；不会自动重试或回滚，继续输入将新建会话。'; }
         status(sent ? '请求失败，历史保留；继续输入将自动新建会话' : '模型配置不可用或已变化，请检查设置后重试');
         if (sent) await refreshSessions().catch(() => {});
       } finally { busy = false; lock(); }
@@ -162,6 +180,6 @@
       if (started) { failed = true; status('配置已更新，请新建任务'); } else if (!busy) { confirmed = ''; void load(); }
     });
     void load();
-    return { send, reset, open, isBusy: () => busy, showExample() { example = true; status('原型示例 · 请新建任务开始真实聊天'); sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none'; }, stop() { status(busy ? '暂不支持停止；请求最长等待 60 秒，关闭界面不会取消' : '当前没有正在运行的请求'); } };
+    return { send, reset, open, isBusy: () => busy, showExample() { example = true; status('原型示例 · 请新建任务开始真实聊天'); sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none'; }, stop() { if (!busy) { status('当前没有正在运行的请求'); return; } status('正在停止；已执行文件变更不会自动回滚'); void api.stopChat().catch(() => status('停止失败，请等待请求超时')); } };
   };
 })();

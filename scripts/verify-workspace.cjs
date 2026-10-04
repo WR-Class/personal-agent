@@ -26,7 +26,7 @@ const { spawn } = require('node:child_process');
     await ws('Runtime.evaluate',{expression:`window.__grant=null;personalAgentDesktop.workspace('permission',{permission:'full'}).then(r=>window.__grant=r)`});
     await until(`!!document.querySelector('.confirm-scrim.is-on')`);
     assert.match(await evaluate(ws,`document.querySelector('.confirm-card h3').textContent`),/允许完整工作区权限/);
-    assert.match(await evaluate(ws,`document.querySelector('.confirm-detail').textContent`),/模型仍无工具/);
+    assert.match(await evaluate(ws,`document.querySelector('.confirm-detail').textContent`),/模型不能执行命令/);
     const confirmShot=await ws('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(root,'.test-artifacts','workspace-confirm.png'),Buffer.from(confirmShot.data,'base64'));
     await evaluate(ws,`document.querySelectorAll('.confirm-actions button')[0].click()`);
     await until(`window.__grant!==null`);assert.equal((await evaluate(ws,`window.__grant`)).ok,false,'cancel must deny escalation');

@@ -21,11 +21,11 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   class Window {
     webContents: any;
     constructor() {
-      this.webContents = { undo() { editActions.push('undo'); }, copy() { editActions.push('copy'); }, mainFrame: { url: pathToFileURL(path.join(desktop, 'renderer/index.html')).href }, setWindowOpenHandler() {}, on() {} };
+      this.webContents = { undo() { editActions.push('undo'); }, copy() { editActions.push('copy'); }, mainFrame: { url: pathToFileURL(path.join(desktop, 'renderer/index.html')).href }, setWindowOpenHandler() {}, on() {}, removeListener() {} };
       windows.push(this);
     }
     static fromWebContents(sender: any) { return windows.find(w => w.webContents === sender); }
-    once() {} on() {} loadFile() { return Promise.resolve(); }
+    once() {} on() {} removeListener() {} loadFile() { return Promise.resolve(); }
     minimize() {} isMaximized() { return false; }
   }
   const electron = {
@@ -44,8 +44,8 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   // Isolate IPC lifecycle from IO; desktop-model.test.ts covers real HTTP/storage.
   const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8').replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)');
   runInNewContext(source, {
-    modelModule, Buffer, Date: { now: () => now },
-    require: (name: string) => name === './chat-index.cjs' ? { find() {}, remember: async () => {}, markFailed: async () => {} } : name === './workspace.cjs' ? { installWorkspace() { return { getRoot: () => null }; } } : name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
+    modelModule, Buffer, AbortController, Date: { now: () => now },
+    require: (name: string) => name === './chat-index.cjs' ? { find() {}, remember: async () => {}, markFailed: async () => {} } : name === './workspace.cjs' ? { installWorkspace() { return { getRoot: () => null, modelContext: () => undefined }; } } : name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
     __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
   await Promise.resolve();
@@ -151,6 +151,6 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[11], ['desktop:edit', 'copy']);
     await api.desktopCopy('text', 'ignored');
     assert.deepEqual(calls[12], ['desktop:copy', 'text']);
-    assert.deepEqual(Object.keys(api).sort(), ['desktopAction', 'desktopCopy', 'getInfo', 'getProvider', 'listChats', 'listSessions', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
+    assert.deepEqual(Object.keys(api).sort(), ['desktopAction', 'desktopCopy', 'getInfo', 'getProvider', 'listChats', 'listSessions', 'onChatActivity', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'stopChat', 'windowAction', 'workspace']);
   }
 });

@@ -9,14 +9,22 @@ const { spawn } = require('node:child_process');
   await fs.mkdir(artifacts, { recursive: true });
   const home = await fs.mkdtemp(path.join(artifacts, 'provider-ui-'));
   let gets = 0, sends = 0, ws, child;
-  const prompts = []; let failChat = false;
+  const prompts = []; let failChat = false, toolScenario = null, toolStep = 0;
   const server = http.createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer local-fixture-only');
     res.setHeader('Content-Type', 'application/json');
     if (req.url === '/v1/models' && req.method === 'GET') { gets++; res.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return; }
     assert.equal(req.url, '/v1/chat/completions');
     let body = ''; for await (const c of req) body += c;
-    const p = JSON.parse(body); assert.equal(p.model, 'fixture-model'); assert.ok(!p.tools?.length); sends++;
+    const p = JSON.parse(body); assert.equal(p.model, 'fixture-model'); sends++;
+    if (toolScenario) {
+      assert.ok(p.tools.some(t=>t.function.name==='read_file'));
+      assert.ok(!p.tools.some(t=>t.function.name==='run_command'));
+      const call = toolScenario[toolStep++];
+      const message = call ? {role:'assistant',content:null,tool_calls:[{id:'tool-'+toolStep,type:'function',function:{name:call.name,arguments:JSON.stringify(call.args)}}]} : {role:'assistant',content:'MODEL FILE TOOLS DONE'};
+      res.end(JSON.stringify({model:'fixture-model',choices:[{message,finish_reason:call?'tool_calls':'stop'}]})); return;
+    }
+    assert.ok(!p.tools?.length);
     prompts.push(p.messages);
     if (failChat) { res.writeHead(503); res.end('{}'); return; }
     res.end(JSON.stringify({ model: 'fixture-model', choices: [{ message: { role: 'assistant', content: 'LOCAL SETTINGS MOCK ANSWER' }, finish_reason: 'stop' }] }));
@@ -196,6 +204,40 @@ const { spawn } = require('node:child_process');
     assert.equal((await evaluate(`personalAgentDesktop.listChats()`)).sessions.length,3);
     console.log('PASS main chat: context, fresh-session isolation, persisted sessions, failure recovery in new session; POST=', sends);
     await require('./ui-wiring-checks.cjs')({evaluate,until,cdp,alphaId:alpha.id});
+    // Model tools operate on a separate disposable workspace, never the agent home.
+    const toolsRoot = await fs.mkdtemp(path.join(artifacts,'model-workspace-'));
+    await fs.writeFile(path.join(toolsRoot,'input.txt'),'WORKSPACE TOOL INPUT');
+    await chatIndex.remember(home,{...chatIndex.find(home,alpha.id),workspaceRoot:await fs.realpath(toolsRoot)});
+    await evaluate(`document.querySelector('[data-session="${alpha.id}"]').click()`);
+    await until(`!document.querySelector('#btnNew').disabled&&document.querySelector('#liveChatList').textContent.includes('resume ALPHA')`);
+    async function toolsMode(mode) {
+      await evaluate(`window.__modeResult=null;void personalAgentDesktop.workspace('model-tools',{mode:${JSON.stringify(mode)}}).then(r=>window.__modeResult=r)`);
+      if(mode!=='off') { await until(`document.querySelector('.confirm-scrim').classList.contains('is-on')`); await evaluate(`document.querySelector('.confirm-yes').click()`); }
+      await until(`window.__modeResult!==null`); assert.equal((await evaluate(`window.__modeResult`)).ok,true);
+    }
+    async function toolSend(text, scenario, answer) {
+      toolScenario=scenario;toolStep=0;
+      await evaluate(`document.querySelector('#taChat').value=${JSON.stringify(text)};document.querySelector('#sendChat').click()`);
+      if(answer!==undefined){await until(`document.querySelector('.confirm-scrim').classList.contains('is-on')`);await evaluate(answer==='stop'?`personalAgentDesktop.stopChat()`:answer?`document.querySelector('.confirm-yes').click()`:`document.querySelector('.confirm-actions button').click()`);}
+      await until(`!document.querySelector('#btnNew').disabled`);toolScenario=null;
+    }
+    await toolsMode('read');
+    await toolSend('read file tool acceptance',[{name:'read_file',args:{path:'input.txt'}},{name:'create_file',args:{path:'forbidden.txt',content:'not allowed'}}]);
+    assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('WORKSPACE TOOL INPUT')`));
+    await assert.rejects(fs.stat(path.join(toolsRoot,'forbidden.txt')),{code:'ENOENT'});
+    await toolsMode('write');
+    await toolSend('create approved file',[{name:'create_file',args:{path:'approved.txt',content:'approved text'}}],true);
+    assert.equal(await fs.readFile(path.join(toolsRoot,'approved.txt'),'utf8'),'approved text');
+    await toolSend('cancel a write',[{name:'edit_file',args:{path:'approved.txt',content:'cancelled text'}}],false);
+    assert.equal(await fs.readFile(path.join(toolsRoot,'approved.txt'),'utf8'),'approved text');
+    await toolSend('stop pending write',[{name:'edit_file',args:{path:'approved.txt',content:'stopped text'}}],'stop');
+    assert.equal(await fs.readFile(path.join(toolsRoot,'approved.txt'),'utf8'),'approved text');
+    assert.equal(await evaluate(`document.querySelector('.confirm-scrim').classList.contains('is-on')`),false);
+    await evaluate(`document.querySelector('[data-session="${alpha.id}"]').click()`);
+    await until(`!document.querySelector('#btnNew').disabled`);
+    assert.equal((await evaluate(`personalAgentDesktop.workspace('state')`)).data.modelTools,'off');
+    assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('WORKSPACE TOOL INPUT')`),'history retains actual tool output');
+    console.log('PASS model file tools: opt-in, read, forged write denial, approved create, declined edit, stop pending approval, persisted tool results');
     console.log('Screenshots:', path.join(artifacts, 'provider-settings.png'), path.join(artifacts, 'main-chat.png'));
     // Closing the renderer destroys its CDP context before Runtime.evaluate replies.
     ws.send(JSON.stringify({ id: ++id, method: 'Runtime.evaluate', params: { expression: `personalAgentDesktop.windowAction('close')` } }));

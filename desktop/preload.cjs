@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld("personalAgentDesktop", {
   sendModel(input, token) { return ipcRenderer.invoke("runtime:model", input, token); },
   sendChat(input, token) { return ipcRenderer.invoke('chat:send', input, token); },
   resetChat() { return ipcRenderer.invoke('chat:reset'); },
+  stopChat() { return ipcRenderer.invoke('chat:stop'); },
+  onChatActivity(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('chat:activity', listener);
+    return () => ipcRenderer.removeListener('chat:activity', listener);
+  },
   listChats() { return ipcRenderer.invoke('chat:list'); },
   openChat(id) { return ipcRenderer.invoke('chat:open', id); },
   readHistory(id) { return ipcRenderer.invoke("sessions:history", id); },

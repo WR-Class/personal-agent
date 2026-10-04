@@ -9,8 +9,8 @@ export async function desktopHistory(home: string, id: unknown) {
   if (!events.length) throw new Error('session missing');
   const messages = events.filter(e => e.kind === 'message');
   return { id, total: messages.length, truncated: messages.length > 200,
-    messages: messages.slice(-200).map(e => ({ role: e.message.role, content: e.message.content,
-      toolCalls: e.message.toolCalls?.map(call => ({ name: call.name, arguments: call.arguments })) })) };
+    messages: messages.slice(-200).map(e => ({ role: e.message.role, content: e.message.content, toolCallId: e.message.toolCallId, isError: e.isError,
+      toolCalls: e.message.toolCalls?.map(call => ({ id: call.id, name: call.name, arguments: call.arguments })) })) };
 }
 
 /** Same home and ID format as CLI; never reads provider config or message bodies. */

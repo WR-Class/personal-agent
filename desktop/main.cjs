@@ -98,6 +98,12 @@ let providerSequence = 0;
 // ponytail: one global model request; use per-window locks only if parallel turns are needed.
 let modelBusy = false;
 const conversations = new WeakMap();
+const chatRuns = new WeakMap();
+ipcMain.handle('chat:stop', event => {
+  trustedWindow(event);
+  const run = chatRuns.get(event.sender); run?.abort();
+  return { ok: true, stopped: !!run };
+});
 ipcMain.handle('chat:list', async event => {
   trustedWindow(event);
   const indexed = chatIndex.list(sessionHome);
@@ -156,20 +162,36 @@ ipcMain.handle('chat:send', async (event, input, token) => {
     conversations.set(event.sender, conversation);
   }
   providerPreviews.delete(event.sender); modelBusy = true;
+  const controller = new AbortController(), win = trustedWindow(event);
+  chatRuns.set(event.sender, controller);
+  const abort = () => controller.abort();
+  const navigating = (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace) abort(); };
+  win.once('closed', abort); event.sender.on('did-start-navigation', navigating);
   try {
+    const toolOptions = workspace.modelContext(win, controller.signal);
     const existing = chatIndex.find(sessionHome, conversation.id);
     await chatIndex.remember(sessionHome, { id: conversation.id, identity, title: existing?.title || input.trim().slice(0, 60), workspaceRoot: existing ? existing.workspaceRoot : workspace.getRoot(trustedWindow(event)), failed: true });
     trustedWindow(event);
     const { desktopModelSend } = await import('../src/desktop-model.ts');
     const selected = preview.providerId ? await (await providers()).resolve(preview.providerId, preview.model, preview.revision) : undefined;
-    trustedWindow(event);
-    const result = await desktopModelSend(sessionHome, input, preview, process.env, selected, conversation.id);
-    await chatIndex.markFailed(sessionHome, conversation.id, false);
+    trustedWindow(event); controller.signal.throwIfAborted();
+    if (toolOptions) {
+      if (existing && existing.workspaceRoot !== toolOptions.workspaceRoot) throw Error('会话工作区已变化，请新建任务');
+      const check = toolOptions.check;
+      toolOptions.check = () => { trustedWindow(event); if (chatRuns.get(event.sender) !== controller) throw Error('请求已过期'); check(); };
+      toolOptions.onActivity = activity => { if (!controller.signal.aborted) { trustedWindow(event); event.sender.send('chat:activity', activity); } };
+    }
+    const result = await desktopModelSend(sessionHome, input, preview, process.env, selected, conversation.id, toolOptions, controller.signal);
+    conversation.failed = !!result.error;
+    await chatIndex.markFailed(sessionHome, conversation.id, conversation.failed);
     trustedWindow(event); return result;
   } catch (_) {
     conversation.failed = true;
-    throw new Error('请求失败，可能已计费或保存部分日志；请检查历史后新建任务，不会自动重试');
-  } finally { modelBusy = false; }
+    throw new Error('请求失败或已停止，可能已计费或执行部分工具；请检查历史和文件，不会自动重试或回滚');
+  } finally {
+    win.removeListener('closed', abort); event.sender.removeListener('did-start-navigation', navigating);
+    chatRuns.delete(event.sender); modelBusy = false;
+  }
 });
 ipcMain.handle('runtime:provider', async (event, selection) => {
   trustedWindow(event);

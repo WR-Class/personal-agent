@@ -71,7 +71,7 @@ test('desktop removes demo panels but retains navigation, own branding and sandb
   assert.match(js, /personal-agent\.ui\.v1/);
   assert.match(js, /listChats\(\)/);
   assert.match(js, /未实现，不保存或执行此选项/);
-  assert.match(js, /模型工具仍未接线|不向模型开放工具/);
+  assert.match(js, /模型命令未接线/);
   assert.match(main, /sandbox: true/);
   assert.match(main, /contextIsolation: true, nodeIntegration: false/);
 });

@@ -144,7 +144,7 @@
     var bar = m.parentElement;
     $$('.chip-btn[data-mode]', bar).forEach(function(x){ x.classList.remove('is-on'); });
     m.classList.add('is-on');
-    toast('当前仅文字问答；计划模式未实现；手动工具权限在输入框下方');
+    toast('计划模式未实现；模型文件工具与手动终端权限在输入框下方分别控制');
   });
 
   /* ===================== 侧栏交互 ===================== */
@@ -322,7 +322,7 @@
       + sRow('字体大小', '调整界面与内容的文字大小。', seg(['小','默认','大'], ['小','默认','大'][fontLevel + 1]))
       + sRow('简洁模式', '隐藏首页装饰，缩小会话列表间距；不隐藏消息。', '<button class="set-btn" id="compactToggle" aria-pressed="' + prefs.compact + '">' + (prefs.compact ? '已开启' : '已关闭') + '</button>')
       + sRow('发送消息', 'Shift+Enter 始终换行；输入法组合期间不发送。', seg(['Enter','Ctrl+Enter'], prefs.send))
-      + sSec('权限') + sRow('手动工作区工具', '权限在输入框下方控制；不是 OS 沙箱，不向模型开放工具。', '<button class="set-btn" data-permissions>查看权限入口</button>')
+      + sSec('权限') + sRow('手动工作区工具', '手动终端权限与模型文件工具分开控制；不是 OS 沙箱。', '<button class="set-btn" data-permissions>查看权限入口</button>')
       + sSec('尚未实现')
       + ['显示语言','客户端通知','桌面通知','通知提示音','专家与技能推荐','自动安装可信技能','开机自启','自动更新','链接打开方式','网络代理','锁屏远程','系统缓存目录','任务保留期限','默认工作空间存储路径','体验优化计划'].map(function(label){ return sRow(label, '未实现，不保存或执行此选项。', '<button class="set-btn" disabled>未实现</button>'); }).join('');
   };
@@ -341,7 +341,7 @@
 
   PANELS.securityCenter = function(){
     return sSec('真实安全边界')
-      + sRow('模型会话', '文字会发送到所选模型服务并保存本地历史；不承诺自动脱敏，不自动上传工作区文件。', txt('文字问答 · 模型工具未接线'))
+      + sRow('模型会话', '消息和已启用工具读取的文件会发送到所选模型服务并保存历史；不承诺自动脱敏。模型文件工具默认关闭，写入逐次确认。', txt('文件工具可选 · 模型命令未接线'))
       + sRow('手动工具权限', '只读禁止命令；完全访问允许手动命令访问工作区外，不是 OS 沙箱。权限与确认由工作区工具管理。', '<button class="set-btn" data-permissions>查看权限入口</button>')
       + sRow('渲染器隔离', 'Electron 渲染器隔离与本地命令权限不同；实际隔离状态见关于页。', txt('以运行信息为准'))
       + sRow('数据脱敏 / 安全审计面板', '未实现，不提供虚假开关或安全保证。', '<button class="set-btn" disabled>未实现</button>');
@@ -390,7 +390,7 @@
       output.textContent = info ? JSON.stringify(info, null, 2) : '浏览器预览：无桌面运行信息';
     } catch (_) { if (sequence === settingsSequence) output.textContent = '桌面运行信息读取失败，请重试'; }
   }
-  PANELS.helpFeedback = PANELS.getHelp = function(){ return sSec('桌面实际运行信息') + '<p>模型设置配置文字问答；项目 / 更多 → 我的文件打开手动工作区工具。场景仅改变输入提示。模型工具、停止生成、语音、发布分享、账号与云服务未实现。</p>'; };
+  PANELS.helpFeedback = PANELS.getHelp = function(){ return sSec('桌面实际运行信息') + '<p>模型设置配置文字问答；项目 / 更多 → 我的文件打开手动工作区工具。场景仅改变输入提示。模型文件工具需在输入框下方启用，写入逐项确认；支持停止当前请求但不会回滚已执行操作。模型命令、MCP、技能、语音、发布分享、账号与云服务未实现。</p>'; };
   function renderSettings(id){
     const sequence = ++settingsSequence;
     if (providerSettingsView) { providerSettingsView.destroy(); providerSettingsView = null; }
@@ -719,7 +719,7 @@
     }
     try {
       var info = await bridge.getInfo();
-      $('#sbConnection').textContent = '文字聊天已就绪 · Agent 模型工具未接线';
+      $('#sbConnection').textContent = '聊天已就绪 · 模型文件工具需显式启用';
       $('#sbIsolation').textContent = info.sandboxed && info.contextIsolated ? '渲染器已隔离 · 手动工具使用工作区权限' : '警告：渲染器隔离未启用';
       if (showVersion) openSettings('helpFeedback');
     } catch (_) {

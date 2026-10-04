@@ -91,18 +91,36 @@ function runCommand(state, command) {
 }
 function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow, onRootChosen, isChatBusy }) {
   const states = new WeakMap();
-  const snapshot = state => ({ root: state.root, permission: state.permission });
+  const snapshot = state => ({ root: state.root, permission: state.permission, modelTools: state.modelTools });
   const api = {
     getRoot(win) { return win && states.has(win) ? states.get(win).root : null; },
+    modelContext(win, signal) {
+      const state = getState(win), generation = state.generation, root = state.root, mode = state.modelTools;
+      if (state.busy || state.child) fail('请等待工作区操作完成');
+      if (mode === 'off') return undefined;
+      const check = () => {
+        signal?.throwIfAborted();
+        if (win.isDestroyed() || state.generation !== generation || state.root !== root || state.modelTools !== mode) fail('工作区模型权限已变化');
+        resolveWorkspacePath(root);
+      };
+      check();
+      return { workspaceRoot: root, writable: mode === 'write', signal, check,
+        approve: async (prompt, toolSignal) => {
+          check(); toolSignal?.throwIfAborted();
+          const ok = await confirmWithUser(win, state, { title: '确认模型写入', message: '仅批准下列这一次文件变更。拒绝后模型会收到拒绝结果。', detail: `工作区：${root}\n\n${prompt}`, confirm: '批准本次写入' }, toolSignal || signal);
+          check(); toolSignal?.throwIfAborted(); return ok;
+        },
+      };
+    },
     /** Only a root the host already recorded; always re-entered as read-only. */
     adoptRoot(win, root) {
       if (!win || win.isDestroyed()) fail('窗口不可用');
       const state = getState(win);
       if (state.busy || state.child) fail('正在处理工作区操作，请稍后重试');
-      if (root === null) { state.root = null; state.permission = 'read'; return snapshot(state); }
+      if (root === null) { state.root = null; state.permission = 'read'; state.modelTools = 'off'; return snapshot(state); }
       const real = fs.realpathSync(root);
       if (real !== root || fs.lstatSync(root).isSymbolicLink() || !fs.statSync(real).isDirectory() || real.split(/[\\/]/).some(sensitiveName)) fail('目录不可用或受保护');
-      state.root = real; state.permission = 'read';
+      state.root = real; state.permission = 'read'; state.modelTools = 'off';
       return snapshot(state);
     },
   };
@@ -115,21 +133,23 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
   function getState(win) {
     let state = states.get(win);
     if (state) return state;
-    state = { root: null, permission: 'read', view: null, child: null, busy: false, generation: 0, pendingConfirm: null };
+    state = { root: null, permission: 'read', modelTools: 'off', view: null, child: null, busy: false, generation: 0, pendingConfirm: null };
     states.set(win, state);
     const hide = () => state.view?.setVisible(false);
-    win.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => { if (isMainFrame && !inPlace) { state.generation++; hide(); } });
+    win.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => { if (isMainFrame && !inPlace) { state.generation++; state.modelTools = 'off'; state.pendingConfirm?.settle(false); hide(); } });
     win.on('resize', hide);
     win.on('closed', () => { state.generation++; closeBrowser(win, state); stopChild(state.child); state.pendingConfirm?.settle(false); });
     return state;
   }
   /* 弹窗由渲染进程按客户端设计语言绘制；主进程只认自己签发的一次性确认号，120 秒无应答视为取消。 */
-  function confirmWithUser(win, state, options) {
-    if (state.pendingConfirm) return Promise.resolve(false);
+  function confirmWithUser(win, state, options, signal) {
+    if (state.pendingConfirm || signal?.aborted) return Promise.resolve(false);
     return new Promise(resolve => {
       const pending = { id: randomUUID(), settle: null };
       const timer = setTimeout(() => pending.settle(false), 120000);
-      pending.settle = ok => { clearTimeout(timer); if (state.pendingConfirm === pending) state.pendingConfirm = null; resolve(ok === true); };
+      const abort = () => pending.settle(false);
+      pending.settle = ok => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (state.pendingConfirm === pending) state.pendingConfirm = null; if (!win.isDestroyed()) win.webContents.send('workspace:confirm', { id: pending.id, dismissed: true }); resolve(ok === true); };
+      signal?.addEventListener('abort', abort, { once: true });
       state.pendingConfirm = pending;
       win.webContents.send('workspace:confirm', { id: pending.id, title: options.title, message: options.message, detail: options.detail, confirm: options.confirm });
     });
@@ -163,7 +183,7 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
       const generation = state.generation;
       const check = () => { if (trustedWindow(event) !== win || win.isDestroyed() || state.generation !== generation) fail('窗口已变化，请重试'); };
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('操作参数无效');
-      if (['choose', 'permission', 'terminal'].includes(action)) {
+      if (['choose', 'permission', 'terminal', 'model-tools'].includes(action)) {
         if (state.busy || state.child) fail('正在处理工作区操作，请稍后重试');
         state.busy = true; locked = true;
       }
@@ -178,14 +198,25 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
             if (!fs.statSync(root).isDirectory() || root.split(/[\\/]/).some(sensitiveName)) fail('不能选择受保护目录');
             if (isChatBusy?.()) fail('请等待当前消息完成后切换工作区');
             await onRootChosen?.(root); check();
-            state.root = root; state.permission = 'read';
+            state.root = root; state.permission = 'read'; state.modelTools = 'off';
           }
           data = snapshot(state); break;
+        }
+        case 'model-tools': {
+          if (isChatBusy?.()) fail('请等待当前消息完成后更改模型工具权限');
+          if (!['off', 'read', 'write'].includes(payload.mode)) fail('模型工具权限无效');
+          if (payload.mode !== 'off' && payload.mode !== state.modelTools) {
+            resolveWorkspacePath(state.root);
+            const ok = await confirmWithUser(win, state, { title: '启用模型文件工具？', message: '模型可以读取工作区文件，文件内容与工具结果将发送给你选择的模型服务并保存在本地历史。', detail: `工作区：${state.root}\n权限：${payload.mode === 'write' ? '读文件 + 创建/修改文件（每次单独确认）' : '只读文件和目录'}\n不提供模型命令、MCP或技能。敏感路径过滤无法识别普通文档中的所有秘密；请仅选择你愿意交给模型的目录。切换会话或刷新后会关闭。`, confirm: '启用文件工具' }); check();
+            if (!ok) fail('已取消模型工具授权');
+            if (isChatBusy?.()) fail('请求已开始，请稍后重试');
+          }
+          state.modelTools = payload.mode; data = snapshot(state); break;
         }
         case 'permission': {
           if (!['read', 'full'].includes(payload.permission)) fail('权限必须为 read 或 full');
           if (payload.permission === 'full' && state.permission !== 'full') {
-            const ok = await confirmWithUser(win, state, { title: '允许完整工作区权限？', message: '命令将以当前用户权限运行，可访问工作区外的文件、网络及密钥。', detail: '这不是安全沙箱。每条命令仍须逐一确认；模型仍无工具，不能自行读文件或执行命令。仅确认你信任的命令。', confirm: '允许完整权限' }); check();
+            const ok = await confirmWithUser(win, state, { title: '允许完整工作区权限？', message: '命令将以当前用户权限运行，可访问工作区外的文件、网络及密钥。', detail: '这不是安全沙箱。每条命令仍须逐一确认；这是手动终端权限；模型文件工具须另外启用，模型不能执行命令。仅确认你信任的命令。', confirm: '允许完整权限' }); check();
             if (!ok) fail('已取消权限变更');
           }
           state.permission = payload.permission; data = snapshot(state); break;
@@ -221,7 +252,7 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
           const command = payload.command;
           if (typeof command !== 'string' || !command.trim() || command.length > 8192 || command.includes('\0')) fail('命令须为 1–8192 字符');
           resolveWorkspacePath(state.root);
-          const ok = await confirmWithUser(win, state, { title: '确认执行命令', message: '以当前用户权限执行下列命令（可访问工作区外）？', detail: `工作目录：${state.root}\n\n${command}\n\n单次非交互进程；30 秒超时，输出最多 128 KiB。模型仍无工具。`, confirm: '执行命令' }); check();
+          const ok = await confirmWithUser(win, state, { title: '确认执行命令', message: '以当前用户权限执行下列命令（可访问工作区外）？', detail: `工作目录：${state.root}\n\n${command}\n\n单次非交互进程；30 秒超时，输出最多 128 KiB。此命令由用户手动运行，不开放给模型。`, confirm: '执行命令' }); check();
           if (!ok) fail('已取消命令');
           resolveWorkspacePath(state.root); data = await runCommand(state, command); break;
         }

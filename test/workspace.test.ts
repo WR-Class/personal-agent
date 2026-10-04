@@ -54,7 +54,7 @@ function harness(root: string) {
   const confirms: any[] = []; const views: any[] = []; const sessions: any[] = [];
   const makeWindow = () => {
     const win: any = new EventEmitter(); win.webContents = new EventEmitter();
-    win.webContents.send = (channel: string, payload: any) => { if (channel === 'workspace:confirm') confirms.push(payload); };
+    win.webContents.send = (channel: string, payload: any) => { if (channel === 'workspace:confirm' && !payload.dismissed) confirms.push(payload); };
     win.isDestroyed = () => false; win.getContentSize = () => [800, 600];
     win.contentView = { addChildView() {}, removeChildView() {} }; return win;
   };
@@ -95,7 +95,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     fs.writeFileSync(path.join(fixture, 'binary.bin'), Buffer.from([0, 1, 2]));
     const h = harness(fixture);
     assert.equal((await h.call('state', {}, {} as any)).ok, false);
-    assert.deepEqual((await h.call('state')).data, { root: null, permission: 'read' });
+    assert.deepEqual((await h.call('state')).data, { root: null, permission: 'read', modelTools: 'off' });
     assert.equal((await h.call('terminal', { command: 'echo no' })).ok, false);
     assert.equal((await h.call('choose')).data.root, fs.realpathSync(fixture));
     assert.equal((await h.call('state', {}, h.second)).data.root, null);
@@ -106,7 +106,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     granting = h.call('permission', { permission: 'full' });
     await h.answer(true);
     assert.equal((await granting).data.permission, 'full');
-    assert.match(h.confirms[0].message, /当前用户权限.*工作区外/); assert.match(h.confirms[0].detail, /模型仍无工具/);
+    assert.match(h.confirms[0].message, /当前用户权限.*工作区外/); assert.match(h.confirms[0].detail, /模型不能执行命令/);
     assert.equal((await h.call('read', { relative: 'hello.txt' })).data.content, 'hello');
     const large = (await h.call('read', { relative: 'large.txt' })).data;
     assert.equal(large.content.length, 256 * 1024); assert.equal(large.truncated, true);
@@ -121,7 +121,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     assert.ok(h.roots.includes(fs.realpathSync(fixture)), 'native picker persists canonical root through host callback');
     const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
     assert.equal(h.workspaceApi.adoptRoot(h.win, fixture).permission, 'read');
-    assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'read' });
+    assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'read', modelTools: 'off' });
   } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
 });
 
@@ -142,6 +142,26 @@ test('confirmed terminal runs one shell command with bounded output and no inher
     assert.equal(large.ok, true); assert.equal(large.data.truncated, true);
     assert.ok(Buffer.byteLength(large.data.output) <= 128 * 1024);
   } finally { delete process.env.WORKSPACE_TEST_SECRET; }
+});
+
+test('model file permissions are opt-in, root-bound, revoked on navigation and cancellable', async () => {
+  const root = fs.realpathSync(os.tmpdir()), h = harness(root);
+  await h.call('choose');
+  assert.equal(h.workspaceApi.modelContext(h.win), undefined);
+  let enabling = h.call('model-tools', {mode:'write'}); await h.answer(false);
+  assert.equal((await enabling).ok, false);
+  enabling = h.call('model-tools', {mode:'write'}); await h.answer(true); await enabling;
+  const controller = new AbortController();
+  const context = h.workspaceApi.modelContext(h.win, controller.signal);
+  assert.equal(context.workspaceRoot, root); assert.equal(context.writable, true);
+  const approval = context.approve('create one.txt', controller.signal);
+  const rejected = assert.rejects(approval, /abort/i); controller.abort(); await rejected;
+  const fresh = h.workspaceApi.modelContext(h.win);
+  const pending = fresh.approve('create two.txt');
+  const navigated = assert.rejects(pending, /变化/);
+  h.win.webContents.emit('did-start-navigation', {}, 'reload', false, true); await navigated;
+  assert.equal((await h.call('state')).data.modelTools, 'off');
+  assert.throws(() => fresh.check(), /变化/);
 });
 
 test('browser uses ephemeral isolated session, denies unsafe navigation, hides on shell reload and closes', async () => {
