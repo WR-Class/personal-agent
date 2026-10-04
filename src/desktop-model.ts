@@ -16,6 +16,7 @@ export interface DesktopModelResult {
   model: string;
   transcript?: DesktopToolTranscript[];
   error?: string;
+  toolStatus?: { offered: string[]; requested: number; completed: number; failed: number };
 }
 function transcript(events: SessionEvent[]): DesktopToolTranscript[] {
   const names = new Map<string, string>();
@@ -61,7 +62,7 @@ export async function desktopModelSend(home: string, input: unknown, expected: {
   });
   if (!options) {
     const result = await runtime.send(input, signal);
-    return { id, content: result.reply.content, model: result.model };
+    return { id, content: result.reply.content, model: result.model, toolStatus: { offered: [], requested: 0, completed: 0, failed: 0 } };
   }
   // Main process serializes sends; this offset retains this attempt's real log even on failure.
   const before = (await store.read(id)).length;
@@ -76,5 +77,9 @@ export async function desktopModelSend(home: string, input: unknown, expected: {
   let tools: DesktopToolTranscript[] = [];
   try { tools = transcript((await store.read(id)).slice(before)); }
   catch { error = '工具日志读取失败；本轮执行结果可能不完整，请检查本地历史。不会自动重试。'; }
-  return { id, content, model, transcript: tools, ...(error ? { error } : {}) };
+  const toolStatus = { offered: capability!.tools.definitions().map(t => t.name),
+    requested: tools.filter(t => t.kind === 'call').length,
+    completed: tools.filter(t => t.kind === 'result' && !t.isError).length,
+    failed: tools.filter(t => t.kind === 'result' && t.isError).length };
+  return { id, content, model, transcript: tools, toolStatus, ...(error ? { error } : {}) };
 }

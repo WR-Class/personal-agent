@@ -80,12 +80,18 @@ async function providers() {
 let settingsBusy = false;
 ipcMain.handle('providers:settings', async (event, action, payload) => {
   trustedWindow(event);
-  if (!['list', 'save', 'delete', 'discover'].includes(action)) return { ok: false, error: '未知配置操作' };
+  if (!['list', 'save', 'delete', 'discover', 'test-tools'].includes(action)) return { ok: false, error: '未知配置操作' };
   if (action !== 'list' && settingsBusy) return { ok: false, error: '正在处理配置请求，请稍后重试' };
   if (action !== 'list') settingsBusy = true;
   try {
     const service = await providers(); trustedWindow(event);
-    const data = action === 'list' ? await service.list() : await service[action](payload);
+    let data;
+    if (action === 'test-tools') {
+      if (!payload || typeof payload.id !== 'string' || typeof payload.model !== 'string') throw Error('invalid selection');
+      const config = await service.resolve(payload.id, payload.model); trustedWindow(event);
+      const { probeDesktopTools } = await import('../src/desktop-tool-probe.ts');
+      data = await probeDesktopTools(config);
+    } else data = action === 'list' ? await service.list() : await service[action](payload);
     trustedWindow(event); return { ok: true, data };
   } catch (e) {
     const { ProviderError } = await import('../src/desktop-providers.ts');

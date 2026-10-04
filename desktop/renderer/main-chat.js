@@ -49,6 +49,16 @@
       const label = document.createElement('label'); label.textContent = '模型 '; label.htmlFor = id + 'Model';
       const select = document.createElement('select'); select.id = id + 'Model'; select.className = 'set-sel'; select.style.maxWidth = '100%'; label.append(select); row.append(label);
       const status = document.createElement('span'); status.setAttribute('role', 'status'); status.style.cssText = 'font-size:12px;color:var(--text-secondary)'; row.append(status);
+      const probe = document.createElement('button'); probe.type = 'button'; probe.textContent = '检测工具'; probe.title = '向当前模型发送一次合成工具请求，可能计费；不读取或上传项目文件';
+      probe.onclick = async () => {
+        if (busy) return;
+        const value = selectors[0].value;
+        if (!value) { status('请先在模型设置中保存并选择提供商'); return; }
+        probe.disabled = true; status('正在检测工具协议（合成请求，不读项目文件）…');
+        try { const r = await api.providerSettings('test-tools', JSON.parse(value)); status(r.ok ? r.data.detail + (r.data.response ? ' 回复：' + r.data.response : '') : r.error); }
+        catch { status('工具检测失败，请检查模型配置'); } finally { probe.disabled = false; }
+      };
+      row.append(probe);
       row.className = 'composer-model'; row.style.cssText = ''; status.className = 'composer-status';
       const composer = input.closest('.composer'); composer.querySelector('.send').before(row); composer.append(status);
       selectors.push(select); statuses.push(status); input.maxLength = 8192;
@@ -155,7 +165,9 @@
         if (result.transcript?.length) { reply.closest('.msg').remove(); result.transcript.forEach(toolMessage); reply = message('Personal Agent', ''); }
         if (result.error) failed = true;
         window.renderReply(reply, result.error || result.content);
-        status(result.error ? '请求未完成 · 已执行操作不会自动回滚；查看工具记录和工作区' : (restarted ? '已自动新建会话 · ' : '') + '已保存 · 可继续追问');
+        const evidence = result.toolStatus;
+        const toolNotice = !evidence?.offered.length ? '本次未提供模型工具；若需读取项目，请启用下方模型文件工具' : evidence.requested === 0 ? `本次已声明 ${evidence.offered.join('、')}，但模型未返回工具调用；没有读取项目文件。可点“检测工具”核对接口兼容性` : `工具请求 ${evidence.requested} 次 · 成功 ${evidence.completed} · 失败/拒绝 ${evidence.failed}`;
+        status(result.error ? '请求未完成 · 已执行操作不会自动回滚；查看工具记录和工作区' : (restarted ? '已自动新建会话 · ' : '') + '已保存 · ' + toolNotice);
         document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
         await refreshSessions().catch(() => {});
       } catch (_) {
