@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("personalAgentDesktop", {
   sendModel(input, token) { return ipcRenderer.invoke("runtime:model", input, token); },
   sendChat(input, token) { return ipcRenderer.invoke('chat:send', input, token); },
   resetChat() { return ipcRenderer.invoke('chat:reset'); },
+  listChats() { return ipcRenderer.invoke('chat:list'); },
+  openChat(id) { return ipcRenderer.invoke('chat:open', id); },
   readHistory(id) { return ipcRenderer.invoke("sessions:history", id); },
   async getInfo() {
     const info = await ipcRenderer.invoke("desktop:info");

@@ -1,0 +1,33 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdtempSync, readFileSync, writeFileSync, linkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+const require = createRequire(import.meta.url);
+const index = require('../desktop/chat-index.cjs');
+test('chat index persists workspace, title and pending state across module reload; concurrent writes retain sessions', async () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'chat-index-'));
+  await index.rememberWorkspace(home, home);
+  const ids = Array.from({length: 4}, () => 'desktop-chat-' + randomUUID());
+  await Promise.all(ids.map(id => index.remember(home, {id, title: '<script>not HTML</script>', identity: '[null,"https://example.test","m",null]', workspaceRoot: home, failed: true})));
+  assert.equal(index.list(home).sessions.length, 4);
+  assert.equal(index.find(home, ids[0]).failed, true);
+  await index.markFailed(home, ids[0], false);
+  delete require.cache[require.resolve('../desktop/chat-index.cjs')];
+  const fresh = require('../desktop/chat-index.cjs');
+  assert.equal(fresh.find(home, ids[0]).failed, false);
+  assert.deepEqual(fresh.list(home).workspaces, [home]);
+  assert.equal(fresh.find(home, ids[0]).workspaceRoot, home);
+});
+test('corrupt or linked chat index is rejected and never overwritten', async () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'chat-index-'));
+  const file = index.indexPath(home);
+  writeFileSync(file, '{broken');
+  await assert.rejects(index.rememberWorkspace(home, home));
+  assert.equal(readFileSync(file, 'utf8'), '{broken');
+  writeFileSync(file, JSON.stringify({version:1,workspaces:[],sessions:[]}));
+  linkSync(file, path.join(home, 'hard-link'));
+  await assert.rejects(index.rememberWorkspace(home, home), /unsafe/);
+});

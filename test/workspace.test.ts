@@ -70,7 +70,8 @@ function harness(root: string) {
     setVisible(visible: boolean) { this.visible = visible; }
     setBounds(bounds: any) { this.bounds = bounds; }
   }
-  installWorkspace({ ipcMain: { handle(channel: string, fn: any) { assert.equal(channel, 'workspace:action'); handler = fn; } },
+  const roots: string[] = [];
+  const workspaceApi = installWorkspace({ onRootChosen: async (root: string) => { roots.push(root); }, ipcMain: { handle(channel: string, fn: any) { assert.equal(channel, 'workspace:action'); handler = fn; } },
     dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [root] }), showMessageBox: async (_win: any, options: any) => { messages.push(options); return { response: approval }; } },
     WebContentsView: View, session: { fromPartition(partition: string) {
       const ses: any = new EventEmitter(); ses.partition = partition;
@@ -79,7 +80,7 @@ function harness(root: string) {
       ses.setDevicePermissionHandler = (fn: any) => { ses.device = fn; };
       ses.webRequest = { onBeforeRequest(fn: any) { ses.request = fn; } }; sessions.push(ses); return ses;
     } }, trustedWindow: (event: any) => { if (event?.win !== win && event?.win !== second) throw new Error('untrusted'); return event.win; } });
-  return { win, second, messages, views, sessions, approve: () => { approval = 1; }, call: (action: string, payload?: any, window = win) => handler({ win: window }, action, payload) };
+  return { win, second, messages, views, sessions, roots, workspaceApi, approve: () => { approval = 1; }, call: (action: string, payload?: any, window = win) => handler({ win: window }, action, payload) };
 }
 
 test('IPC verifies sender, isolates state, confirms permissions, bounds file previews', async () => {
@@ -109,6 +110,10 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     for (let i = 0; i < 505; i++) fs.writeFileSync(path.join(fixture, `item-${i}`), '');
     const bounded = (await h.call('files')).data; assert.equal(bounded.entries.length, 500); assert.equal(bounded.truncated, true);
     assert.equal((await h.call('choose')).data.permission, 'read');
+    assert.ok(h.roots.includes(fs.realpathSync(fixture)), 'native picker persists canonical root through host callback');
+    h.approve(); await h.call('permission', { permission: 'full' });
+    assert.equal(h.workspaceApi.adoptRoot(h.win, fixture).permission, 'read');
+    assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'read' });
   } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
 });
 

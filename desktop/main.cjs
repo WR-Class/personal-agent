@@ -42,7 +42,9 @@ function trustedWindow(event) {
   return win;
 }
 
-require('./workspace.cjs').installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow });
+const chatIndex = require('./chat-index.cjs');
+const workspace = require('./workspace.cjs').installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow,
+  onRootChosen: root => chatIndex.rememberWorkspace(sessionHome, root), isChatBusy: () => modelBusy });
 
 const sessionHome = path.resolve(process.env.PERSONAL_AGENT_HOME ?? path.join(__dirname, '..', '.personal-agent'));
 ipcMain.handle('sessions:list', async (event) => {
@@ -96,6 +98,42 @@ let providerSequence = 0;
 // ponytail: one global model request; use per-window locks only if parallel turns are needed.
 let modelBusy = false;
 const conversations = new WeakMap();
+ipcMain.handle('chat:list', async event => {
+  trustedWindow(event);
+  const indexed = chatIndex.list(sessionHome);
+  const { desktopSessions } = await import('../src/desktop-sessions.ts');
+  const old = await desktopSessions(sessionHome); trustedWindow(event);
+  const known = new Set(indexed.sessions.map(s => s.id));
+  return { ...indexed, sessions: [...indexed.sessions, ...old.ids.filter(id => !known.has(id)).map(id => ({ id, title: id, workspaceRoot: null, updatedAt: '', failed: true }))] };
+});
+ipcMain.handle('chat:open', async (event, id) => {
+  const win = trustedWindow(event);
+  if (modelBusy) throw Error('请等待当前消息完成');
+  modelBusy = true;
+  try {
+    const { desktopHistory } = await import('../src/desktop-sessions.ts');
+    const history = await desktopHistory(sessionHome, id); trustedWindow(event);
+    const entry = chatIndex.find(sessionHome, id);
+    let canResume = false, selection, identity = '', workspaceError = '';
+    if (entry) {
+      identity = entry.identity;
+      try {
+        const [providerId, baseUrl, model, revision] = JSON.parse(identity);
+        const current = providerId ? await (await providers()).resolve(providerId, model, revision) : await (await import('../src/desktop-model.ts')).desktopProvider(sessionHome);
+        trustedWindow(event);
+        selection = providerId ? { id: providerId, model } : undefined;
+        canResume = !entry.failed && !history.truncated && current.baseUrl === baseUrl && current.model === model && history.messages.at(-1)?.role === 'assistant';
+      } catch { canResume = false; }
+      {
+        try { workspace.adoptRoot(win, entry.workspaceRoot); }
+        catch { workspaceError = '原工作区不可用，请重新选择目录'; canResume = false; }
+      }
+    }
+    trustedWindow(event);
+    conversations.set(event.sender, { id, identity, failed: !canResume }); providerPreviews.delete(event.sender);
+    return { ...history, title: entry?.title || id, canResume, selection, identity, workspaceError };
+  } finally { modelBusy = false; }
+});
 ipcMain.handle('chat:reset', (event) => {
   trustedWindow(event);
   if (modelBusy) throw new Error('请求进行中，暂不能新建会话');
@@ -119,10 +157,14 @@ ipcMain.handle('chat:send', async (event, input, token) => {
   }
   providerPreviews.delete(event.sender); modelBusy = true;
   try {
+    const existing = chatIndex.find(sessionHome, conversation.id);
+    await chatIndex.remember(sessionHome, { id: conversation.id, identity, title: existing?.title || input.trim().slice(0, 60), workspaceRoot: existing ? existing.workspaceRoot : workspace.getRoot(trustedWindow(event)), failed: true });
+    trustedWindow(event);
     const { desktopModelSend } = await import('../src/desktop-model.ts');
     const selected = preview.providerId ? await (await providers()).resolve(preview.providerId, preview.model, preview.revision) : undefined;
     trustedWindow(event);
     const result = await desktopModelSend(sessionHome, input, preview, process.env, selected, conversation.id);
+    await chatIndex.markFailed(sessionHome, conversation.id, false);
     trustedWindow(event); return result;
   } catch (_) {
     conversation.failed = true;

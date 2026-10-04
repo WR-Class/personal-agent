@@ -53,79 +53,29 @@
     }).join('');
   }
 
-  async function refreshSessions() {} // History remains on disk; no read-only sidebar.
-
-  $('#openEcho').addEventListener('click', function() { $('#echoDialog').showModal(); });
-  $('#echoSend').addEventListener('click', async function() {
-    var button = this, input = $('#echoInput').value, status = $('#echoStatus');
-    if (button.disabled) return;
-    if (!input.trim() || new TextEncoder().encode(input).length > 8192) {
-      status.textContent = '请输入 1–8192 字节文本'; return;
-    }
-    var bridge = window.personalAgentDesktop;
-    if (!bridge || typeof bridge.sendEcho !== 'function') { status.textContent = '浏览器预览不支持本地运行时'; return; }
-    button.disabled = true; $('#echoInput').disabled = true;
-    $('#echoReply').textContent = ''; status.textContent = '本地回显中（非模型）…';
+  async function refreshSessions() {
+    if (!window.personalAgentDesktop?.listChats) return;
+    const host = $('#taskGroups');
     try {
-      var result = await bridge.sendEcho(input);
-      $('#echoReply').textContent = result.content;
-      status.textContent = '已保存离线测试会话：' + result.id;
-      await refreshSessions();
-    } catch (_) {
-      status.textContent = '离线测试失败，可能已保存部分日志；请刷新会话检查。未自动重试。';
-    } finally { button.disabled = false; $('#echoInput').disabled = false; }
-  });
-
-  var modelSending = false, modelRequest = 0, modelToken;
-  $('#modelDialog').addEventListener('close', function() { modelRequest++; modelToken = undefined; $('#modelSend').disabled = true; });
-  async function loadModelPreview() {
-    if (modelSending) return;
-    var request = ++modelRequest;
-    modelToken = undefined;
-    $('#modelSend').disabled = true; $('#modelTarget').textContent = '';
-    $('#modelStatus').textContent = '读取宿主配置…';
-    try {
-      var choice = $('#modelChoice').value;
-      var config = await window.personalAgentDesktop.getProvider(choice ? JSON.parse(choice) : undefined);
-      if (request !== modelRequest || !$('#modelDialog').open) return;
-      modelToken = config.token;
-      $('#modelTarget').textContent = '目标：' + config.baseUrl + ' · 模型：' + config.model;
-      $('#modelStatus').textContent = '配置已读取（不代表服务已连通）；请确认后发送。';
-      $('#modelSend').disabled = false;
-    } catch (_) { if (request !== modelRequest) return; $('#modelStatus').textContent = '配置不可用，请在设置 → 模型中添加提供商与模型，或检查 CLI 配置。'; }
+      const data = await window.personalAgentDesktop.listChats();
+      const roots = [...new Set([...data.workspaces, ...data.sessions.map(s => s.workspaceRoot)].filter(Boolean))];
+      host.replaceChildren();
+      for (const root of [null, ...roots]) {
+        const sessions = data.sessions.filter(s => (s.workspaceRoot || null) === root);
+        if (!root && !sessions.length) continue;
+        const group = document.createElement('details'); group.className = 'session-group'; group.open = true;
+        const head = document.createElement('summary'); head.textContent = (root ? '▱ ' + root.split(/[\\/]/).filter(Boolean).pop() : '会话') + ' (' + sessions.length + ')'; head.title = root || '未关联工作区的历史'; group.append(head);
+        for (const s of sessions) {
+          const b = document.createElement('button'); b.className = 'session-row'; b.dataset.session = s.id; b.textContent = s.title; b.title = s.title;
+          b.onclick = async () => { if (await mainChat.open(s.id)) { host.querySelectorAll('.is-on').forEach(n => n.classList.remove('is-on')); b.classList.add('is-on'); } };
+          group.append(b);
+        }
+        host.append(group);
+      }
+      if (!host.children.length) host.textContent = '暂无会话';
+    } catch (_) { host.textContent = '会话列表读取失败；历史文件未修改'; }
   }
-  $('#modelChoice').addEventListener('change', loadModelPreview);
-  window.addEventListener('providers-changed', function() { modelRequest++; modelToken = undefined; $('#modelSend').disabled = true; });
-  $('#openModel').addEventListener('click', async function() {
-    $('#modelDialog').showModal();
-    if (modelSending) return;
-    var request = ++modelRequest;
-    modelToken = undefined; $('#modelSend').disabled = true;
-    try {
-      var r = await window.personalAgentDesktop.providerSettings('list');
-      if (request !== modelRequest || !$('#modelDialog').open) return;
-      if (!r.ok) throw Error(r.error);
-      var select = $('#modelChoice'), previous = select.value;
-      select.replaceChildren(new Option('CLI / 环境配置', ''));
-      r.data.providers.forEach(function(p) { p.models.forEach(function(m) { select.add(new Option(p.name + ' / ' + m, JSON.stringify({ id: p.id, model: m }))); }); });
-      select.value = Array.from(select.options).some(function(o) { return o.value === previous; }) && previous ? previous : (select.options[1]?.value || '');
-      await loadModelPreview();
-    } catch (_) { $('#modelStatus').textContent = '提供商列表读取失败，请检查模型设置。'; }
-  });
-  $('#modelSend').addEventListener('click', async function() {
-    if (modelSending || this.disabled) return;
-    var input = $('#modelInput').value;
-    if (!input.trim() || new TextEncoder().encode(input).length > 8192) { $('#modelStatus').textContent = '请输入 1–8192 字节文本'; return; }
-    modelSending = true; this.disabled = true; $('#modelInput').disabled = true; $('#modelChoice').disabled = true;
-    $('#modelReply').textContent = ''; $('#modelStatus').textContent = '请求中…关闭窗口不会取消；不要重复发送。';
-    try {
-      var result = await window.personalAgentDesktop.sendModel(input, modelToken);
-      window.renderReply($('#modelReply'), result.content);
-      $('#modelStatus').textContent = '已保存：' + result.id + ' · ' + result.model + '；再次发送请关闭后重新确认配置。';
-      await refreshSessions();
-    } catch (_) { $('#modelStatus').textContent = '请求失败，可能已计费或保存部分日志；请检查配置与历史。未自动重试，重新发送前须再次确认配置。'; }
-    finally { modelSending = false; $('#modelInput').disabled = false; $('#modelChoice').disabled = false; }
-  });
+  window.addEventListener('workspace-changed', async e => { if (e.detail?.changed) await newTask(); await refreshSessions(); });
 
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
@@ -169,6 +119,8 @@
   }
 
   var mainChat = window.mountMainChat({ showChat: showChat, refreshSessions: refreshSessions });
+  void refreshSessions();
+  $('#openModel').onclick = () => { showHome(); $('#taHome').focus(); };
   bindComposer($('#taHome'), $('#sendHome'), function(v){ void mainChat.send(v, $('#taHome')); });
   bindComposer($('#taChat'), $('#sendChat'), function(v){ void mainChat.send(v, $('#taChat')); });
   $('#btnStop').addEventListener('click', function(){ mainChat.stop(); });

@@ -101,11 +101,8 @@ const { spawn } = require('node:child_process');
     await evaluate(`Array.from(document.querySelectorAll('.provider-dialog[open] button')).find(b=>b.textContent==='获取可用模型').onclick()`);
     assert.equal(gets, 3, 'close-during-save still refreshes revision');
     await evaluate(`document.querySelector('.provider-dialog[open]').close();document.querySelector('#setClose').click();document.querySelector('#openModel').click()`);
-    await until(`!document.querySelector('#modelSend').disabled`);
-    assert.ok(await evaluate(`document.querySelector('#modelTarget').textContent.includes('127.0.0.1:19402')`));
-    await evaluate(`document.querySelector('#modelInput').value='local fixture only';document.querySelector('#modelSend').click()`);
-    await until(`document.querySelector('#modelReply').textContent==='LOCAL SETTINGS MOCK ANSWER'`);
-    assert.equal(sends, 1);
+    assert.ok(await evaluate(`document.querySelector('#vHome').classList.contains('is-on')&&!document.querySelector('#modelDialog')`), 'chat entry uses normal composer, no legacy dialog');
+    assert.equal(sends, 0);
     // Reload renderer and use the saved disk profile, not in-memory input fields.
     await evaluate(`window.__beforeReload = true`);
     await cdp('Page.reload'); await until(`!window.__beforeReload && document.readyState==='complete' && typeof window.mountProviderSettings === 'function'`);
@@ -140,7 +137,7 @@ const { spawn } = require('node:child_process');
     await until(`!document.querySelector('#btnNew').disabled && document.querySelector('#taHomeModel').value.includes('deepseek')`);
     async function turn(inputId, buttonId, text, count) {
       await evaluate(`document.getElementById(${JSON.stringify(inputId)}).value=${JSON.stringify(text)};document.getElementById(${JSON.stringify(buttonId)}).click()`);
-      await until(`document.querySelectorAll('#liveChatList .msg--agent').length===${count} && !document.querySelector('#sendChat').disabled`);
+      await until(`document.querySelectorAll('#liveChatList .msg--agent').length===${count} && !document.querySelector('#btnNew').disabled`);
     }
     await turn('taHome', 'sendHome', 'remember ALPHA', 1);
     assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('LOCAL SETTINGS MOCK ANSWER')`));
@@ -161,8 +158,40 @@ const { spawn } = require('node:child_process');
     const beforeRetry = sends;
     await evaluate(`document.querySelector('#taChat').value='must not retry';document.querySelector('#sendChat').click()`);
     assert.equal(sends, beforeRetry);
-    const sessions = (await fs.readdir(home)).filter(n=>n.startsWith('desktop-chat-'));
+    const sessions = (await fs.readdir(home)).filter(n=>/^desktop-chat-[0-9a-f-]{36}\.jsonl$/.test(n));
     assert.equal(sessions.length, 2, 'new task allocates a different persisted conversation');
+    assert.equal(dialogs, 2, 'ordinary chat must not open confirmation dialogs');
+    const saved = await evaluate(`personalAgentDesktop.listChats()`);
+    assert.equal(saved.sessions.length, 2);
+    const alpha = saved.sessions.find(s=>s.title==='remember ALPHA'); assert.ok(alpha);
+    failChat = false;
+    // Seed a persisted workspace association as a restart fixture; native picking is covered by workspace.test.ts.
+    const chatIndex = require('../desktop/chat-index.cjs');
+    const fixtureRoot = await fs.realpath(home);
+    await chatIndex.remember(home, { ...chatIndex.find(home, alpha.id), workspaceRoot: fixtureRoot });
+    await evaluate(`window.__beforeReload = true`); await cdp('Page.reload');
+    await until(`!window.__beforeReload && document.readyState==='complete' && !!document.querySelector('[data-session="${alpha.id}"]')`);
+    await evaluate(`document.querySelector('#setClose').click()`);
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll('.session-group summary')).some(n=>n.title===${JSON.stringify(fixtureRoot)})`), 'workspace folder survives reload');
+    // Screenshot invariants, asserted structurally so they stay checkable without eyes on the PNG.
+    assert.ok(await evaluate(`!document.querySelector('#setScrim').classList.contains('is-on')`), 'no settings overlay left covering the window');
+    // Home and chat composers are never visible at once, so each signature is taken while its own view shows.
+    const homeComposerControls = await evaluate(`(()=>{const vis=n=>[...n.querySelector('.slot').querySelectorAll('button,select,textarea')].filter(e=>e.offsetParent!==null).map(e=>e.tagName+':'+(e.id||'').replace(/Chat|Home/,''));return vis(document.querySelector('#taHome').closest('.composer'));})()`);
+    assert.ok(homeComposerControls.length >= 4, 'home composer must be visible when sampled: ' + JSON.stringify(homeComposerControls));
+    assert.ok(await evaluate(`(()=>{const g=[...document.querySelectorAll('.session-group')].find(n=>n.querySelector('summary').title===${JSON.stringify(fixtureRoot)});return g&&g.querySelectorAll('[data-session]').length>0;})()`), 'folder group lists its session row');
+    await evaluate(`document.querySelector('[data-session="${alpha.id}"]').click()`);
+    await until(`document.querySelector('#liveChatList').textContent.includes('what did I say?')&&!document.querySelector('#sendChat').disabled`);
+    assert.ok(await evaluate(`document.querySelector('#liveChatList').textContent.includes('what did I say?')`), 'restored session renders its conversation, not an empty home');
+    const composerControls = await evaluate(`(()=>{const vis=n=>[...n.querySelector('.slot').querySelectorAll('button,select,textarea')].filter(e=>e.offsetParent!==null).map(e=>e.tagName+':'+(e.id||'').replace(/Chat|Home/,''));return vis(document.querySelector('#taChat').closest('.composer'));})()`);
+    assert.deepEqual(composerControls, homeComposerControls, 'home and chat composers expose the same visible controls: ' + JSON.stringify({chat:composerControls,home:homeComposerControls}));
+    assert.ok(await evaluate(`(()=>{const s=document.querySelector('#sendChat').getBoundingClientRect(),m=document.querySelector('#taChatModel').getBoundingClientRect(),t=document.querySelector('#taChat').getBoundingClientRect();return m.right<=s.left+2&&s.top>=t.bottom-2&&s.width>0&&s.height>0;})()`), 'chat composer row is laid out, not clipped');
+    const restoredWorkspace = await evaluate(`personalAgentDesktop.workspace('state')`);
+    assert.equal(restoredWorkspace.data.root, fixtureRoot); assert.equal(restoredWorkspace.data.permission, 'read');
+    assert.ok(await evaluate(`document.querySelector('.workspace-panel').hidden`), 'restoring workspace must not open right panel');
+    await turn('taChat','sendChat','resume ALPHA',3);
+    const restoredShot = await cdp('Page.captureScreenshot', {format:'png'}); await fs.writeFile(path.join(artifacts,'workspace-chat-restored.png'),Buffer.from(restoredShot.data,'base64'));
+    assert.deepEqual(prompts.at(-1).filter(m=>m.role==='user').map(m=>m.content), ['remember ALPHA','what did I say?','resume ALPHA']);
+    assert.equal((await evaluate(`personalAgentDesktop.listChats()`)).sessions.length,2);
     console.log('PASS main chat: two-turn context, fresh session isolation, persisted sessions, failed-turn retry blocked; POST=', sends);
     console.log('Screenshots:', path.join(artifacts, 'provider-settings.png'), path.join(artifacts, 'main-chat.png'));
     // Closing the renderer destroys its CDP context before Runtime.evaluate replies.

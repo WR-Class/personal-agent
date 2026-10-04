@@ -89,9 +89,23 @@ function runCommand(state, command) {
     child.once('close', code => { if (state.child === child) state.child = null; finish(null, code); });
   });
 }
-function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow }) {
+function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWindow, onRootChosen, isChatBusy }) {
   const states = new WeakMap();
   const snapshot = state => ({ root: state.root, permission: state.permission });
+  const api = {
+    getRoot(win) { return win && states.has(win) ? states.get(win).root : null; },
+    /** Only a root the host already recorded; always re-entered as read-only. */
+    adoptRoot(win, root) {
+      if (!win || win.isDestroyed()) fail('窗口不可用');
+      const state = getState(win);
+      if (state.busy || state.child) fail('正在处理工作区操作，请稍后重试');
+      if (root === null) { state.root = null; state.permission = 'read'; return snapshot(state); }
+      const real = fs.realpathSync(root);
+      if (real !== root || fs.lstatSync(root).isSymbolicLink() || !fs.statSync(real).isDirectory() || real.split(/[\\/]/).some(sensitiveName)) fail('目录不可用或受保护');
+      state.root = real; state.permission = 'read';
+      return snapshot(state);
+    },
+  };
   function closeBrowser(win, state) {
     if (!state.view) return;
     const view = state.view; state.view = null;
@@ -146,10 +160,13 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
       switch (action) {
         case 'state': data = snapshot(state); break;
         case 'choose': {
+          if (isChatBusy?.()) fail('请等待当前消息完成后切换工作区');
           const result = await dialog.showOpenDialog(win, { title: '选择工作区目录', properties: ['openDirectory'] }); check();
           if (!result.canceled && result.filePaths.length) {
             const root = fs.realpathSync(result.filePaths[0]);
             if (!fs.statSync(root).isDirectory() || root.split(/[\\/]/).some(sensitiveName)) fail('不能选择受保护目录');
+            if (isChatBusy?.()) fail('请等待当前消息完成后切换工作区');
+            await onRootChosen?.(root); check();
             state.root = root; state.permission = 'read';
           }
           data = snapshot(state); break;
@@ -225,5 +242,6 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
     } catch (error) { return { ok: false, error: error instanceof WorkspaceError ? error.message : '工作区操作失败：来源不可信、路径不可访问或操作未完成' }; }
     finally { if (locked && state) state.busy = false; }
   });
+  return api;
 }
 module.exports = { installWorkspace, safeRelative, sensitiveName, resolveWorkspacePath, safeURL, safeBounds, shellEnvironment };

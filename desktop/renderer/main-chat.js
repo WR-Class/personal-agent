@@ -49,12 +49,40 @@
       row.className = 'composer-model'; row.style.cssText = ''; status.className = 'composer-status';
       const composer = input.closest('.composer'); composer.querySelector('.send').before(row); composer.append(status);
       selectors.push(select); statuses.push(status); input.maxLength = 8192;
-      select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; };
+      select.onchange = () => { selectors.forEach(s => { s.value = select.value; }); confirmed = ''; void updateDestination(); };
     }
     function status(text) { statuses.forEach(s => { s.textContent = text; }); }
+    async function updateDestination() {
+      const value = selectors[0].value;
+      const r = await api.providerSettings('list');
+      if (!r.ok || selectors[0].value !== value) return;
+      const chosen = value ? JSON.parse(value) : null;
+      const provider = r.data.providers.find(p => p.id === chosen?.id);
+      selectors.forEach(s => { s.title = provider ? '发送到 ' + provider.baseUrl + ' · 消息会发送到此服务并保存本地历史；可能计费，不自动上传工作区文件' : '使用 CLI / 环境模型配置'; });
+    }
+    async function open(id) {
+      if (busy) return false;
+      busy = true; lock(); status('读取会话…');
+      try {
+        const saved = await api.openChat(id);
+        title = saved.title; started = true; failed = !saved.canResume; confirmed = saved.identity;
+        const value = saved.selection ? JSON.stringify(saved.selection) : '';
+        selectors.forEach(s => { s.value = value; });
+        list.replaceChildren();
+        for (const m of saved.messages) {
+          if (!['user', 'assistant'].includes(m.role)) continue;
+          const n = message(m.role === 'user' ? '你' : 'Personal Agent', m.content);
+          if (m.role === 'assistant') window.renderReply(n, m.content);
+        }
+        showLive(); status(saved.workspaceError || (saved.canResume ? '' : '历史只读：配置已变化、旧版本记录或上次请求未完成；请新建任务'));
+        window.dispatchEvent(new Event('workspace-sync')); return true;
+      } catch (_) { status('会话读取失败；原文件保留'); return false; }
+      finally { busy = false; lock(); }
+    }
     function lock() {
       selectors.forEach(s => { s.disabled = busy || started; });
-      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat', 'btnNew']) document.getElementById(id).disabled = busy;
+      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy || failed;
+      document.getElementById('btnNew').disabled = busy;
     }
     async function load() {
       const sequence = ++loading;
@@ -69,7 +97,7 @@
           r.data.providers.forEach(p => p.models.forEach(m => s.add(new Option(p.name + ' / ' + m, JSON.stringify({ id: p.id, model: m })))));
           s.value = Array.from(s.options).some(o => o.value === old) && old ? old : s.options[1]?.value || '';
         });
-        status('文字聊天 · 无工具 · 模型管理在设置中'); lock();
+        status(''); lock(); await updateDestination();
       } catch (_) { status('模型列表读取失败，请重新打开客户端或检查设置'); }
     }
     function message(role, text) {
@@ -95,7 +123,6 @@
         const identity = JSON.stringify([preview.providerId, preview.baseUrl, preview.model, preview.revision]);
         if (started && confirmed !== identity) { failed = true; status('模型配置已改变，请新建任务，旧上下文不会发送到新服务'); return; }
         if (confirmed !== identity) {
-          if (!window.confirm('发送至：' + preview.baseUrl + '\n模型：' + preview.model + '\n\n本会话消息、长期约束及运行时提示会发送到此服务，可能计费并保存本地历史。仅文字问答，不执行工具。后续追问沿用同一服务。继续？')) { status('已取消发送'); return; }
           // Discard any invisible host conversation left by a renderer reload.
           await api.resetChat();
           // reset invalidates the token, so obtain the target again and compare before sending.
@@ -133,6 +160,6 @@
       if (started) { failed = true; status('配置已更新，请新建任务'); } else if (!busy) { confirmed = ''; void load(); }
     });
     void load();
-    return { send, reset, isBusy: () => busy, showExample() { example = true; status('原型示例 · 请新建任务开始真实聊天'); sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none'; }, stop() { status(busy ? '暂不支持停止；请求最长等待 60 秒，关闭界面不会取消' : '当前没有正在运行的请求'); } };
+    return { send, reset, open, isBusy: () => busy, showExample() { example = true; status('原型示例 · 请新建任务开始真实聊天'); sample.hidden = false; sample.style.display = 'flex'; list.hidden = true; list.style.display = 'none'; }, stop() { status(busy ? '暂不支持停止；请求最长等待 60 秒，关闭界面不会取消' : '当前没有正在运行的请求'); } };
   };
 })();
