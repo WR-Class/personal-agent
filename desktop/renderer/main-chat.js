@@ -74,14 +74,14 @@
           const n = message(m.role === 'user' ? '你' : 'Personal Agent', m.content);
           if (m.role === 'assistant') window.renderReply(n, m.content);
         }
-        showLive(); status(saved.workspaceError || (saved.canResume ? '' : '历史只读：配置已变化、旧版本记录或上次请求未完成；请新建任务'));
+        showLive(); status(saved.workspaceError || (saved.canResume ? '' : '历史只读：配置已变化、旧版本记录或上次请求未完成；继续输入将自动新建会话'));
         window.dispatchEvent(new Event('workspace-sync')); return true;
       } catch (_) { status('会话读取失败；原文件保留'); return false; }
       finally { busy = false; lock(); }
     }
     function lock() {
       selectors.forEach(s => { s.disabled = busy || started; });
-      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy || failed;
+      for (const id of ['taHome', 'taChat', 'sendHome', 'sendChat']) document.getElementById(id).disabled = busy;
       document.getElementById('btnNew').disabled = busy;
     }
     async function load() {
@@ -113,15 +113,17 @@
       if (busy) return;
       if (example) example = false;
       if (!api) { status('请启动桌面客户端'); return; }
-      if (failed) { status('上轮失败或配置已改变，请新建任务；历史保留'); return; }
       if (!text.trim() || new TextEncoder().encode(text).length > 8192) { status('请输入 1–8192 UTF-8 字节文本'); return; }
+      // 上次失败、配置已变或只读历史：不拦截输入，发送时自动新建会话，旧历史保留。
+      const restarted = failed;
+      if (failed && !await reset()) return;
       busy = true; lock(); status('读取模型配置…');
       let reply, sent = false;
       try {
         const value = selectors[0].value;
         const preview = await api.getProvider(value ? JSON.parse(value) : undefined);
         const identity = JSON.stringify([preview.providerId, preview.baseUrl, preview.model, preview.revision]);
-        if (started && confirmed !== identity) { failed = true; status('模型配置已改变，请新建任务，旧上下文不会发送到新服务'); return; }
+        if (started && confirmed !== identity) { failed = true; status('模型配置已改变；继续输入将自动新建会话，旧上下文不会发送到新服务'); return; }
         if (confirmed !== identity) {
           // Discard any invisible host conversation left by a renderer reload.
           await api.resetChat();
@@ -135,12 +137,12 @@
         input.value = ''; input.style.height = 'auto';
         status('请求中 · 最长 60 秒 · 暂不支持停止'); sent = true; started = true;
         const result = await api.sendChat(text, preview.token);
-        window.renderReply(reply, result.content); status(failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具');
+        window.renderReply(reply, result.content); status((restarted ? '已自动新建会话 · ' : '') + (failed ? '配置已更新，请新建任务；本轮回复已保存' : '已保存 · 可继续追问 · 无工具'));
         document.getElementById('chatScroll').scrollTop = document.getElementById('chatScroll').scrollHeight;
         await refreshSessions().catch(() => {});
       } catch (_) {
-        if (sent) { failed = true; if (reply) reply.textContent = '请求失败，可能已计费或保存部分日志。请检查历史后新建任务，不会自动重试。'; }
-        status(sent ? '请求失败，请新建任务；历史保留' : '模型配置不可用或已变化，请检查设置后重试');
+        if (sent) { failed = true; if (reply) reply.textContent = '请求失败，可能已计费或保存部分日志。请检查历史；继续输入将自动新建会话，不会自动重试。'; }
+        status(sent ? '请求失败，历史保留；继续输入将自动新建会话' : '模型配置不可用或已变化，请检查设置后重试');
         if (sent) await refreshSessions().catch(() => {});
       } finally { busy = false; lock(); }
     }

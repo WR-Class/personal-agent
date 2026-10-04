@@ -115,13 +115,24 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
   function getState(win) {
     let state = states.get(win);
     if (state) return state;
-    state = { root: null, permission: 'read', view: null, child: null, busy: false, generation: 0 };
+    state = { root: null, permission: 'read', view: null, child: null, busy: false, generation: 0, pendingConfirm: null };
     states.set(win, state);
     const hide = () => state.view?.setVisible(false);
     win.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => { if (isMainFrame && !inPlace) { state.generation++; hide(); } });
     win.on('resize', hide);
-    win.on('closed', () => { state.generation++; closeBrowser(win, state); stopChild(state.child); });
+    win.on('closed', () => { state.generation++; closeBrowser(win, state); stopChild(state.child); state.pendingConfirm?.settle(false); });
     return state;
+  }
+  /* 弹窗由渲染进程按客户端设计语言绘制；主进程只认自己签发的一次性确认号，120 秒无应答视为取消。 */
+  function confirmWithUser(win, state, options) {
+    if (state.pendingConfirm) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const pending = { id: randomUUID(), settle: null };
+      const timer = setTimeout(() => pending.settle(false), 120000);
+      pending.settle = ok => { clearTimeout(timer); if (state.pendingConfirm === pending) state.pendingConfirm = null; resolve(ok === true); };
+      state.pendingConfirm = pending;
+      win.webContents.send('workspace:confirm', { id: pending.id, title: options.title, message: options.message, detail: options.detail, confirm: options.confirm });
+    });
   }
   function createBrowser(win, state) {
     const isolated = session.fromPartition('workspace-' + randomUUID(), { cache: false });
@@ -174,8 +185,8 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
         case 'permission': {
           if (!['read', 'full'].includes(payload.permission)) fail('权限必须为 read 或 full');
           if (payload.permission === 'full' && state.permission !== 'full') {
-            const result = await dialog.showMessageBox(win, { type: 'warning', title: '允许完整工作区权限？', message: '命令将以当前用户权限运行，可访问工作区外的文件、网络及密钥。', detail: '这不是安全沙箱。每条命令仍须原生确认；模型仍无工具，不能自行读文件或执行命令。仅确认你信任的命令。', buttons: ['取消', '允许完整权限'], defaultId: 0, cancelId: 0, noLink: true }); check();
-            if (result.response !== 1) fail('已取消权限变更');
+            const ok = await confirmWithUser(win, state, { title: '允许完整工作区权限？', message: '命令将以当前用户权限运行，可访问工作区外的文件、网络及密钥。', detail: '这不是安全沙箱。每条命令仍须逐一确认；模型仍无工具，不能自行读文件或执行命令。仅确认你信任的命令。', confirm: '允许完整权限' }); check();
+            if (!ok) fail('已取消权限变更');
           }
           state.permission = payload.permission; data = snapshot(state); break;
         }
@@ -210,8 +221,8 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
           const command = payload.command;
           if (typeof command !== 'string' || !command.trim() || command.length > 8192 || command.includes('\0')) fail('命令须为 1–8192 字符');
           resolveWorkspacePath(state.root);
-          const result = await dialog.showMessageBox(win, { type: 'warning', title: '确认执行命令', message: '以当前用户权限执行下列命令（可访问工作区外）？', detail: `工作目录：${state.root}\n\n${command}\n\n单次非交互进程；30 秒超时，输出最多 128 KiB。模型仍无工具。`, buttons: ['取消', '执行命令'], defaultId: 0, cancelId: 0, noLink: true }); check();
-          if (result.response !== 1) fail('已取消命令');
+          const ok = await confirmWithUser(win, state, { title: '确认执行命令', message: '以当前用户权限执行下列命令（可访问工作区外）？', detail: `工作目录：${state.root}\n\n${command}\n\n单次非交互进程；30 秒超时，输出最多 128 KiB。模型仍无工具。`, confirm: '执行命令' }); check();
+          if (!ok) fail('已取消命令');
           resolveWorkspacePath(state.root); data = await runCommand(state, command); break;
         }
         case 'browser-open': {
@@ -236,6 +247,11 @@ function installWorkspace({ ipcMain, dialog, WebContentsView, session, trustedWi
           if (!state.view) fail('浏览器尚未打开');
           state.view.webContents.reload(); data = null; break;
         case 'browser-close': closeBrowser(win, state); data = null; break;
+        case 'confirm-response': {
+          const pending = state.pendingConfirm;
+          if (pending && typeof payload.id === 'string' && payload.id === pending.id) pending.settle(payload.ok === true);
+          data = null; break;
+        }
         default: fail('未知工作区操作');
       }
       check(); return { ok: true, data };

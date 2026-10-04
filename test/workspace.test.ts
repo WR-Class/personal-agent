@@ -50,10 +50,11 @@ test('real paths reject junction escape and same-root links', () => {
 });
 
 function harness(root: string) {
-  let handler: any; let approval = 0;
-  const messages: any[] = []; const views: any[] = []; const sessions: any[] = [];
+  let handler: any;
+  const confirms: any[] = []; const views: any[] = []; const sessions: any[] = [];
   const makeWindow = () => {
     const win: any = new EventEmitter(); win.webContents = new EventEmitter();
+    win.webContents.send = (channel: string, payload: any) => { if (channel === 'workspace:confirm') confirms.push(payload); };
     win.isDestroyed = () => false; win.getContentSize = () => [800, 600];
     win.contentView = { addChildView() {}, removeChildView() {} }; return win;
   };
@@ -72,7 +73,7 @@ function harness(root: string) {
   }
   const roots: string[] = [];
   const workspaceApi = installWorkspace({ onRootChosen: async (root: string) => { roots.push(root); }, ipcMain: { handle(channel: string, fn: any) { assert.equal(channel, 'workspace:action'); handler = fn; } },
-    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [root] }), showMessageBox: async (_win: any, options: any) => { messages.push(options); return { response: approval }; } },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [root] }) },
     WebContentsView: View, session: { fromPartition(partition: string) {
       const ses: any = new EventEmitter(); ses.partition = partition;
       ses.setPermissionRequestHandler = (fn: any) => { ses.permission = fn; };
@@ -80,7 +81,9 @@ function harness(root: string) {
       ses.setDevicePermissionHandler = (fn: any) => { ses.device = fn; };
       ses.webRequest = { onBeforeRequest(fn: any) { ses.request = fn; } }; sessions.push(ses); return ses;
     } }, trustedWindow: (event: any) => { if (event?.win !== win && event?.win !== second) throw new Error('untrusted'); return event.win; } });
-  return { win, second, messages, views, sessions, roots, workspaceApi, approve: () => { approval = 1; }, call: (action: string, payload?: any, window = win) => handler({ win: window }, action, payload) };
+  const call = (action: string, payload?: any, window = win) => handler({ win: window }, action, payload);
+  const answer = (ok: boolean) => call('confirm-response', { id: confirms.at(-1).id, ok });
+  return { win, second, confirms, views, sessions, roots, workspaceApi, answer, call };
 }
 
 test('IPC verifies sender, isolates state, confirms permissions, bounds file previews', async () => {
@@ -96,9 +99,14 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     assert.equal((await h.call('terminal', { command: 'echo no' })).ok, false);
     assert.equal((await h.call('choose')).data.root, fs.realpathSync(fixture));
     assert.equal((await h.call('state', {}, h.second)).data.root, null);
-    assert.equal((await h.call('permission', { permission: 'full' })).ok, false);
-    h.approve(); assert.equal((await h.call('permission', { permission: 'full' })).data.permission, 'full');
-    assert.match(h.messages[0].message, /当前用户权限.*工作区外/); assert.match(h.messages[0].detail, /模型仍无工具/);
+    let granting = h.call('permission', { permission: 'full' });
+    assert.equal(h.confirms.length, 1, 'permission escalation must ask through the in-app dialog');
+    await h.answer(false);
+    assert.equal((await granting).ok, false);
+    granting = h.call('permission', { permission: 'full' });
+    await h.answer(true);
+    assert.equal((await granting).data.permission, 'full');
+    assert.match(h.confirms[0].message, /当前用户权限.*工作区外/); assert.match(h.confirms[0].detail, /模型仍无工具/);
     assert.equal((await h.call('read', { relative: 'hello.txt' })).data.content, 'hello');
     const large = (await h.call('read', { relative: 'large.txt' })).data;
     assert.equal(large.content.length, 256 * 1024); assert.equal(large.truncated, true);
@@ -111,7 +119,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     const bounded = (await h.call('files')).data; assert.equal(bounded.entries.length, 500); assert.equal(bounded.truncated, true);
     assert.equal((await h.call('choose')).data.permission, 'read');
     assert.ok(h.roots.includes(fs.realpathSync(fixture)), 'native picker persists canonical root through host callback');
-    h.approve(); await h.call('permission', { permission: 'full' });
+    const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
     assert.equal(h.workspaceApi.adoptRoot(h.win, fixture).permission, 'read');
     assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'read' });
   } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
@@ -119,14 +127,18 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
 
 test('confirmed terminal runs one shell command with bounded output and no inherited provider environment', async () => {
   const h = harness(os.tmpdir());
-  await h.call('choose'); h.approve(); await h.call('permission', { permission: 'full' });
+  await h.call('choose');
+  const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
   process.env.WORKSPACE_TEST_SECRET = 'must-not-inherit';
   try {
     const command = process.platform === 'win32' ? 'if ($env:WORKSPACE_TEST_SECRET) { exit 9 }; Write-Output workspace-ok; exit 0' : 'test -z "$WORKSPACE_TEST_SECRET" || exit 9; printf workspace-ok';
-    const answer = await h.call('terminal', { command });
+    const running = h.call('terminal', { command }); await h.answer(true);
+    const answer = await running;
     assert.equal(answer.ok, true); assert.equal(answer.data.code, 0); assert.match(answer.data.output, /workspace-ok/);
-    assert.match(h.messages.at(-1).detail, /workspace-ok/);
-    const large = await h.call('terminal', { command: process.platform === 'win32' ? "Write-Output ('x' * 140000)" : "head -c 140000 /dev/zero | tr '\\0' x" });
+    assert.match(h.confirms.at(-1).detail, /workspace-ok/);
+    const largeRunning = h.call('terminal', { command: process.platform === 'win32' ? "Write-Output ('x' * 140000)" : "head -c 140000 /dev/zero | tr '\\0' x" });
+    await h.answer(true);
+    const large = await largeRunning;
     assert.equal(large.ok, true); assert.equal(large.data.truncated, true);
     assert.ok(Buffer.byteLength(large.data.output) <= 128 * 1024);
   } finally { delete process.env.WORKSPACE_TEST_SECRET; }

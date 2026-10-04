@@ -137,6 +137,6 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[8], ['chat:send', 'hi', 45]); assert.deepEqual(calls[9], ['chat:reset']);
     await api.workspace('files', { relative: 'src' }, 'ignored');
     assert.deepEqual(calls[10], ['workspace:action', 'files', { relative: 'src' }]);
-    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listChats', 'listSessions', 'onMaximized', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
+    assert.deepEqual(Object.keys(api).sort(), ['getInfo', 'getProvider', 'listChats', 'listSessions', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'windowAction', 'workspace']);
   }
 });

@@ -29,6 +29,12 @@ contextBridge.exposeInMainWorld("personalAgentDesktop", {
     }
     return ipcRenderer.invoke("window:action", action);
   },
+  onWorkspaceConfirm(callback) {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("workspace:confirm", listener);
+    return () => ipcRenderer.removeListener("workspace:confirm", listener);
+  },
   onMaximized(callback) {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, maximized) => callback(Boolean(maximized));
