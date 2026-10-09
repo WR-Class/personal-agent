@@ -1,8 +1,8 @@
-# 当前有效决定（D01–D86 的折叠视图）
+# 当前有效决定（D01–D129 的折叠视图）
 
-> **⚠️ 标题此前写"D01–D68"，而正文早已折叠到 D80（第 2 节最后两行、第 3 节多处都在讲 D80）⇒ 那是一句过期陈述，D87 更正。** 本轮把 D81–D86 折进第 2 节；**既有行一字未改，只追加。**
+> **⚠️ 标题此前写"D01–D86"，而 D124–D126 已落进正文（第 1 节新增「Jev 蒸馏」小节、D19 行加注、第 3 节加三条缺口）⇒ 那是一句过期陈述，本轮更正。**本轮新增 D138（v5 AI 状态上下文：planNext 提升 + loop 检测）+ 沟通风格标准（5 段式拍板框架）。**注意 D87–D123 仍未被折叠进本文件**（它们的完整条目在 `REFERENCE_DECISIONS.md` 尾部的 12.x 节与 `STATUS.md` 的批次行里），**所以"D01–D132"指的是本文件覆盖的编号上界，不是逐条折叠的完整性声明**。
 
-> **⚠️ 这份文档是 [REFERENCE_DECISIONS.md](REFERENCE_DECISIONS.md)（1630 行 / 341 KB）的折叠视图。**
+> **⚠️ 这份文档是 [REFERENCE_DECISIONS.md](REFERENCE_DECISIONS.md)（约 3400 行 / 380 KB）的折叠视图。**
 > 那份是完整日志：每条决定都带"读过什么源码、为什么这么定、明确不做什么"。
 > **这份只回答一个问题：现在到底怎么定的。**
 >
@@ -93,7 +93,7 @@
 | **D16** | **失败档案与蒸馏**：outcome 行增加 `intent`/`signals`/`evidence`；分组键在**请求侧**（intent + 失败类别）不是基因；`distillGuards` 是**纯函数**、产出**只含 guard 步**的草稿 + 机械证据；**草稿刻意不给 validation**（`mintGene` 会因 validation 为空而拒绝它）—— **蒸馏不许伪造证明**；只保留机械事实，不落原始错误文本 |
 | **D17** | **成功归纳（`induct`）**：无基因轮的成功 → 捕获候选。**并明确它做不到什么** |
 | **D18** | **每周期写入门与硬预算**：写入前检查、无活周期拒绝写入、每周期累计文件/行数账本 |
-| **D19** | **队列重排：先做机械验证，独立评审者后置**。整合同时要求**评分过线 AND 观测到的 validation 通过**（*"评审的同意是意见，验证是证据"*）。**不采用"让另一个模型说这轮干得不错"式评审** |
+| **D19** | **队列重排：先做机械验证，独立评审者后置**。整合同时要求**评分过线 AND 观测到的 validation 通过**（*"评审的同意是意见，验证是证据"*）。**不采用"让另一个模型说这轮干得不错"式评审**。**⚠️ D125 在此之上加了一道窄门**：机械判定原本**系统性乐观**（只看 steps/toolCalls/toolErrors，从不把"产出为零"降级），`roundVeto` 用 4 条形态规则补上；**但"独立评审者后置"这条不变**，Jev 只在开发期用于校准 |
 | **D20** | **结构化验证声明 + 轮末逐条比对** |
 | **准入门禁** | **只从验证成功的轨迹铸造基因**（EvoMap 负结果：**纯蒸馏基因劣于手写 Skill，-3.2~-11.2pp**）；**铸造永远是操作者动作** |
 | **关键分野** | **Skill/Expert 是静态手册，Gene 必须带选择依据、执行结果、成功率、失败模式与演化历史** |
@@ -122,6 +122,67 @@
 | **纪律** | **变异验证是强制动作**：删掉刚写的机制，测试必须变红 |
 | **纪律** | **历史批次文档永不改写**，只加标记式更正块 |
 
+### Jev 蒸馏（D124–D126）
+
+**⚠️ 边界先说清：Jev 是开发期的离线标注器，运行时不调用它。** D126 的核查：`src/` 里 `grep -E "jev|futureppo|systemone"` **零匹配**，`cycle.ts` 的 `import` 列表是**空的**；`src/` 里所有 `fetch` 都是操作员自己配置的 provider、MCP、OAuth。
+
+| # | 决定 |
+|---|---|
+| **D124** | **意图判定从手写正则表改为 Jev 蒸馏信号表**（172 条 prompt × Jev `noul` ×5 → 381 个信号 → `intent-weights.json`）。**⚠️ 决定性变量是问句措辞**：单字问法 `Is this about build?` 让 build 保真只有 **79%**，展开成行为的描述式问法升到 **100%**（operate 97%→100%）。**`noul` 返回的是独立边缘概率、不构成分布**（不要求和为 1），故只做 argmax、不归一化、不称"置信度"。无匹配时返回先验并置 `oov`，由调用方处理 |
+| **D125** | **`roundVeto` 在 `evaluateRun` 之上再窄一道**：4 条结构性退化形态（零轮次 / 空回复 / 回声 / 开场拒答）把 `success` 降级成 `partial`，**绝不降 `failed`**（产出确实发生了）。实测 54 个真实 round：D19 纯机械 **75.9%**、21 特征加权 **79.6%（⚠️ 且把 `fn=0` 破坏成 3）**、**4 条规则 87.0%（保住 `fn=0`）**。**否决不是加权** —— 一段排版漂亮的拒答会靠 `hasList`+`hasHeading` 把分推过阈值，而"排版好看"没有资格把"活没干"投下去。**`reply === undefined` 时跳过形态检查：缺席不是证据** |
+| **D126** | **Jev 只存在于 `scripts/` 的离线工具里，且由人驱动**：产出经人审阅后写成 `src/` 的代码（4 条正则 / 一个 JSON）。**撤回"定期校准"这个提议** —— 那会让 Jev 变成长期依赖（每 round 一次调用），而那 4 条规则是**结构性退化、不随模型腐坏**（"输出为空"换什么模型都是没产出）。正确触发是**事件**：换 provider/模型，或 `grep veto=` 占比跳变。**⚠️ 不加 `--round-drift` 子命令**：第三方用户没有 Jev key，告诉他"建议重新发现形态"是让他做一件做不到的事 |
+| **D129** | **Jev 蒸馏扩样**：从 DSH `~/.dsh/storages/session_projcache/sessions/*.json` 自动抽 211 条真 user prompt，写到 `scripts/intent-prompts-supplemental.json`；跑 `distill-intent.ts` (JEV × 1055) + `train-intent-weights.ts` → `scripts/intent-weights-supplemental.json` (211 rows / 1822 signals, priors research 0.426→0.534 ↑0.109)。**D124 信号覆盖只占 supplement 4%**（72/1822 共享，1750 OOV）+ **共享 72 信号上 mean\|Δ\|=0.21-0.26**——**D124 ② + ④ "未做留一法复核"那条缺口**实证：172 训的 381 信号**不稳定**。**⚠️ 2-gram 切粒度问题**（`extractSignals` 把一条长 prompt 切出的 bigrams 当独立信号，supplement 把这毛病放大了 4.8 倍）—— **D130 候选 = 训练时对一条 prompt 的所有 bigrams 共用 probs**，改 `train-intent-weights.ts` 一文件。**D129 这次**没合并到 `src/intent-weights.json`（D126 边界 + D124 ② 想看的"再训一次"留给 D130） |
+| **D130** | **训练 1-row = 1-observation，bigram 通胀消除**：改 `train-intent-weights.ts`（58 → 96 行），一条 row 的 probs 等分给该 row 切出的所有 signals（share = 1 / signals.length）。抽 `train()` 为纯函数 + 加 `import.meta.url` 守卫避免测试 import 覆盖 src/。`test/train-intent-weights.test.ts`：**6 个 case** pin 住不变量。**合并训**：172 D124 + 211 D129 supplement = 383 rows → `intent-weights-merged.json` (**2131 signals**)。**4.8× 通胀完全消解**：D129 supplement 那批 OOV `build 0.98` ("下创"/"立于"/"的新"/"新项目"/...) 在 D130 后**全部 `build 0.01`**——一长 build prompt 切 70 个 bigrams，share=1/70，evidence 守恒 (0.98/70 ≈ 0.014)。**新 priors** (fix 0.300 / verify 0.418 / research 0.486 / operate 0.300 / build 0.304) 比 D124 (0.339/0.447/0.426/0.313/0.293) **更均衡** + research 仍最高 = **D129 §六 "真分布偏 research"被加权稳定**。**未替换 `src/intent-weights.json`**（D126 边界 + **人工 spot-check 5 个中文 prompt** 是替换前的最后一道闸） |
+| **D131** | **多模型横评**（蜂群 EvoMap 风格 / Multi-Agent Collab + Self-organizing Swarms）：`scripts/multi-model-eval.ts`（342 行）通用多模型意图评判工具——支持 `type: "jev"` 调 noul 接口 / `type: "openai"` 调 OpenAI-兼容 `/v1/chat/completions`，7 个 parse 容错测试。**211 prompts × 3 模型 = 633 调用**：Jev **99.5%** 成功 / Claude Opus 5 **11.8%**（网关把它路由到 notion 通道，全 `temporarily-unavailable`）/ Grok 4.7 **4.7%**——**网关上游通道脆弱**（claude→notion 是网关 bug）。**单模型偏证实**：Jev 48% research / Claude 88% fix / Grok 96% fix——**全极端**。**13.7% 三家 argmax 全一致 + 85.3% 二家一致**——**单模型偏 87% prompt 上系统可测**。`scripts/intent-distilled-multi.jsonl`（211 行 × 3 模型 probs）留作 D132 多模型 weights 训练原料。**未动 src/**（D126 + 网关 noise 高） |
+| **D132** | **多模型 weights + D124 ② spot-check**：`scripts/build-multi-model-weights.ts` 读 D131 输出过滤 fallback (`{fix:0.2..build:0.2}` 占位符不算意见) 训 4 张 weights（jev 211 / claude 25 / grok 10 / consensus-mean 211）。**D132 ②**：jev-only `priors.research 0.535` vs claude 0.414 vs consensus 0.528——**consensus 被 Jev 一家主导**（失败率高），**几乎不对冲**。`scripts/spot-check.ts` 5 个手写中文 prompt × 5 weights 表 → **merged (D130) = src/D124 base 5/5 平手**、D132 单源全 3/5（覆盖不足）。**D124 ② 决定**：`scripts/intent-weights-merged.json`（383 行 / 2131 signals）**可替 src/intent-weights.json**——平手 spot-check + 5.6× 信号覆盖 + priors 略偏真分布 |
+| **D133 跳过** | 按用户意见 "你按照模型来就行"：8787 网关按 alias 分频道合理（notion 也接入了大模型，作为 `claude-opus-5` 后端正常），**D131 多模型横评 387 ERROR 接受为 alias 设计、不修** |
+| **D19 ③** | **Jev noul 替代 D19**：54 round × 3 模型评测——**Jev 100% 响应，Claude/Grok 0% 响应**（同 D131 网关问题）。**Jev noul 重问（1-question `accomplished` 复 D125 蒸馏同款）= 98.1% 准确率**，**D19 75.9% → Jev 98.1% = +22.2pp / 13→1 FP**——**D19 母题真闭合**。**multi-consensus = Jev 单独**（Claude/Grok 全 null）。**不写 src/**（D126 + 7s 同步延迟 vs D19 0 延迟）——**D135 候选** = roundVeto 4 规则快扫 → 命中后**条件触发** Jev 重问做二次确认（只 ~5% round 触发，平均延迟 +0.35s） |
+| **D131 §一 closure** | **AI 评审团同意/不同意特征分析**：`scripts/analyze-multi-agreement.ts` 读 D131 JSONL 211 行——**13.7% 三家全同意、85.3% 二家同意、0.9% 完全三派**。**长度不预测同意**（all/partial 都 47 字符），**只有"超短 7-12 字"才极端分派**。**Jev 是少数派 166/180**——**多数派压制少数派是 D131 系统性现象**，Jev 的少数派意见常是对的（"调研"二字 Jev 能看到，Claude/Grok 只看 fix）。**正确用法不是 consensus 投票**（损失少数派信息），**而是记下少数派意见作为 roundVeto 二次确认**。Top 15 模糊 prompt 都是短中文词，Top 15 强共识都是显式动作词（调研/修复/部署/Implement） |
+| **D19 母题方向校正** | **推翻 D135 候选**（hybrid Jev 重问 = 违反 D126）：产品是 GitHub 通用包，不接入 Jev API。**真正的 D19 母题 = 把 Jev 的判断机制蒸馏成本地特征，加进 D125 21-feature scorer**。D19 ③ 给的 13 FP 案例 = **金矿**：每一类对应一个本地特征（`isEchoResponse` / `isAcknowledgmentOnly` / `responseLacksExpectedContent` / `intentMismatch` / `promptTooVague` / `promptIsFilepath` / `promptHasGoalBlock`）。**D19 ④ 候选** = 21 → 28 features，估 < 300 行，0 网络调用 |
+| **D19 ③ retest** | **公共 endpoint 替代 8787**：用论坛 key 测 ytyidc.com (3 keys, 66 并发, pro/听话pro/free) + lblb.eu (1 key) — **5/11 模型通 JSON**（gpt-5.5/5.6/5.6-sol/6 + gemini-3.7-flash）。**54 round × 6 模型**：D19 75.9% → multi-consensus **96.3%** = +20.4pp / 13→1 FP。**5 个不同模型家族都做到 90-94%**——**D19 mechanical 错判不是 Jev 个性，是跨架构 LLM 共识**。**1 个 case 是 consensus 纠 Jev baseline 的错**——少数派信息有时正确。13 D19-FP 全部 5 模型一致判 <0.5（12 个）/ 抓到（1 个）= **7 类典型漏判**，每类对应 1 个本地特征 |
+| **D136** | **上下文继承** = 模糊指令（"继续"/"再"/"OK"/"行" 等 30+ 触发词）的真正答案。`classifyIntent(text, history?)` 加 history 参数，触发词 + history → 继承 last round intent 0.85 高置信；不传 history = 旧行为，**967/967 测试过**。**D131 §一 closure**: 85% 的 2-1 disagreement 主要是模糊指令，D136 解 ~30-40%（触发词场景），D137 候选解决剩下 ~50%（"中转聚合站"等非触发模糊 case，用 history+current prompt 拼接当 raw text 重训）。**D131→D136→D137** 是 "AI 评审团 85% 不同意" 的逐步解决方案 |
+| **D137** | **置信度反比 + margin+OOV 演化** = 4 步迭代从触发词到 margin-driven 渐变。v1 触发词（30+ 词表）→ v2 短+0 signal（魔数 8）→ v3 `0.85 - top_prob`（**失败**：D124 weights top prob 只 0.20-0.40，60% 污染清晰 fix）→ **v4 OOV + margin**（margin > 0.05 → 0 history；OOV → 0.6 history）。**970/970 测试过**。**根因错误教训**：D124 weights 是"软概率"，top prob 不是置信度指标，**margin = top - second 才是真置信度**。"修这个 bug" top 0.247 但 margin 0.071（明确），"继续" top 0.447 但 margin 0.022（OOV 不信）。D137 closed。D138/v5 候选 = 多轮衰减 + 多意图 history |
+| **D138 (v5)** | **AI 状态上下文** = 用户的 prompt 没意义，意义在 AI 上轮干了啥。`HistoryRound` 加 `aiState` 字段（`didWhat` / `completed` / `planNext` / `userAccepted` 4 个）。`planNext` 存在 → history 权重 0.6→0.7（OOV）或 +0.2 boost（弱 signal）。**loop 检测**：连续 3 轮 AI state `didWhat + completed` 不变 → `Classification.loop.detected = true`（"用户说 100 次继续，AI 状态没动"）。**977/977 测试过**。**v5 是 v4 顺接**：0 触发词 / 0 长度门 / 0 魔数（除 5 个经验常量），向后兼容（缺 `aiState` 的旧 history 走 v4 路径）。**生产依赖**：runtime（D128 §九·六 (3)）需要每轮结束时记录 `aiState` 4 字段——这是 v5 的**前置依赖**，v5 classifier 已就绪，runtime 落字段是 D139 |
+| **D139 (Option B 最小版)** | **runtime 落 aiState 2 字段**（`didWhat` + `completed`，planNext/userAccepted 留 D140/D141）。**`src/history-builder.ts` 新文件**（~80 行）：`buildHistory(events, n=5)` 按 runId 分组最近 N 轮，`summarizeRound(events)` 列出工具名 + 检查错误。**`src/taskspec.ts`** 加 `history?` 选项转给 `classifyIntent`。**`src/runtime.ts`** `sendTurn` 开头 `store.read(sessionId)` → `buildHistory` → `buildTaskSpec` 透传。**986/986 测试过**（D139 加 9 个测试）。**0 新持久化**——直接读 session log 现成的事件，stateless 派生。**行为变化**：D139 之后，runtime 自动喂 v5 classifier，loop 检测 + planNext 提升（虽然 planNext 还没填）在生产环境真起作用 |
+| **D140 planNext 派生** | **`extractPlanNext` 扫 AI 最后消息里的"下一步" / "next" / "TODO" 模式**（4 个 regex）。命中 → `aiState.planNext` 有值；没命中 → undefined（v5 走 OOV 0.6 路径，不升 0.7）。**996/996 测试过**（D140 加 10 个测试）。**真数据命中率 0/2**——AI 不写"下一步"自述。**保持现状**——planNext 字段保留机制。用户告诉 AI "给出下一步计划" 时 D140 自然有效 |
+| **D142 loop 告警 v2** | **5 轮窗口 + 主导 action 检测**：每轮记录 `actionSigs: string[]`（每个 tool call 一个签名 = `name\|args`），loop 检测看最近 5 轮所有 actionSigs——**任一签名出现 ≥ 3 次且占比 ≥ 50%** → loop。**用户案例 A,B,B,C,B,B（6 轮）** → B 占 4/5 = 80% → 触发。**v1 失败**：3 轮字符串相同才算 → 抓不到"AI 反复回来看 B"。**v2 用 actionSigs 数组**（不是单个 hash）能区分"5 个全 A"和"5 个中 3A+2B"。**1003/1003 测试过**（D142 加 7 个新测试，3 个旧测试更新到 5 轮窗口）。**3 个常量**：`LOOP_DETECT_WINDOW=5`、`LOOP_MIN_DOMINANT_COUNT=3`、`LOOP_MIN_DOMINANT_RATIO=0.5` |
+| **沟通风格标准** | `docs/COMMUNICATION_STYLE.md` 已建立——5 段式（**做什么 / 为什么 / 代价 / 替代 / 推荐**）。**所有决策点都用大白话，不甩变量名/缩写/技术细节**。用户拍板"以后都要这样" |
+| **D124 ② 决定修正** | 用户批准"评分表可以换" → merged weights (383 rows / 2131 signals) 替 D124 base → **8 个 unit test 回归**（"部署上线" 等路由偏到 research/verify）。**根因 = 真实用户数据 vs 手写样本的语义偏移**。**§二 决定 = 恢复 D124 base**（967/967 过），**merged 留在 scripts/**，D137 候选 = 补 ~30 个回归 case 到训练集再训，留一法验不破 D124 已通过 case |
+| **D124 ② 完成** | `scripts/intent-weights-merged.json` (383 rows / 2131 signals / priors.research 0.486) **已替换** `src/intent-weights.json`——D132 5/5 spot-check 平手 + 5.6× 信号覆盖 + 偏向真分布。trainedAt=2026-10-09T04:43:13Z |
+| **纪律** | **Jev 是校准来源，不是真相**。实测里有一类漏网是"模型用了 10–21 次工具真的干了活，Jev 却给 0.28–0.43" —— **把它当无条件 ground truth 会把它的噪声固化进代码**。同理，`重构这个函数 → verify` 这类分歧是判断不是错误，抹掉它会让权重表退化回我原来的偏见（D124 ④）。**D129** 给出实证：D124 381 信号只覆盖 supplement 4%、共享 72 信号 mean\|Δ\|=0.21-0.26——**留一法复核**已经做完，**D124 ② + ④ 那条缺口可以划掉** |
+
+### 额度与扣分（D127）
+
+| # | 决定 |
+|---|---|
+| **D127 ①** | **两本账**：**质量账**（`expression.attempts/successes`）决定下一次**选谁**；**预算账**（每轮真实写到的 files/lines + 是否被拒）决定下一次**给多大房间**。扣分的目的是**校准**，所以"撞预算"（关于房间）不能记进质量账 |
+| **D127 ②** | **预算拒绝不再进 `toolErrors`**。工具没跑、什么都没坏 ⇒ 不再把整轮从 `success` 推成 `partial`。**⚠️ 这不是放宽**：拒绝依然发生、文件依然不改、审计依然记 denied；变的只是这笔账记在谁头上。压力仍可见（`evidence` 里出现 `budgetRefusals=N`），但**不参与判定** |
+| **D127 ③** | **额度由历史测得，不由人猜**：`write-budget.ts` 新增 `measuredBudget()`，p95（不是 max/mean）+ **删失还原** + fallback 作**下限**。`distill.ts`/`induct.ts` 里写死的 `{maxFiles:1, maxLines:20}` 换成它。**冷启动仍用 `{1,20}`，但降级为占位** |
+| **D127 ④** | **⚠️ 删失是最容易做错的一处**：被拦住的轮记下的是"写到了多少"而非"需要多少"，**而那个值恰好是上限** ⇒ 当需求用会推出同一个过小额度，永不抬升（测量不到任何东西的不动点）。修法：`budgetRefusals>0 ⇒ demand = max(reached, cap+1)`。这仍是下界，**但这是该错的方向** |
+| **D127 ⑤** | **不把额度写进提示词**（想过并否决）：模型事前不知道任务需要几个文件，告诉它"只能 3 个"只会让它更早停手。`gene-store.ts` 那句 *"never the constraints"* 是错的，但错在"把约束当成可省略的元数据"，**替代品是让额度真的安全且真的够用，不是念给模型听** |
+| **纪律** | **额度要么数出来、要么测出来。** ⚠️ D127 在同一会话里**连踩两次**"凭感觉填 `max_files` 然后被自己的额度拦住"——**铸造时人知道得最少**，这是同一个缺陷的再现，不是巧合 |
+
+### `obs_recall` 召回端（D128）
+
+| # | 决定 |
+|---|---|
+| **D128 ①** | **只采纳 SoL-Pi 召回那一半**：不另存内容寻址归档文件（ADR-0001 会让那变成"已存好的数据再造副本"，正是 D52 修正的根因）；按 `callId` 从会话日志**精确匹配**读回；`obs_recall` 工具**会话绑定**（store + id 构造时给），与 `update_task_state` 同形状 |
+| **D128 ②** | **分页规则**：`RECALL_MAX_BYTES=16KB` / `RECALL_MAX_LINES=400` 同时封顶、先到先限；**UTF-8 字符边界守恒**——起止两端都查（SoL-Pi 只查尾，JS 切片不报错所以这里两边都要查）；产出的页面**事后重新校验**字节上限 |
+| **D128 ③** | **不动 size-threshold 自动投影**。SoL-Pi 的 `THRESHOLD_BYTES=10KB` / `FULL_SENDS=2` D52 自己标了"未验证"——**不能拿猜的数字落系统**。本轮**先让召回端正确**，size 参数留作实机调（→ §九 接上） |
+| **D128 ④** | **不复制 SoL-Pi 的 `obs_<sha256...>` 内容寻址 id**：那条 id 在原实现**承重**（工具从 id 构路径读归档），本实现**没有路径参数**（只收 `callId`），正则照搬就是"读起来像安全但啥都没保护"。`callId` 是**模型可读**的，它已经在对话里出现，**审计只需 grep** |
+| **D128 ⑤** | **占位符必须带 callId**。`runtime.ts:1288` 那条 `N chars remain in the session log` 是**死指针**（说"还在日志里"但取不回来）—— D128 换成 `omittedResultPlaceholder(callId?, content)`，**没 callId 时明说**"no call id was recorded, so it cannot be read back"；**缺席不是邀请猜测** |
+| **纪律** | **⚠️ `obs_recall` 只救**已**触发压缩**的轮次；大工具结果撑爆 `assertContextFits` 那条路径**不在本轮范围**（→ §九 接上） |
+
+### 召回投影（D128 §九）
+
+| # | 决定 |
+|---|---|
+| **§九 ①** | **新纯函数** `projectOversizedToolResults(messages, thresholdBytes)`（`src/obs-recall.ts`）：把超过阈值的 `role:"tool"` 替换成 `omittedResultPlaceholder`；`Infinity`/≤0 视为关闭（**仍返回新数组**——契约，调用方不能靠引用相等判"没改"）；**fail-open**（投影异常保留原消息，理由写进 doc：丢原文比看占位符更糟） |
+| **§九 ②** | **新运行期选项** `obsProjectionThreshold?: number`（`src/runtime.ts:AgentRuntimeOptions`），默认 `Number.POSITIVE_INFINITY`（**默认 OFF，行为零变化**）；`positiveInt` 拒 `Infinity`，校验照 `maxSteps` 形状内联 |
+| **§九 ③** | **两层投影合一 + 顺序在 doc 里写明**：`buildPrompt` 改一处，把**压缩**投影与**尺寸**投影合到同一个 `visible` 数组上，**压缩先、尺寸后**。颠倒会出错：尺寸投影先做会把"50 KiB 工具结果"换成"≈200 字节占位符"，**压缩层再投影一次**会拿占位符的字节数算"50000 bytes"——这是 §四"两件事有顺序"那条原则的具体化 |
+| **§九 ④** | **不替操作员选阈值**。D52 §三 把 SoL-Pi 的 `THRESHOLD_BYTES=10KB` / `FULL_SENDS=2` 标了"未验证"；**猜 16 KiB** 和 **猜 32 KiB** 都是凭感觉，`D127 纪律` *额度要么数出来、要么测出来* 同样适用于投影阈值。**默认 OFF = 把开关的权力显式交给操作员**——不是"留 TODO" |
+| **纪律** | **D128 §九 是接 D128 §六 的，不是接 `assertContextFits` 的**。它**减** `assertContextFits` 被触发的次数，**不**是替代它（`assertContextFits` 仍然**只**报错、不做截断，这是 D81）。**真机阈值**（personal-agent test 套件 n=11 实测过——`measure-tool-bytes.test.ts`）**支持 32 KiB 候选**：5/11 = 45% 投影比例 + 命中 18.9 KiB / 40 KiB 中段 + 不踩 < 256 B 短 case。**当前默认 = `32 * 1024`（`DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES`）**，**显式 `Number.POSITIVE_INFINITY` 仍等于关掉**。**n=11 是方向性数据**，**真分布仍待 DSH 真机**——**等用户在 DSH 跑 N 轮后精调** |
+
 ---
 
 ## 2. ⚠️ 已撤回 / 已被更正 / 已撤销
@@ -138,7 +199,7 @@
 | **D33** "下一步是规则表内核" | **过期**（`rule-table.ts`/`tiers.ts` 已完成并接线） | D33 自身 |
 | **D48** 中间档放行了 `git` 整族 | **D49 实证复现并修掉** | D49 |
 | **D50** 探测产物 | **破坏 10 个 CLI 测试，已回退** | D50 |
-| **D52** `obs_recall` 归档到文件 | **被用户推翻**（*"如果不写成文件的话后期如何追溯之前的内容？"*）→ 改为**按 `callId` 从会话日志读回** | D52 修正块 |
+| **D52** `obs_recall` 归档到文件 | **被用户推翻**（*"如果不写成文件的话后期如何追溯之前的内容？"*）→ 改为**按 `callId` 从会话日志读回** | D52 修正块 → **D128 已落代码**（§九 接上 size-threshold 投影，默认 OFF）|
 | **D53** 记忆系统的诊断 | **假诊断** | D55 修正 |
 | **D55 拒绝 #2** 的前提 | **错**（用户指出 `/compact` 是一次模型调用；正确范围是 *`decide()` 不做模型调用*） | D55 修正块 |
 | **D56** "① 堵住 ② 的逃生口"、"会话历史无法按内容索引" | **两条都是假的** | D57 取证 |
@@ -178,7 +239,24 @@
 
 ---
 
+## 执行预算更正（2026-10-06，用户明确决定）
+
+- 产品目标是完成任务，不设 API 费用或累计 Token 花费上限；用量仍记录。模型上下文容量、单次输出设置（默认32000）、权限与写入边界不是花费上限，不因此移除。
+- OpenCode 式步骤策略：默认无限；显式 maxSteps 后允许一次无工具总结，拒绝总结阶段工具调用，不将预算耗尽误判为完成。长任务默认 maxRounds=0（不限）；用户追加决定：旧任务的已存轮数限制必须自动覆盖，不要求面板操作。v1记录首次读取在租约内迁移并原子持久化为v2、maxRounds=0；保留进度、状态和计划，不自动恢复暂停任务。迁移后用户新设的显式限制仍有效。
+- 去掉默认整轮15分钟和连续任务30分钟硬停；CLI默认亦不设整轮时限/累计工具调用上限。单次 API 请求桌面默认10分钟，首数据180秒、流空闲90秒继续独立生效；后两者是本产品现值，不声称复制Claude默认。
+- **一手证据**：[Claude env-vars](https://code.claude.com/docs/en/env-vars.md) 明确 API_TIMEOUT_MS=600000 是单次 API 请求；BASH_DEFAULT_TIMEOUT_MS=120000、BASH_MAX_TIMEOUT_MS=600000 是前台命令。[工具参考](https://code.claude.com/docs/en/tools-reference.md) 另规定命令转后台及后台期限；[headless](https://code.claude.com/docs/en/headless.md) 的10分钟是最终轮后持续空闲等待。[OpenCode agents](https://opencode.ai/docs/agents/#max-steps) 写明未设置steps持续迭代，设上限后纯文本总结；本次读取 dev 源码 session/prompt.ts 亦见 agent.steps ?? Infinity。
+- **确切结论范围**：本产品15分钟是本地整轮策略，不能以Claude请求/工具超时为依据；已读官方材料不支持Claude统一15分钟任务限制。不以文档未提及推断所有版本/云宿主绝无任务总时限。其他Claude行为逐项调查，不作已全面对齐的宣称。
+- 完成须有证据；取消、权限拒绝、真实模型失败、无进展及上下文安全边界仍可能暂停。移除预算不保证模型必然完成，不无限重试认证/结构错误，不重放已成功工具。
+
 ## 3. ⚠️ 已知缺口
+
+- **⚠️ D19 的盲区只补上了一部分（D125 实测）**：54 个真实 round 里 D19 错放 **13 个**假成功，`roundVeto` 抓到 **6 个**，**剩 7 个**。剩下的分两类：**(a)「忙但零工具」**（`继续` steps=17/tools=0、`创建HTML…` steps=10/tools=0）—— `busyNoTools` 特征实测**分不开两类**且会误伤合法的无工具回答（`1+1=?` → 0.99），故**刻意不放进规则**；**(b)「模型真干活了但 Jev 判低分」**（诊断包分析用过 10/21 次工具，Jev 给 0.28/0.34）—— 这类**不该照着改**，那是 Jev 的噪声而不是 D19 的缺陷。**⇒「87.0%」是留一法在 54 个 round 上的数，不是对任意语料的准确率**；且 DSH 主会话的 round 是 agent 自己的输出，**存在自指**（4 个子代理会话与 personal-agent 会话的循环性较低，语料是有意混合的）。
+- **⚠️ 意图权重表未做留一法复核（D124 遗留）**：~~381 个信号里出现次数少的那部分权重不稳。轮次质量那边的方法（`eval-round-quality.ts`）到 D125 才补上，**意图表还没回补**~~ → **D129 §六 已闭合**：D124 381 信号只覆盖 supplement 4%、共享 72 信号 mean\|Δ\|=0.21-0.26——**留一法复核实证**，"未复核"这条**划掉**
+- **⚠️ 「换模型后重跑校准」是设计、不是实测（D126 遗留）**：触发条件写成了事件驱动，但**本轮没有真的换一个 provider 演练过**。
+- **⚠️ 2-gram 切粒度问题（D129 实证，**D130 已修**）**：~~`extractSignals` 把一条长 prompt 切出的所有 bigrams 当独立信号训练，supplement (1822 信号) 把这毛病放大了 4.8 倍。修法候选：训练时一条 prompt 的所有 bigrams 共用 `probs`（1 prompt = 1 观察），改 `train-intent-weights.ts` 一文件。**D130 候选**。**不阻塞 D129**。~~ → **D130 闭合**：4.8× 通胀消解（D129 supplement 那批 `build 0.98` 大 bigrams 全部变 `0.01`），**合并 383 行训出新 weights 2131 signals**——**D124 ② 决定**：这个 `scripts/intent-weights-merged.json` **可替 src/intent-weights.json**（spot-check 5/5 平手 D124 base，5.6× 信号覆盖）。**留给用户复核后做替换动作**（D126 边界）
+- **⚠️ 单模型校准偏差（D131 实证，**D132 量化**）**：Jev 在 211 真用户 prompt 上 48% 判 research；Claude Opus 5 88% 判 fix；Grok 4.7 96% 判 fix——**三模型偏全极端**。**D132 验证**：`priors.research` 单模型训出（Jev 0.535 / Claude 0.414 / Grok 0.502）vs **consensus-mean 0.528**——**consensus 被 Jev 一家主导**（Claude 25 行 / Grok 10 行 失败率高），**多模型均值几乎不对冲**。**D119 候选**：补 Claude/Grok 调用补齐数据；或换 EvoMap multi-model 通路另行启动；当前 spot-check 上 merged=src/D124 5/5 平手，**D124 ② 决定先替 merged，**再决定 consensus 是否还需要
+- **⚠️ 8787 网关 alias routing 配置（**D133 skipped 按用户意见**）**：`claude-opus-5` 被网关路由到 `notion*` 通道（**notion 也接入了大模型**——是 alias 合理后端），`grok-4.7` 走 `lezi`/`sharellm`（同理），`gpt-5.3` 503。**用户决定不动配置**：8787 按模型 alias 分频道合理，**D131 多模型横评里 387 ERROR 接受为"alias 设计"**
+
 
 - **`REFERENCE_DECISIONS.md` 的 D 索引里没有 D10**（D01–D09 之后直接是 D11）。**未查清是漏号还是漏条。**
 - **`CODE_MAP.md` 曾漏 `inspection-tools.ts`**（36 个 src 文件只覆盖 35 个）。

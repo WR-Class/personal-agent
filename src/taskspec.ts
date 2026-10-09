@@ -12,6 +12,9 @@
  */
 export const TASKSPEC_VERSION = 2;
 
+import { classifyIntent } from "./intent-classifier.ts";
+import type { HistoryRound } from "./intent-classifier.ts";
+
 /** The one mode this runtime runs today. The runtime sets it; the model cannot. */
 export const TASK_MODE = "single-agent";
 
@@ -36,12 +39,20 @@ export interface TaskSpec {
 /** Structured input keeps its first text part, mirroring dsh-orchestrator. */
 type SpecInput = string | { content?: ReadonlyArray<{ type?: string; text?: string } & Record<string, unknown>> };
 
+// Intent classification (D124): a Jev-distilled classifier in
+// `intent-classifier.ts` reads `intent-weights.json` and averages the
+// training-set probability vectors for every signal in the prompt. The
+// regex table is the OOV fallback: when no signal hits the weights, this
+// is the only routing signal we have, and it covers the operators people
+// type before any training data exists.
 const INTENT_HINTS: ReadonlyArray<readonly [TaskIntent, RegExp]> = [
-  ["fix", /修复|修正|bug|fix/i],
-  ["verify", /验证|核实|测试通过|verify|test/i],
-  ["research", /调研|研究|research/i],
-  ["operate", /部署|上线|operate|deploy/i],
+  ["operate", /部署|上线|运维|维护|服务器|infra(?!-read|structure)|\bsystem\b|operate|deploy/i],
 ];
+
+// ponytail: any top-probability under this means the classifier saw zero
+// matching signals and the priors carried the decision. We only trust the
+// regex when the classifier has nothing better to say.
+const OOV_THRESHOLD = 0.5;
 
 function firstText(input: SpecInput): string {
   if (typeof input === "string") return input;
@@ -81,26 +92,40 @@ function isCjk(token: string): boolean {
   return /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(token);
 }
 
-export function buildTaskSpec(input: SpecInput, options: { mode?: string } = {}): TaskSpec {
+export function buildTaskSpec(input: SpecInput, options: { mode?: string; history?: ReadonlyArray<HistoryRound> } = {}): TaskSpec {
   const originalInput = firstText(input);
   const objective = originalInput.trim();
   const unknowns: string[] = [];
   if (objective === "") unknowns.push("objective");
-  let intent: TaskIntent = "build";
-  for (const [candidate, hint] of INTENT_HINTS) {
-    if (hint.test(originalInput)) { intent = candidate; break; }
+  // ponytail: classifier only fires when at least one signal is in the
+  // weight table; otherwise the OOV prior carries it and we lean on the
+  // operator-keyword regex or fall through to the build default. The
+  // Jev training set is small and "normal work" with no signal is not its
+  // problem to solve. v5 (D138) adds an optional `history` so the
+  // classifier can blend in the previous round's intent and AI state;
+  // omitting it keeps the v1 behaviour for callers that have no session.
+  const c = classifyIntent(originalInput, options.history);
+  let intent: TaskIntent = c.intent;
+  if (c.oov) {
+    intent = "build";
+    for (const [candidate, hint] of INTENT_HINTS) {
+      if (hint.test(originalInput)) { intent = candidate; break; }
+    }
   }
-  const hasMode = options.mode !== undefined;
-  if (!hasMode) unknowns.push("mode");
+  // TASK_MODE is the runtime's actual default; an unspecified `mode` is not
+  // unknown, it is this. Recording it as unknown would mislead any operator
+  // reading the spec — they would look for a missing value the runtime never
+  // had to give.
+  const selectedMode = options.mode ?? TASK_MODE;
   return {
     schema: TASKSPEC_VERSION,
     originalInput,
     objective,
     intent,
     signals: extractSignals(originalInput),
-    ...(hasMode ? { selectedMode: options.mode } : {}),
+    selectedMode,
     unknowns,
-    evidence: { authoritativeMode: hasMode },
+    evidence: { authoritativeMode: true },
   };
 }
 
