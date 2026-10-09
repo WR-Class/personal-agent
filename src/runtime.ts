@@ -19,13 +19,16 @@ import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import type { GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
 import type { CycleEvaluation, CycleEvent, CycleState, FailureClass } from "./cycle.ts";
 
-export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; isError?: boolean; }
+export interface RuntimeActivity { type: "model" | "tool-start" | "tool-end"; name?: string; callId?: string; isError?: boolean; arguments?: string; content?: string; }
+// UI evidence is bounded; the session store retains the full authoritative result.
+function activityText(text: string): string { return text.length > 24_000 ? text.slice(0,24_000)+'\n【即时预览已截断，完整记录见本轮结束后的执行证据】' : text; }
 export interface AgentRuntimeOptions {
   onActivity?: (event: RuntimeActivity) => void;
   /** One-shot operator question. Used only by edit_file. */
@@ -75,10 +78,9 @@ export interface AgentRuntimeOptions {
   /**
    * Maximum model calls in one `send`. Defaults to {@link DEFAULT_MAX_STEPS}.
    *
-   * A cap is not a safety net bolted on afterwards — it is a termination
-   * guarantee for model calls. It bounds steps only: one reply can still carry an
-   * unbounded list of tool calls, which is why the per-step, per-run and deadline
-   * budgets below exist alongside it rather than instead of it.
+   * Optional operator cap on working calls; default unlimited. An explicit cap
+   * permits one additional tools-disabled summary, never another tool action.
+   * Per-step tool and context boundaries remain independent.
    */
   maxSteps?: number;
   /**
@@ -105,10 +107,10 @@ export interface AgentRuntimeOptions {
   /**
    * Wall-clock ceiling for one `send`, in milliseconds.
    *
-   * Without it the loop is bounded only by the number of calls, and a slow
-   * provider turns a bounded number of calls into unbounded waiting.
+   * Omitted/null means no whole-send deadline. Per-request/tool timers and
+   * operator cancellation remain independent.
    */
-  deadlineMs?: number;
+  deadlineMs?: number | null;
   /**
    * Ceiling on the size of one reconstructed prompt, in UTF-8 bytes.
    * Defaults to {@link DEFAULT_MAX_CONTEXT_BYTES}.
@@ -121,6 +123,27 @@ export interface AgentRuntimeOptions {
    * answering without anyone being told.
    */
   maxContextBytes?: number;
+  /**
+   * Tool messages larger than this byte count are replaced in the projected
+   * prompt with an `obs_recall` placeholder (D128 §九), so a session with a
+   * few large results can keep working instead of failing `assertContextFits`.
+   *
+   * **Default: `32 * 1024` (32 KiB).** Chosen from a personal-agent test-suite
+   * measurement of n=11 real tool calls (D128 §九·六 / `measure-tool-bytes.test.ts`):
+   * 5/11 = 45% of tool results would project at 32 KiB, hitting the 18.9K / 40K /
+   * 65K / 200K "mid-range" cases the projection exists to save while leaving the
+   * < 256 B short shells, small JSONs, and small binary hex dumps untouched. 32 KiB
+   * is `RECALL_MAX_BYTES` × 2, so "≥ 2 recall pages" is the boundary. **The n=11
+   * sample is directional, not precise** — set this explicitly to refine once
+   * DSH session data is available, or pass `Number.POSITIVE_INFINITY` to turn
+   * projection off.
+   *
+   * Pass an integer ≥ 1 to enable, or `Number.POSITIVE_INFINITY` to keep the
+   * projection off. A `0` or negative value is treated as off, not as
+   * "project everything", because a placeholder for a one-byte tool result is
+   * information loss dressed up as a budget control.
+   */
+  obsProjectionThreshold?: number;
   /**
    * Ceiling on the input-token count the provider may report before the run
    * stops. Defaults to {@link DEFAULT_MAX_CONTEXT_TOKENS}.
@@ -178,15 +201,25 @@ export interface AgentRuntimeOptions {
 }
 
 export const DEFAULT_MAX_TOOL_CALLS_PER_STEP = 8;
-export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 32;
+export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = Infinity;
 /** A round with no gene applied still gets a write budget: unbounded is not a default. */
 export const DEFAULT_WRITE_MAX_FILES = 3;
 export const DEFAULT_WRITE_MAX_LINES = 200;
-export const DEFAULT_DEADLINE_MS = 300_000;
+export const DEFAULT_DEADLINE_MS = Infinity;
 export const DEFAULT_MAX_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 131_072;
 
-export const DEFAULT_MAX_STEPS = 10;
+/**
+ * Default byte threshold for `obsProjectionThreshold` (D128 §九·六).
+ * 32 KiB = `RECALL_MAX_BYTES` × 2, so "≥ 2 recall pages" is the boundary.
+ * The value is backed by a personal-agent test-suite measurement of n=11
+ * real tool calls (5/11 = 45% projected at 32 KiB), but the n=11 sample
+ * is directional, not precise. Operators refine this once DSH session
+ * distribution is available; pass `Number.POSITIVE_INFINITY` to disable.
+ */
+export const DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES = 32 * 1024;
+
+export const DEFAULT_MAX_STEPS = Infinity;
 
 /** Default home for the agent's own state, relative to the cwd. */
 export const DEFAULT_AGENT_HOME = ".personal-agent";
@@ -409,7 +442,7 @@ export function formatBudget(budget: RunBudget): string {
     : counted > budget.maxContextTokens
       ? `令牌 ${counted}/${budget.maxContextTokens}(超${counted - budget.maxContextTokens})${basis}`
       : `令牌 ${counted}/${budget.maxContextTokens}(剩${budget.maxContextTokens - counted})${basis}`;
-  return `[步骤 ${budget.stepsUsed}/${budget.maxSteps} · 工具 ${budget.toolCallsUsed}/${budget.maxToolCallsPerRun}` +
+  return `[步骤 ${budget.stepsUsed}/${Number.isFinite(budget.maxSteps)?budget.maxSteps:'不限'} · 工具 ${budget.toolCallsUsed}/${Number.isFinite(budget.maxToolCallsPerRun)?budget.maxToolCallsPerRun:'不限'}` +
     ` · prompt ${size(budget.promptBytes)}/${size(budget.maxContextBytes)} · ${tokens}` +
     // Printed only when a provider reported it. The whole point of this number is
     // that a two-word answer can still burn a thousand output tokens; hiding it is
@@ -419,7 +452,7 @@ export function formatBudget(budget: RunBudget): string {
     // the type). Showing writes only when they happened keeps a read-only round's
     // budget line exactly as short as it was.
     (budget.filesWritten === undefined ? "" : ` · 写入 ${budget.filesWritten}/${budget.filesWrittenLimit} 文件 ${budget.linesWritten}/${budget.linesWrittenLimit} 行`) +
-    ` · 用时 ${time(budget.elapsedMs)}/${time(budget.deadlineMs)}]`;
+    ` · 用时 ${time(budget.elapsedMs)}/${Number.isFinite(budget.deadlineMs)?time(budget.deadlineMs):'不限'}]`;
 }
 
 export interface SendResult {
@@ -523,6 +556,8 @@ export class AgentRuntime {
   private readonly deadlineMs: number;
   private readonly maxContextBytes: number;
   private readonly maxContextTokens: number;
+  /** D128 §九 — `Number.POSITIVE_INFINITY` means "no projection" (default). */
+  private readonly obsProjectionThreshold: number;
   private readonly contextWindows: Readonly<Record<string, number>> | undefined;
   private readonly countPromptTokens: ((messages: readonly ChatMessage[]) => number) | undefined;
   /** Count for the last prompt built, when a host tokenizer is supplied. */
@@ -627,9 +662,9 @@ export class AgentRuntime {
       protectedRoots: this.configuredProtectedRoots,
     });
     this.tools = options.tools;
-    this.maxSteps = positiveInt("maxSteps", options.maxSteps, DEFAULT_MAX_STEPS);
+    this.maxSteps = options.maxSteps === undefined || options.maxSteps === Infinity ? Infinity : positiveInt("maxSteps", options.maxSteps, DEFAULT_MAX_STEPS);
     this.maxToolCallsPerStep = positiveInt("maxToolCallsPerStep", options.maxToolCallsPerStep, DEFAULT_MAX_TOOL_CALLS_PER_STEP);
-    this.maxToolCallsPerRun = positiveInt("maxToolCallsPerRun", options.maxToolCallsPerRun, DEFAULT_MAX_TOOL_CALLS_PER_RUN);
+    this.maxToolCallsPerRun = options.maxToolCallsPerRun === undefined || options.maxToolCallsPerRun === Infinity ? Infinity : positiveInt("maxToolCallsPerRun", options.maxToolCallsPerRun, DEFAULT_MAX_TOOL_CALLS_PER_RUN);
     this.writeBudget = {
       maxFiles: positiveInt("maxWriteFiles", options.maxWriteFiles, DEFAULT_WRITE_MAX_FILES),
       maxLines: positiveInt("maxWriteLines", options.maxWriteLines, DEFAULT_WRITE_MAX_LINES),
@@ -641,9 +676,20 @@ export class AgentRuntime {
       forbiddenPaths: [],
     };
     this.defaultWriteBudget = this.writeBudget;
-    this.deadlineMs = positiveInt("deadlineMs", options.deadlineMs, DEFAULT_DEADLINE_MS);
+    this.deadlineMs = options.deadlineMs === undefined || options.deadlineMs === null || options.deadlineMs === Infinity ? Infinity : positiveInt("deadlineMs", options.deadlineMs, DEFAULT_DEADLINE_MS);
     this.maxContextBytes = positiveInt("maxContextBytes", options.maxContextBytes, DEFAULT_MAX_CONTEXT_BYTES);
     this.maxContextTokens = positiveInt("maxContextTokens", options.maxContextTokens, DEFAULT_MAX_CONTEXT_TOKENS);
+    // `positiveInt` rejects Infinity, so the `Infinity` case is inlined the same
+    // way `maxSteps` and `deadlineMs` are handled in this constructor (D128 §九).
+    this.obsProjectionThreshold = (() => {
+      const value = options.obsProjectionThreshold;
+      if (value === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY; // explicit "off" wins
+      if (value === undefined) return DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES;
+      if (!Number.isInteger(value) || value < 1) {
+        throw new Error(`obsProjectionThreshold must be a positive integer or Infinity, got ${String(value)}`);
+      }
+      return value;
+    })();
     this.contextWindows = validateContextWindows(options.contextWindows);
     this.countPromptTokens = options.countPromptTokens;
     this.model = options.model;
@@ -698,7 +744,7 @@ export class AgentRuntime {
     // to reach the adapter, otherwise a slow provider turns a bounded number of
     // calls into unbounded waiting. It cannot force-kill in-process code that
     // ignores the signal — it stops *starting* new work.
-    const deadline = AbortSignal.timeout(this.deadlineMs);
+    const deadline = Number.isFinite(this.deadlineMs) ? AbortSignal.timeout(this.deadlineMs) : new AbortController().signal;
     const composed = signal ? AbortSignal.any([signal, deadline]) : deadline;
     try { return await this.store.withWriter(this.sessionId, async () => {
       composed.throwIfAborted();
@@ -726,7 +772,7 @@ export class AgentRuntime {
    * Consuming the address makes a double journal impossible: the verdict and the
    * gene it belongs to are recorded exactly once per round.
    */
-  private async journalOutcome(evaluation: CycleEvaluation): Promise<void> {
+  private async journalOutcome(evaluation: CycleEvaluation, budgetRefusals = 0): Promise<void> {
     const address = this.outcomeAddress;
     const spec = this.outcomeSpec;
     const tools = this.outcomeTools;
@@ -755,6 +801,21 @@ export class AgentRuntime {
       // competed: a single-candidate round has nothing to contrast, so recording a
       // one-element list would be bytes with no replay value.
       ...(candidates && candidates.length > 1 ? { candidates } : {}),
+      // The round's write footprint, so `distill.ts`/`induct.ts` can size a gene's
+      // budget from what rounds of this kind actually reached instead of from a
+      // constant (D127). Written only when the round wrote something or was
+      // stopped by the budget: a round that wrote nothing contributes nothing to
+      // the measurement, and outcome rows are the log's growth hot spot.
+      //
+      // ⚠️ `budgetRefusals` must survive even when nothing was written, because
+      // it is the flag that says the other two numbers are censored.
+      ...(this.writeLedger.files.length > 0 || budgetRefusals > 0
+        ? {
+          filesWritten: this.writeLedger.files.length,
+          linesWritten: this.writeLedger.lines,
+          ...(budgetRefusals > 0 ? { budgetRefusals } : {}),
+        }
+        : {}),
       evidence: evaluation.evidence,
     });
   }
@@ -871,15 +932,19 @@ export class AgentRuntime {
     let steps = 0;
     let toolCalls = 0;
     let toolErrors = 0;
+    // The third number, kept off the success axis (D127). It is journaled so the
+    // budget estimate can learn from real demand, and deliberately not fed into
+    // `evaluateRun`: see `runToolCalls` for why the two are different lessons.
+    let budgetRefusals = 0;
 
     try {
     cycle = await this.advance(cycle, { type: "execute-start", at: Date.now() });
 
     while (true) {
-      if (steps >= this.maxSteps) throw new StepLimitError(steps);
-
+      const finalizing = steps >= this.maxSteps;
       signal?.throwIfAborted();
       const messages = await this.buildPrompt();
+      if(finalizing)messages.push({role:'user',content:'The operator-configured step limit has been reached. Do not call tools. Give a final text summary of verified completed work, remaining work and blockers. Do not claim the entire task is complete unless supported by observed results.'});
       // Checked every step as well: the prompt grows with each tool result, so a
       // prompt that fit at step one is no guarantee at step five.
       this.assertContextFits(messages);
@@ -888,7 +953,7 @@ export class AgentRuntime {
       const response = await this.adapter.chat(
         {
           messages,
-          ...(this.tools ? { tools: this.tools.definitions() } : {}),
+          ...(this.tools && !finalizing ? { tools: this.tools.definitions() } : {}),
           ...(this.model ? { model: this.model } : {}),
           ...(this.temperature === undefined ? {} : { temperature: this.temperature }),
         },
@@ -896,6 +961,7 @@ export class AgentRuntime {
       );
       signal?.throwIfAborted();
       validateResponse(response);
+      if(finalizing && response.toolCalls.length)throw new StepLimitError(steps);
       steps += 1;
       model = response.model;
       // The window now follows the model the provider actually used.
@@ -942,7 +1008,8 @@ export class AgentRuntime {
         // then the applied gene's claims are compared against that same record.
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
-        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null });
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals });
+        const completionEvaluation = finalizing ? {...evaluation,status:'partial' as const,evidence:[...evaluation.evidence,'Configured step cap reached; summary is not task completion.']} : evaluation;
         // One evidence object, named, and read by both consumers. Writing the pair
         // out twice would let the gene's claims and the task's claims be judged
         // against different facts about the same round.
@@ -965,11 +1032,11 @@ export class AgentRuntime {
             evidence: [...evaluation.evidence, ...validationEvidence(validation)],
           }
           : validation
-            ? { ...evaluation, evidence: [...evaluation.evidence, ...validationEvidence(validation)] }
-            : evaluation;
+            ? { ...completionEvaluation, evidence: [...completionEvaluation.evidence, ...validationEvidence(validation)] }
+            : completionEvaluation;
         cycle = await this.advance(cycle, { type: "review-ready", at: Date.now(), evaluation: verdict });
         cycle = await this.advance(cycle, { type: "integrate-ready", at: Date.now() });
-        await this.journalOutcome(verdict);
+        await this.journalOutcome(verdict, budgetRefusals);
         cycle = await this.advance(cycle, { type: "complete", at: Date.now() });
         return {
           reply: assistant,
@@ -1012,6 +1079,7 @@ export class AgentRuntime {
       const executed = await this.runToolCalls(response.toolCalls, signal, runId, steps);
       toolCalls += executed.calls;
       toolErrors += executed.errors;
+      budgetRefusals += executed.budgetRefusals;
     }
     }
     catch (error) {
@@ -1021,7 +1089,7 @@ export class AgentRuntime {
         steps, toolCalls, toolErrors, failureClass: this.classifyFailure(error),
       });
       await this.advance(cycle, { type: "fail", at: Date.now(), evaluation });
-      await this.journalOutcome(evaluation);
+      await this.journalOutcome(evaluation, budgetRefusals);
       throw error;
     }
   }
@@ -1036,7 +1104,7 @@ export class AgentRuntime {
     signal: AbortSignal | undefined,
     runId: string,
     step: number,
-  ): Promise<{ calls: number; errors: number }> {
+  ): Promise<{ calls: number; errors: number; budgetRefusals: number }> {
     // Re-read on every step rather than caching for the session, so revoking a
     // root takes effect on the next step instead of the next conversation.
     try {
@@ -1068,6 +1136,14 @@ export class AgentRuntime {
       audit: (event) => this.store.appendAudit(this.sessionId, event).then(() => undefined),
     };
     let errors = 0;
+    // Kept apart from `errors` on purpose (D127). A write-budget refusal is not a
+    // tool failure: the tool never ran, nothing broke, and the round is still
+    // doing exactly what it was asked. Folding the two together charged the
+    // applied gene for a budget that was mis-sized — the gene's quality record
+    // then said "this strategy did not work" when the truth was "this round was
+    // given too little room". Two different lessons, and only one of them is
+    // about the strategy.
+    let budgetRefusals = 0;
     let index = 0;
     for (const call of calls) {
       const position = index++;
@@ -1082,11 +1158,11 @@ export class AgentRuntime {
       if (attempt !== null) {
         const decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
         if (!decision.allowed) {
-          errors += 1;
-          this.activity({ type: "tool-start", name: call.name });
-          this.activity({ type: "tool-end", name: call.name, isError: true });
+          budgetRefusals += 1;
+          this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
+          this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: true, content: activityText(`refused: ${decision.reason}`) });
           await this.store.appendAudit(this.sessionId, {
-            tool: call.name, decision: "denied", reason: `write budget: ${decision.reason}`,
+            tool: call.name, decision: "denied", cause: "budget", reason: `write budget: ${decision.reason}`,
           });
           await this.store.appendMessage(
             this.sessionId,
@@ -1100,11 +1176,11 @@ export class AgentRuntime {
       let result;
       if (signal?.aborted) result = { content: "cancelled: tool was not executed", isError: true };
       else {
-        this.activity({ type: "tool-start", name: call.name });
+        this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
         result = signal?.aborted ? { content: "cancelled: tool was not executed", isError: true }
           : this.tools ? await this.tools.execute(call, context)
           : { content: `no tools are configured, cannot run ${call.name}`, isError: true };
-        this.activity({ type: "tool-end", name: call.name, isError: result.isError === true });
+        this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: result.isError === true, content: activityText(result.content) });
       }
       // One line, not three (ADR-0001): the assistant turn above already recorded
       // what was requested, so this message is the whole record of what came back.
@@ -1119,7 +1195,7 @@ export class AgentRuntime {
       );
     }
     signal?.throwIfAborted();
-    return { calls: calls.length, errors };
+    return { calls: calls.length, errors, budgetRefusals };
   }
 
   private assertContextFits(messages: readonly ChatMessage[]): void {
@@ -1244,21 +1320,32 @@ export class AgentRuntime {
     }
     const systemText = [this.systemPrompt, this.genePrompt, constraints, taskState, this.taskPromptBlock].filter((part) => part !== undefined && part !== "").join("\n\n");
     const system: ChatMessage[] = systemText === "" ? [] : [{ role: "system", content: systemText }];
+    // Two projection passes, in this order (D128 §九, on the order see
+    // `projectOversizedToolResults`'s own header):
+    //   1. **Compaction first.** Replaces covered tool messages with a small
+    //      placeholder that carries the size of the *original* content.
+    //   2. **Size projection second.** Replaces individual tool messages
+    //      bigger than `obsProjectionThreshold` with a placeholder that
+    //      carries their size. Already-compacted messages have small content
+    //      and so are no-ops of this pass; running the other order would
+    //      leave the compaction pass describing a placeholder's bytes instead
+    //      of the original's.
     const compaction = marks.compaction;
-    if (compaction && compaction.covers > 0) {
-      const covered = Math.min(compaction.covers, past.length);
-      const summary: ChatMessage = {
-        role: "system",
-        content: `Earlier tool results were omitted after message ${covered}. ` +
-          `User and assistant messages below stay verbatim. The full transcript is still in the session log.\n\n${compaction.summary}`,
-      };
-      const visible = past.map((message, index) =>
-        index < covered && message.role === "tool"
-          ? { ...message, content: `[tool result omitted; ${message.content.length} chars remain in the session log]` }
-          : message);
-      return extra ? [...system, summary, ...visible, extra] : [...system, summary, ...visible];
-    }
-    return extra ? [...system, ...past, extra] : [...system, ...past];
+    const covered = compaction && compaction.covers > 0 ? Math.min(compaction.covers, past.length) : 0;
+    const summary: ChatMessage | undefined = compaction && compaction.covers > 0
+      ? {
+          role: "system",
+          content: `Earlier tool results were omitted after message ${covered}. ` +
+            `User and assistant messages below stay verbatim. The full transcript is still in the session log.\n\n${compaction.summary}`,
+        }
+      : undefined;
+    const afterCompaction = past.map((message, index) =>
+      index < covered && message.role === "tool"
+        ? { ...message, content: omittedResultPlaceholder(message.toolCallId, message.content) }
+        : message);
+    const projected = projectOversizedToolResults(afterCompaction, this.obsProjectionThreshold);
+    const visible = summary ? [summary, ...projected] : projected;
+    return extra ? [...system, ...visible, extra] : [...system, ...visible];
   }
 
   /**

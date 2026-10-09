@@ -13,7 +13,6 @@
 export const TASKSPEC_VERSION = 2;
 
 import { classifyIntent } from "./intent-classifier.ts";
-import type { HistoryRound } from "./intent-classifier.ts";
 
 /** The one mode this runtime runs today. The runtime sets it; the model cannot. */
 export const TASK_MODE = "single-agent";
@@ -92,7 +91,7 @@ function isCjk(token: string): boolean {
   return /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(token);
 }
 
-export function buildTaskSpec(input: SpecInput, options: { mode?: string; history?: ReadonlyArray<HistoryRound> } = {}): TaskSpec {
+export function buildTaskSpec(input: SpecInput, options: { mode?: string } = {}): TaskSpec {
   const originalInput = firstText(input);
   const objective = originalInput.trim();
   const unknowns: string[] = [];
@@ -101,10 +100,8 @@ export function buildTaskSpec(input: SpecInput, options: { mode?: string; histor
   // weight table; otherwise the OOV prior carries it and we lean on the
   // operator-keyword regex or fall through to the build default. The
   // Jev training set is small and "normal work" with no signal is not its
-  // problem to solve. v5 (D138) adds an optional `history` so the
-  // classifier can blend in the previous round's intent and AI state;
-  // omitting it keeps the v1 behaviour for callers that have no session.
-  const c = classifyIntent(originalInput, options.history);
+  // problem to solve.
+  const c = classifyIntent(originalInput);
   let intent: TaskIntent = c.intent;
   if (c.oov) {
     intent = "build";
