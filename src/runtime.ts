@@ -1254,6 +1254,21 @@ export class AgentRuntime {
    * would make the recorded boundary a lie about what the model was told.
    */
   private async buildPrompt(extra?: ChatMessage): Promise<ChatMessage[]> {
+    // ponytail: store.history / loadConstraints / store.latestMarks are
+    // re-read on every call, even though pre-flight (sendTurn:916) and the
+    // first model iteration (sendTurn:946) produce the same content. The
+    // constraints read is intentionally NOT cached — the operator can edit
+    // constraints.json mid-conversation and expect the next turn to reflect
+    // it (the comment immediately below documents this contract). History
+    // and marks *do* change between the pre-flight and the first iteration
+    // (the user turn is appended in between), so caching across that
+    // boundary would diverge from the persisted log. Net cost per send:
+    // 1 (pre-flight) + N (model loop) + 1 (journal) = N+2 history reads.
+    // Audit 2026-10-09 §2.3 priority 5 weighed the refactor against a 1/(N+2)
+    // saving (not 50% as the audit claimed — the 50% is per-pair, not per-
+    // round) and concluded the refactor is not worth the semantic risk. Add
+    // a session-level cache here when a long-session profile proves this
+    // is a real bottleneck; until then, YAGNI.
     const past = await this.store.history(this.sessionId);
     // The applied gene rides in the system prompt: test-time evolution means
     // the selected strategy is context, never a rule the model is trusted to obey.

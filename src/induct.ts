@@ -14,9 +14,10 @@
  * `mintGene` refuses it until the operator supplies real proof.
  */
 import { type Gene, type GeneIntent } from "./gene.ts";
+import { COLD_START_BUDGET, measuredBudget, type WriteObservation } from "./write-budget.ts";
 
 /** A successful round that applied no gene, as journaled. */
-export interface SuccessFact {
+export interface SuccessFact extends WriteObservation {
   readonly at: number;
   readonly intent: GeneIntent;
   readonly signals: readonly string[];
@@ -91,7 +92,18 @@ export function inductGenes(
       signalsMatch: signals,
       preconditions: [],
       strategy,
-      constraints: { maxFiles: 1, maxLines: 20, forbiddenPaths: [] },
+      // Measured from the rounds in this group, not guessed (D127). This draft is
+      // normally refused by `mintGene` anyway for carrying no validation — the
+      // budget is sized here so that the operator who supplies the proof inherits
+      // a figure taken from real rounds instead of a constant.
+      // ponytail: forbiddenPaths:[] is also deliberate — the candidate cannot
+      // know which paths are off-limits without a per-workspace decision. The
+      // operator who mints this draft MUST supply forbiddenPaths at mint time;
+      // an empty array would let the act step write anywhere (gene.ts:181
+      // allowEmpty:true). Audit 2026-10-09 §2.3 closed the implicit gap by
+      // making the contract explicit; the strict equivalent lives in
+      // `distill.ts:106` and `CODE_MAP.md` runtime.ts row.
+      constraints: { ...measuredBudget(group, COLD_START_BUDGET), forbiddenPaths: [] },
       validation: [],
       avoid: [],
     };

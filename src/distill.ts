@@ -14,9 +14,10 @@
  */
 import { geneAddress, type Gene, type GeneIntent } from "./gene.ts";
 import type { FailureClass } from "./cycle.ts";
+import { COLD_START_BUDGET, measuredBudget, type WriteObservation } from "./write-budget.ts";
 
 /** One round's failure, as journaled. Mechanical facts only — no error text. */
-export interface FailureFact {
+export interface FailureFact extends WriteObservation {
   readonly at: number;
   readonly intent: GeneIntent;
   /** The request's vocabulary, so a guard can match the same kind of ask. */
@@ -98,7 +99,18 @@ export function distillGuards(
       }],
       // Deliberately empty: only the operator can supply the proof command that
       // admits this guard, which is what makes the admission gate real.
-      constraints: { maxFiles: 1, maxLines: 20, forbiddenPaths: [] },
+      // Measured from the rounds in this very group rather than hardcoded (D127):
+      // the constant that used to sit here was a guess nobody could trace, and a
+      // budget that is too small charges the gene for room it never had. Cold
+      // starts fall back to `COLD_START_BUDGET` inside `measuredBudget`.
+      // ponytail: forbiddenPaths:[] is also deliberate — the guard cannot know
+      // which paths are off-limits without a per-workspace decision. The
+      // operator who mints this draft MUST supply forbiddenPaths at mint time;
+      // an empty array would let the guard write anywhere (gene.ts:181
+      // allowEmpty:true). Audit 2026-10-09 §2.3 closed the implicit gap by
+      // making the contract explicit; the strict equivalent lives in
+      // `induct.ts:99` and `CODE_MAP.md` runtime.ts row.
+      constraints: { ...measuredBudget(group, COLD_START_BUDGET), forbiddenPaths: [] },
       validation: [],
       avoid: [`${CLASS_TEXT[failureClass]}：${evidence.join(", ")}`],
     };
