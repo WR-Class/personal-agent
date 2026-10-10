@@ -160,12 +160,23 @@ describe("the ledger", () => {
     });
   });
 
-  it("takes a gene's constraints when they widen the default, and the default when they would narrow it", () => {
+  it("takes a gene's constraints as declared in both directions, and the default only when no gene applies", () => {
     const fallback = { maxFiles: 3, maxLines: 200, forbiddenPaths: [] };
     assert.deepEqual(budgetFor({ maxFiles: 9, maxLines: 900, forbiddenPaths: [] }, fallback), { maxFiles: 9, maxLines: 900, forbiddenPaths: [] });
-    // COLD_START_BUDGET is what `measuredBudget` returns before anything of this
-    // request kind has been observed: a guess, and a guess must not cut the round.
-    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }, fallback), fallback);
+    // ⚠️ Inverted from "and the default when they would narrow it" (甲). A default
+    // bounds a round that was told *nothing*; a declared constraint is what bounds
+    // a round that was told something. A floor underneath it means the declared
+    // number can only ever move up — the one-way ratchet 丙 took out of the
+    // estimator, left standing at the point of use.
+    //
+    // COLD_START_BUDGET = {1, 20} is still a guess and still the tightest number
+    // in this file. The cure is to **measure** it (`measuredBudget`, and the fold
+    // that re-measures genes already in the library), not to hide it under a
+    // second number: a guess with a floor under it is a guess nobody ever
+    // corrects, because nothing downstream can tell it was wrong.
+    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }, fallback), { maxFiles: 1, maxLines: 20, forbiddenPaths: [] });
+    // The fallback is what a round with nothing applied gets, and this is the only
+    // thing it is for.
     assert.deepEqual(budgetFor(null, fallback), fallback);
   });
 });
@@ -503,7 +514,7 @@ describe("enforcement in the runtime", () => {
     assert.equal(result.budget.filesWrittenLimit, 3);
   });
 
-  it("lets a gene widen a round's budget but never narrow it below the default", async () => {
+  it("gives a gene exactly the budget it declared, below the default as well as above", async () => {
     const target = join(fixture.workspaceRoot, "gene-bounded.txt");
     await writeFile(target, "keep\n", "utf8");
 
@@ -526,7 +537,7 @@ describe("enforcement in the runtime", () => {
       }),
       store, sessionId: "gene-bounded", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
       geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-gene-bounded.jsonl")),
-      // The runtime default allows 200 lines; the gene asks for 1.
+      // The runtime default allows 200 lines. The gene asks for 1 and gets 1.
       maxWriteLines: 200,
       tools: new ToolRegistry([createEditFileTool()]),
       approve: async () => true,
@@ -534,11 +545,16 @@ describe("enforcement in the runtime", () => {
 
     const result = await runtime.send("改一下文件");
     assert.equal(result.appliedGene?.address, minted.address);
-    // The gene carries COLD_START_BUDGET — a guess, not a measurement. The round
-    // keeps the 200-line default instead of being cut to one line, so it does not
-    // earn the gene a failure the gene was never responsible for.
-    assert.equal(result.budget.linesWrittenLimit, 200);
-    assert.equal(await readFile(target, "utf8"), "a\nb\nc\n");
+    // ⚠️ Inverted from "but never narrow it below the default" (甲). A gene's
+    // number is a commitment, so it is enforced as written — including downward,
+    // which is the only direction that makes "this gene was sized wrong"
+    // observable at all.
+    assert.equal(result.budget.linesWrittenLimit, 1);
+    // The refusal is checked before the tool runs, so the file is untouched. That
+    // refusal is exactly the evidence 戊 re-measures this gene's number from, and
+    // under 甲 it could never be produced: the round was quietly handed 200 lines
+    // and the gene's own number was never tested.
+    assert.equal(await readFile(target, "utf8"), "keep\n");
   });
 
   it("classifies an exhausted write budget as a budget failure", () => {

@@ -96,12 +96,16 @@ export interface AgentRuntimeOptions {
   maxToolCallsPerRun?: number;
   /**
    * Distinct files one cycle may write when no gene constrains the round.
-   * Defaults to {@link DEFAULT_WRITE_MAX_FILES}. A gene may raise this, never lower it.
+   * Defaults to {@link DEFAULT_WRITE_MAX_FILES}. A gene replaces this for the
+   * round it applies to — in **either** direction, because a declared
+   * constraint is what bounds a round that was told something, and a limit that
+   * can only ever go up is not a limit.
    */
   maxWriteFiles?: number;
   /**
    * Lines one cycle may add or change when no gene constrains the round.
-   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene may raise this, never lower it.
+   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene replaces this for the
+   * round it applies to, in either direction.
    */
   maxWriteLines?: number;
   /**
@@ -202,7 +206,11 @@ export interface AgentRuntimeOptions {
 
 export const DEFAULT_MAX_TOOL_CALLS_PER_STEP = 8;
 export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = Infinity;
-/** A round with no gene applied still gets a write budget: unbounded is not a default. */
+/**
+ * The write budget for a round with **no gene applied**: unbounded is not a
+ * default. A gene's own numbers replace these for the round it applies to, in
+ * either direction — see `budgetFor` for why the default is not also a floor.
+ */
 export const DEFAULT_WRITE_MAX_FILES = 3;
 export const DEFAULT_WRITE_MAX_LINES = 200;
 export const DEFAULT_DEADLINE_MS = Infinity;

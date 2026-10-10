@@ -306,22 +306,36 @@ export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: nu
 }
 
 /**
- * The budget a round runs under: the applied gene's constraints widened against
- * the default, or the default alone when no gene applies.
+ * The budget a round runs under: the applied gene's constraints, or the default
+ * alone when no gene applies.
  *
- * ⚠️ The two budget axes only ever **widen**. `distill.ts` and `induct.ts` size a
- * new gene with `measuredBudget`, whose cold start is `COLD_START_BUDGET` =
- * `{1, 20}` — a guess, and the tightest number in this file. Enforced as a
- * ceiling it cuts a normal multi-file round to one file; that round then fails on
- * `WriteBudgetError` with `steps > 0`, so `cycle.ts` charges the failure to the
- * gene rather than calling it a blocked start, and the library records "this
- * strategy failed" for what was really "nobody measured this". That is D127's
- * defect one level up: there the guess was a constant in the minter, here it is
- * the minter's cold-start return value. `measuredBudget` already says as much of
- * its own fallback ("a floor, never a ceiling"); this applies it a layer up.
+ * ⚠️ **A gene's numbers stand as declared — the default is a default, not a
+ * floor.** This function used to widen them with `Math.max(declared, fallback)`
+ * (甲). Its reasoning was sound about the *cold start* and wrong about the
+ * *contract*: `COLD_START_BUDGET` = `{1, 20}` is a guess, and enforcing a guess
+ * as a ceiling cuts a normal multi-file round to one file, after which the round
+ * is charged to the gene for a number nobody measured.
  *
- * `forbiddenPaths` is **not** floored: a ban is policy, not a measurement, and
- * widening it would silently lift a restriction.
+ * The cure for that is to make the number a **measurement** — which is what
+ * `measuredBudget` (D127) does for new genes and what the fold does for genes
+ * already in the library (戊) — **not** to put a second number underneath it. A
+ * floor and a default are one operator apart in code and opposite in meaning: a
+ * default answers "what bounds a round that was told nothing?", while a declared
+ * constraint answers "what bounds a round that was told something?". Enforcing
+ * both means the declared number can only ever move **up** — the one-way ratchet
+ * 丙 removed from the estimator and 甲 left standing at the point of use.
+ *
+ * The floor also had nothing to inherit it from. The reference implementation
+ * (EvoMap/Evolver) treats its `max_files: 20` as a **default applied only when
+ * the field is absent** — `createGene` normalizes it in that one case — and
+ * ships 17 seed genes declaring 1 through 50, **twelve of them below 20**, the
+ * smallest at 1. A floor that raised those would contradict the genes its own
+ * author wrote.
+ *
+ * `MIN_MEASURED_BUDGET` (1/1) is a different thing and stays: it blocks **zero**,
+ * not smallness, and it lives in the estimator where a group's median is taken.
+ * `forbiddenPaths` is not floored and never was — a ban is policy, not a
+ * measurement, and widening it would silently lift a restriction.
  *
  * The parameter type names all three members of `GeneConstraints` rather than
  * accepting the interface itself, so a caller holding something else cannot pass
@@ -335,8 +349,8 @@ export function budgetFor(
 ): WriteBudget {
   if (constraints === null) return fallback;
   return {
-    maxFiles: Math.max(constraints.maxFiles, fallback.maxFiles),
-    maxLines: Math.max(constraints.maxLines, fallback.maxLines),
+    maxFiles: constraints.maxFiles,
+    maxLines: constraints.maxLines,
     forbiddenPaths: constraints.forbiddenPaths ?? [],
   };
 }
