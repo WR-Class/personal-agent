@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { budgetFor, chargeWrite, checkWrite, measuredBudget, COLD_START_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, raiseFor, COLD_START_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -170,6 +170,45 @@ describe("the ledger", () => {
   });
 });
 
+// (b): the ceiling a round runs under is an estimate. On the road from "no gene"
+// to "minted gene" nothing has measured it yet, so its first refusal is evidence
+// that the estimate was too low — and the room that was missing is exactly what
+// the refused write asked for.
+describe("raising an under-sized ceiling", () => {
+  const budget = (maxFiles: number, maxLines: number, forbiddenPaths: readonly string[] = []) => ({
+    maxFiles, maxLines, forbiddenPaths,
+  });
+  const write = (path: string | null, lines: number | null = 1) => ({ tool: "edit_file", path, lines });
+
+  it("widens to cover exactly the write that was refused, and leaves the axis that was not binding alone", () => {
+    let state = chargeWrite(EMPTY, write("a.ts"), 0);
+    state = chargeWrite(state, write("b.ts"), 1);
+    const raised = raiseFor(state, write("c.ts", 5), budget(2, 100));
+    assert.equal(raised?.maxFiles, 3, "the third file is what was refused, so three is what it takes");
+    assert.equal(raised?.maxLines, 100, "the line axis was nowhere near binding, and inventing room for it would be a number nobody asked for");
+  });
+
+  it("charges a rewritten file no extra file slot, matching the ledger's own rule", () => {
+    const state = chargeWrite(EMPTY, write("a.ts", 8), 0);
+    const raised = raiseFor(state, write("a.ts", 5), budget(1, 10));
+    assert.equal(raised?.maxFiles, 1, "a.ts is already in the ledger");
+    assert.equal(raised?.maxLines, 13);
+  });
+
+  it("returns null for a policy refusal, because no amount of room lifts a ban", () => {
+    assert.equal(raiseFor(EMPTY, write("docs/a.md"), budget(9, 999, ["docs"])), null);
+    assert.equal(
+      raiseFor(EMPTY, write(null), budget(9, 999, ["docs"])), null,
+      "an unreadable target is refused as policy, and raising would spend the round's one raise on a write that stays refused",
+    );
+  });
+
+  it("returns null when the attempt already fits, so a refusal it cannot explain is never papered over", () => {
+    const state = chargeWrite(EMPTY, write("a.ts"), 0);
+    assert.equal(raiseFor(state, write("a.ts"), budget(5, 50)), null);
+  });
+});
+
 describe("enforcement in the runtime", () => {
   async function runWithTools(
     steps: ReadonlyArray<{ content: string; toolCalls?: ToolCall[] }>,
@@ -190,21 +229,22 @@ describe("enforcement in the runtime", () => {
     return runtime.send(options.signalPrompt ?? "改一下文件");
   }
 
-  it("refuses the second distinct file when the file budget allows one", async () => {
-    const first = join(fixture.workspaceRoot, "one.txt");
-    const second = join(fixture.workspaceRoot, "two.txt");
-    await writeFile(first, "keep1\n", "utf8");
-    await writeFile(second, "keep2\n", "utf8");
+  // (b): the ceiling is a provisional estimate until a gene supplies a number, so
+  // its FIRST refusal is read as evidence the estimate was too low and widens it
+  // instead of being spent. The second refusal is the wall — and the wall is what
+  // the record and the next mint's statistic are for.
+  it("raises a provisional file ceiling once, then refuses the write after that", async () => {
+    const names = ["one.txt", "two.txt", "three.txt"];
+    for (const [index, name] of names.entries()) {
+      await writeFile(join(fixture.workspaceRoot, name), `keep${index}\n`, "utf8");
+    }
 
     const runtime = new AgentRuntime({
       adapter: createScriptedAdapter({
         steps: [
           {
             content: "",
-            toolCalls: [
-              call("edit_file", { path: "one.txt", content: "w1\n" }, "call_a"),
-              call("edit_file", { path: "two.txt", content: "w2\n" }, "call_b"),
-            ],
+            toolCalls: names.map((name, index) => call("edit_file", { path: name, content: `w${index}\n` }, `call_${index}`)),
           },
           { content: "done" },
         ],
@@ -216,10 +256,12 @@ describe("enforcement in the runtime", () => {
       approve: async () => true,
     });
 
-    const result = await runtime.send("改两个文件");
-    assert.equal(await readFile(first, "utf8"), "w1\n");
-    assert.equal(await readFile(second, "utf8"), "keep2\n", "the over-budget file must be untouched");
-    assert.equal(result.budget.filesWritten, 1);
+    const result = await runtime.send("改三个文件");
+    assert.equal(await readFile(join(fixture.workspaceRoot, "one.txt"), "utf8"), "w0\n");
+    assert.equal(await readFile(join(fixture.workspaceRoot, "two.txt"), "utf8"), "w1\n", "the first refusal was corrected, not spent");
+    assert.equal(await readFile(join(fixture.workspaceRoot, "three.txt"), "utf8"), "keep2\n", "the second refusal is the wall");
+    assert.equal(result.budget.filesWritten, 2);
+    assert.equal(result.budget.filesWrittenLimit, 2, "the ceiling moved to exactly the write it refused");
     // D127: a budget refusal no longer makes the round `partial`. Nothing broke —
     // the tool never ran — so charging it to the round's success charged the
     // applied gene for a budget that was sized wrong. The pressure is still on
@@ -227,18 +269,25 @@ describe("enforcement in the runtime", () => {
     assert.equal(result.evaluation.status, "success");
     assert.ok(
       result.evaluation.evidence.some((line) => line === "budgetRefusals=1"),
-      `expected the refusal to be counted in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
+      `expected exactly one standing refusal in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
     );
   });
 
-  it("refuses on the line budget before the tool runs, leaving no tool message", async () => {
-    const target = join(fixture.workspaceRoot, "lines.txt");
-    await writeFile(target, "keep\n", "utf8");
+  it("raises the line ceiling once, and the refusal after that still leaves the file untouched", async () => {
+    const targets = ["line-a.txt", "line-b.txt", "line-c.txt"].map((name) => join(fixture.workspaceRoot, name));
+    for (const target of targets) await writeFile(target, "keep\n", "utf8");
     const store = new SessionStore({ root: fixture.storeRoot });
     const runtime = new AgentRuntime({
       adapter: createScriptedAdapter({
         steps: [
-          { content: "", toolCalls: [call("edit_file", { path: "lines.txt", content: "a\nb\nc\nd\n" })] },
+          {
+            content: "",
+            toolCalls: [
+              call("edit_file", { path: "line-a.txt", content: "a\nb\n" }, "call_a"),
+              call("edit_file", { path: "line-b.txt", content: "c\nd\n" }, "call_b"),
+              call("edit_file", { path: "line-c.txt", content: "e\nf\n" }, "call_c"),
+            ],
+          },
           { content: "done" },
         ],
       }),
@@ -249,10 +298,13 @@ describe("enforcement in the runtime", () => {
     });
 
     const result = await runtime.send("改文件");
-    // The write was refused, so the file still holds its original content.
-    assert.equal(await readFile(target, "utf8"), "keep\n");
-    // The refusal is visible as a failed tool result, not a silent skip — but it
-    // is not a tool *failure*, so the verdict stays `success` (D127).
+    assert.equal(await readFile(targets[0]!, "utf8"), "a\nb\n");
+    assert.equal(await readFile(targets[1]!, "utf8"), "c\nd\n", "the first line refusal was corrected, not spent");
+    // The standing refusal is decided before the tool runs, so the file it named
+    // was never touched, and it is visible as a failed tool result rather than a
+    // silent skip — but it is not a tool *failure*, so the verdict stays `success`.
+    assert.equal(await readFile(targets[2]!, "utf8"), "keep\n", "the second refusal is the wall");
+    assert.equal(result.budget.linesWrittenLimit, 4, "two lines had landed, and the refused write carried two more");
     assert.equal(result.evaluation.status, "success");
     assert.ok(result.evaluation.evidence.some((line) => line === "budgetRefusals=1"));
     const history = await store.history("budget-lines");
@@ -261,14 +313,22 @@ describe("enforcement in the runtime", () => {
     assert.match(refusal!.content, /line budget exhausted/);
   });
 
-  it("records the refusal in the audit log", async () => {
-    const target = join(fixture.workspaceRoot, "audited.txt");
-    await writeFile(target, "keep\n", "utf8");
+  it("records both outcomes in the audit log: the raise that allowed a write, and the refusal that stood", async () => {
+    for (const name of ["audited-a.txt", "audited-b.txt", "audited-c.txt"]) {
+      await writeFile(join(fixture.workspaceRoot, name), "keep\n", "utf8");
+    }
     const store = new SessionStore({ root: fixture.storeRoot });
     const runtime = new AgentRuntime({
       adapter: createScriptedAdapter({
         steps: [
-          { content: "", toolCalls: [call("edit_file", { path: "audited.txt", content: "a\nb\nc\n" })] },
+          {
+            content: "",
+            toolCalls: [
+              call("edit_file", { path: "audited-a.txt", content: "a\n" }, "call_a"),
+              call("edit_file", { path: "audited-b.txt", content: "b\n" }, "call_b"),
+              call("edit_file", { path: "audited-c.txt", content: "c\n" }, "call_c"),
+            ],
+          },
           { content: "done" },
         ],
       }),
@@ -281,8 +341,56 @@ describe("enforcement in the runtime", () => {
 
     const { events } = await store.inspect("budget-audit");
     const audits = events.filter((event): event is AuditEvent => event.kind === "audit");
+    // The raise needs its own line: an operator reading the log has to be able to
+    // tell a ceiling that was corrected from one that was obeyed, and inferring
+    // that from the footprint is exactly the kind of reading this log exists to
+    // replace.
+    const raised = audits.find((event) => event.decision === "allowed" && event.reason.includes("write budget raised"));
+    assert.ok(raised, `expected a raise audit event, got ${JSON.stringify(audits)}`);
     const denied = audits.find((event) => event.decision === "denied" && event.reason.includes("write budget"));
-    assert.ok(denied, `expected a write-budget audit event, got ${JSON.stringify(audits)}`);
+    assert.ok(denied, `expected a write-budget refusal audit event, got ${JSON.stringify(audits)}`);
+  });
+
+  // The other half of the boundary, and the whole reason `provisionalCeiling`
+  // exists: a gene's number is a commitment, not a guess. Hitting it is the real
+  // failure — that is what the gene's score reads and what the next mint's
+  // statistic corrects — so a gene-applied round gets no raise at all.
+  it("gives a gene-applied round no raise, because a chosen number is a commitment", async () => {
+    const target = join(fixture.workspaceRoot, "committed.txt");
+    await writeFile(target, "keep\n", "utf8");
+
+    const geneStore = new GeneStore(join(fixture.root, "gene-committed.jsonl"));
+    const minted = mintGene({
+      name: "committed", intent: "research", signalsMatch: ["改一下文件"], preconditions: [],
+      strategy: [{ kind: "act", text: "改" }, { kind: "verify", text: "查" }],
+      constraints: { maxFiles: 1, maxLines: 1, forbiddenPaths: [] },
+      validation: ["npm.cmd test"], avoid: [],
+    });
+    await geneStore.appendGene(minted);
+
+    const store = new SessionStore({ root: fixture.storeRoot });
+    const runtime = new AgentRuntime({
+      adapter: createScriptedAdapter({
+        steps: [
+          { content: "", toolCalls: [call("edit_file", { path: "committed.txt", content: "a\nb\nc\n" })] },
+          { content: "done" },
+        ],
+      }),
+      store, sessionId: "budget-committed", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
+      geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-gene-committed.jsonl")),
+      maxWriteFiles: 1, maxWriteLines: 1,
+      tools: new ToolRegistry([createEditFileTool()]),
+      approve: async () => true,
+    });
+
+    const result = await runtime.send("改一下文件");
+    assert.equal(result.appliedGene?.address, minted.address, "the round must actually run under the gene");
+    assert.equal(await readFile(target, "utf8"), "keep\n", "the ceiling the gene chose was not corrected mid-round");
+    assert.equal(result.budget.linesWrittenLimit, 1);
+    assert.ok(
+      result.evaluation.evidence.some((line) => line === "budgetRefusals=1"),
+      `expected the breach to be recorded as a lost write, got ${JSON.stringify(result.evaluation.evidence)}`,
+    );
   });
 
   it("charges a performed write and reports it against the budget", async () => {

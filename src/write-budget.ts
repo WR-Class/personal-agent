@@ -194,6 +194,52 @@ function refusal(reason: string): LedgerDecision {
   return { allowed: false, reason };
 }
 
+/**
+ * The budget a round needs after the ceiling refused one of its writes, or null
+ * when raising cannot help and the refusal should stand.
+ *
+ * This is the outlet D127's separation was missing. D127 established that "this
+ * round was given too little room" is a different lesson from "this strategy did
+ * not work" — and then left the first lesson with nowhere to go: the refusal was
+ * counted, kept off the success axis, and the round carried on with the same
+ * too-small ceiling for the rest of its life. The ceiling was a measurement
+ * that could never be corrected by the thing it measured.
+ *
+ * A refusal is checked *before* the tool runs (`checkWrite`), so the write did
+ * not happen and re-running it under more room costs nothing and cannot leave a
+ * half-written file behind.
+ *
+ * Null means "do not raise". Two cases produce it: an attempt refused by
+ * `forbiddenPaths`, which is policy rather than measurement and cannot be
+ * widened by arithmetic; and an attempt that already fits, which would be a
+ * refusal this function cannot explain.
+ *
+ * The "at most one raise per round" bound lives in the caller, not here: a
+ * ceiling that always yields is not a ceiling, and the design leans on the wall
+ * being real enough to be hit again next round.
+ */
+export function raiseFor(
+  state: LedgerState,
+  attempt: WriteAttempt,
+  budget: WriteBudget,
+): WriteBudget | null {
+  // Policy first. A banned path stays banned however much room is added, so
+  // spending the round's one raise on it would waste the raise and still refuse.
+  if (budget.forbiddenPaths.length > 0) {
+    if (attempt.path === null) return null;
+    if (forbiddenEntryFor(attempt.path, budget.forbiddenPaths) !== null) return null;
+  }
+  const anonymous = state.files.filter((entry) => entry.startsWith("\u0000")).length;
+  const filesNeeded = attempt.path === null
+    ? anonymous + 1
+    : state.files.includes(attempt.path) ? state.files.length : state.files.length + 1;
+  const linesNeeded = state.lines + (attempt.lines ?? 0);
+  const maxFiles = Math.max(budget.maxFiles, filesNeeded);
+  const maxLines = Math.max(budget.maxLines, linesNeeded);
+  if (maxFiles === budget.maxFiles && maxLines === budget.maxLines) return null;
+  return { maxFiles, maxLines, forbiddenPaths: budget.forbiddenPaths };
+}
+
 /** Charge an attempt that was actually performed. */
 export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: number): LedgerState {
   const path = attempt.path ?? `\u0000${index}`;

@@ -18,7 +18,7 @@ import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
-import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, raiseFor, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import type { GeneStore } from "./gene-store.ts";
@@ -623,6 +623,19 @@ export class AgentRuntime {
   /** Cumulative writes for the cycle in flight (D18). */
   private writeLedger: LedgerState = { files: [], lines: 0 };
   private writeBudget: WriteBudget;
+  /**
+   * Whether this round's ceiling is still a guess being discovered rather than a
+   * gene's commitment.
+   *
+   * The one raise lives on the road from "no gene" to "minted gene": there the
+   * ceiling is a provisional estimate, and its first refusal is evidence the
+   * estimate was too low, so the ceiling is widened once and the write runs.
+   * Once a gene supplies a number that number is a commitment — hitting it is a
+   * real failure, which is what makes the score mean anything and what the next
+   * mint's statistic is for. A ceiling that yields every time could never be hit,
+   * and a limit nothing ever hits measures nothing.
+   */
+  private provisionalCeiling = false;
   private readonly defaultWriteBudget: WriteBudget;
   private readonly geneStore: GeneStore | undefined;
   private readonly cycleStore: CycleStore | undefined;
@@ -916,7 +929,15 @@ export class AgentRuntime {
     // round; with no gene applied the runtime default still applies, because
     // "unbounded" is not a safe default (D18).
     this.writeLedger = { files: [], lines: 0 };
-    this.writeBudget = budgetFor(applied?.constraints ?? null, this.defaultWriteBudget);
+    // A gene's number is a commitment; with no gene the ceiling is still being
+    // discovered, and only there may a refusal raise it (see `provisionalCeiling`).
+    // Read off the SAME expression that sizes the budget, so the two cannot
+    // disagree: the first version tested `applied === null`, and a gene-less round
+    // leaves `applied` *undefined* (line 891), so the flag read "committed" for
+    // every round and the raise never fired at all.
+    const geneConstraints = applied?.constraints ?? null;
+    this.writeBudget = budgetFor(geneConstraints, this.defaultWriteBudget);
+    this.provisionalCeiling = geneConstraints === null;
 
     await this.ensureSession();
     signal?.throwIfAborted();
@@ -1158,6 +1179,11 @@ export class AgentRuntime {
     // given too little room". Two different lessons, and only one of them is
     // about the strategy.
     let budgetRefusals = 0;
+    // How many times this round corrected an under-sized ceiling. Local rather
+    // than journaled: the raise's whole effect is the footprint it lets through,
+    // and `filesWritten` already records that. A field nothing reads would be the
+    // same defect as a constraint nothing enforces.
+    let ceilingRaised = 0;
     let index = 0;
     for (const call of calls) {
       const position = index++;
@@ -1167,11 +1193,31 @@ export class AgentRuntime {
       // dangling tool correlation behind — the same rule the count budgets above
       // follow. The refusal is recorded as a failed tool result rather than
       // thrown, so the model sees it and one over-budget call cannot abort a
-      // round that has other work left to do.
+      // round that has other work left to do. The round's *first* refusal never
+      // reaches the model at all: it raises the ceiling and the write runs, which
+      // is why the code below branches before it starts recording anything.
       const attempt = readWriteAttempt(call.name, call.arguments);
       if (attempt !== null) {
         const decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
-        if (!decision.allowed) {
+        // The one raise, and only while the ceiling is still being discovered.
+        // With no gene applied the ceiling is a provisional estimate, so its first
+        // refusal is read as what it is — evidence the estimate was too low — and
+        // the ceiling is widened to cover exactly this write, which then runs. A
+        // gene-applied round gets no raise: there the number is a commitment, and
+        // hitting it is the real failure that the score and the next mint's
+        // statistic exist for. Either way the model only ever sees a refusal that
+        // stood, and only that reaches `budgetRefusals`.
+        const widened = decision.allowed || !this.provisionalCeiling || ceilingRaised > 0
+          ? null
+          : raiseFor(this.writeLedger, attempt, this.writeBudget);
+        if (widened !== null) {
+          ceilingRaised += 1;
+          this.writeBudget = widened;
+          await this.store.appendAudit(this.sessionId, {
+            tool: call.name, decision: "allowed", cause: "budget",
+            reason: `write budget raised to ${widened.maxFiles} file(s) / ${widened.maxLines} line(s): ${decision.reason ?? "the ceiling refused this write"}`,
+          });
+        } else if (!decision.allowed) {
           budgetRefusals += 1;
           this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
           this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: true, content: activityText(`refused: ${decision.reason}`) });
