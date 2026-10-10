@@ -39,7 +39,10 @@ function call(name: string, args: Record<string, unknown>, id = "call_1"): ToolC
 function gene(overrides: Partial<GeneDraft> = {}): GeneDraft {
   return {
     name: "loop-discipline",
-    intent: "build",
+    // The classifier routes "用 snippet 方式改一处" to fix (Jev reads 改一处 as
+    // correcting one spot), so the fixture declares the intent the runtime
+    // actually produces. A mismatch here fails selection, not the cycle.
+    intent: "fix",
     signalsMatch: ["snippet"],
     preconditions: [],
     strategy: [
@@ -103,11 +106,61 @@ describe("mechanical evaluation", () => {
     const partial = evaluateRun({ steps: 3, toolCalls: 2, toolErrors: 1, failureClass: null });
     assert.equal(partial.status, "partial");
     assert.deepEqual(partial.evidence, ["steps=3", "toolCalls=2", "toolErrors=1"]);
-    assert.equal(evaluateRun({ steps: 0, toolCalls: 0, toolErrors: 0, failureClass: "budget" }).status, "failed");
+    assert.equal(evaluateRun({ steps: 0, toolCalls: 0, toolErrors: 0, failureClass: "budget" }).status, "blocked");
     // A model that never produced a usable reply blocked the round; one that did
-    // and then broke is a failure.
+    // and then broke is a failure. Same rule for a budget refusal at step 0.
     assert.equal(evaluateRun({ steps: 0, toolCalls: 0, toolErrors: 0, failureClass: "model" }).status, "blocked");
     assert.equal(evaluateRun({ steps: 1, toolCalls: 0, toolErrors: 0, failureClass: "model" }).status, "failed");
+    // A budget refusal after some work is a failure, not a block.
+    assert.equal(evaluateRun({ steps: 1, toolCalls: 0, toolErrors: 0, failureClass: "budget" }).status, "failed");
+  });
+
+  // The shape veto (D125). Calibrated against Jev's judgment on 54 real rounds:
+  // these four rules moved agreement with Jev from 75.9% to 87.0% while keeping
+  // the property that a genuine success is never called a failure.
+  it("refuses to call an echo of the request a success", () => {
+    const echo = evaluateRun({
+      steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null,
+      reply: "echo: hi", prompt: "hi",
+    });
+    assert.equal(echo.status, "partial");
+    assert.ok(echo.evidence.some((line) => line.includes("echoes the request")));
+  });
+
+  it("refuses to call a reply that opens by declining a success", () => {
+    const declined = evaluateRun({
+      steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null,
+      reply: "抱歉，我需要先说明一个限制：当前这个环境实际可调用的工具只有两个。",
+      prompt: "读取项目目录",
+    });
+    assert.equal(declined.status, "partial");
+    assert.ok(declined.evidence.some((line) => line.includes("declining")));
+  });
+
+  it("refuses to call an empty reply a success", () => {
+    assert.equal(
+      evaluateRun({ steps: 2, toolCalls: 0, toolErrors: 0, failureClass: null, reply: "   " }).status,
+      "partial",
+    );
+  });
+
+  it("downgrades to partial, never to failed, and leaves a real answer alone", () => {
+    // A veto is about the shape of what came back, not about the round breaking:
+    // `failed` would misreport a round that did produce something.
+    const vetoed = evaluateRun({
+      steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null, reply: "echo: 你好", prompt: "你好",
+    });
+    assert.equal(vetoed.status, "partial");
+    assert.equal(vetoed.failureClass, null);
+    // And the good path is untouched — including a no-tool answer, which the
+    // veto deliberately does not punish.
+    const good = evaluateRun({
+      steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null,
+      reply: "1+1 = 2", prompt: "1+1=?",
+    });
+    assert.equal(good.status, "success");
+    // A caller that never supplied a reply is not asserting the reply was bad.
+    assert.equal(evaluateRun({ steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null }).status, "success");
   });
 });
 
@@ -159,7 +212,11 @@ describe("runtime runs a PDRI cycle", () => {
     const cycleStore = new CycleStore(join(fixture.root, "e2e-happy-cycles.jsonl"));
     const minted = mintGene(gene());
     await geneStore.appendGene(minted, T0);
-    const runtime = new AgentRuntime(options("cycle-happy", geneStore, cycleStore));
+    const runtime = new AgentRuntime(options("cycle-happy", geneStore, cycleStore,
+      // A real answer, not an echo: `roundVeto` (D125) refuses to call a reply
+      // that only mirrors the request a success, so the echo adapter no longer
+      // reaches the success path this test is about.
+      createScriptedAdapter({ steps: [{ content: "已改好：那一处换成了新写法。" }] })));
     const result = await runtime.send("用 snippet 方式改一处");
 
     assert.equal(result.evaluation.status, "success");
@@ -246,8 +303,20 @@ describe("runtime runs a PDRI cycle", () => {
     const failedAddress = [...state.genes.entries()].find(([, entry]) => entry.expression.attempts === 1)?.[0];
     assert.ok(failedAddress);
 
-    // The next round must not pick the gene that just failed.
-    const next = new AgentRuntime(options("feedback-2", geneStore, cycleStore));
+    // The next round must not pick the gene that just failed. It has to call a tool:
+    // a reply that touched nothing is journaled ungraded (see `graded` in
+    // gene-store.ts), so a tool-free success would leave `successes` at 0 and this
+    // test would stop exercising the feedback loop it exists for.
+    const target = join(fixture.workspaceRoot, "feedback-round.txt");
+    await writeFile(target, "新写法\n", "utf8");
+    const next = new AgentRuntime({
+      ...options("feedback-2", geneStore, cycleStore,
+        createScriptedAdapter({ steps: [
+          { content: "", toolCalls: [call("read_file", { path: target })] },
+          { content: "已改好：那一处换成了新写法。" },
+        ] })),
+      tools: new ToolRegistry([createReadFileTool()]),
+    });
     const result = await next.send("用 snippet 方式改一处");
     assert.notEqual(result.appliedGene?.address, failedAddress);
     assert.equal(result.evaluation.status, "success");

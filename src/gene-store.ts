@@ -54,6 +54,27 @@ export type GeneStoreRecord =
      */
     readonly tools?: readonly string[];
     /**
+     * What the round's write ledger actually reached (D127).
+     *
+     * These three exist so a gene's `constraints` can be *measured* instead of
+     * guessed: `distill.ts` used to mint every guard with a hardcoded
+     * `{maxFiles: 1, maxLines: 20}`, a number nobody derived from anything.
+     *
+     * ⚠️ `filesWritten`/`linesWritten` are a **lower bound on demand**, not
+     * demand itself. A round stopped by the budget records what it managed, not
+     * what it needed — so `budgetRefusals` is what tells a reader whether the
+     * number is censored, and the estimator must add back the room that was
+     * missing. Reading the capped value as demand would re-derive the same
+     * too-small budget forever.
+     *
+     * Optional, like `drifted`: rows written before this field keep their exact
+     * bytes and read as "no measurement", which the estimator treats as a
+     * cold start rather than as a zero.
+     */
+    readonly filesWritten?: number;
+    readonly linesWritten?: number;
+    readonly budgetRefusals?: number;
+    /**
      * Whether drift, not the score, chose the gene this outcome belongs to (D108).
      *
      * Optional, and it stays optional rather than becoming required: every outcome
@@ -69,6 +90,26 @@ export type GeneStoreRecord =
      * this whole line of work.
      */
     readonly drifted?: boolean;
+    /**
+     * Whether this round can say anything at all about the gene it ran under.
+     *
+     * Written **only when false**, for the same append-only reason as `drifted`:
+     * rows already on disk predate the field and read as graded, which is what
+     * they were. `false` marks a round that ended in success while calling **no
+     * tool** — a chat answer, not work. The row is still written (the log is the
+     * record of what happened, and dropping it would hide traffic) but it moves
+     * neither `attempts` nor `successes`, because a reply that touched nothing
+     * cannot testify about the strategy it ran under. Crediting it teaches the
+     * library "this strategy produces agreeable replies" instead of "this
+     * strategy gets work done". Measured on this workspace's own rounds: 20 of
+     * the 24 credited successes called no tool.
+     *
+     * ⚠️ The predicate is deliberately **narrow** — success, no tool, no failure.
+     * A refusal or a pre-cycle failure keeps its verdict and stays charged, so
+     * this cannot become a way for a bad strategy to stop being blamed. What is
+     * dropped is only the case that carried no evidence either way.
+     */
+    readonly graded?: boolean;
     /**
      * Addresses of every gene that competed this round, the winner included (D113).
      *
@@ -266,6 +307,10 @@ export class GeneStore {
       tools?: readonly string[];
       drifted?: boolean;
       candidates?: readonly string[];
+      filesWritten?: number;
+      linesWritten?: number;
+      budgetRefusals?: number;
+      graded?: boolean;
     },
     at: number = Date.now(),
   ): Promise<void> {
@@ -300,6 +345,9 @@ export class GeneStore {
     const facts: FailureFact[] = [];
     for (const record of records) {
       if (record.type !== "outcome" || record.succeeded) continue;
+      // An ungraded round carries no evidence about the strategy, so it must not
+      // reach distillation either: a chat answer is not a failure pattern.
+      if (record.graded === false) continue;
       if (!record.intent || !record.signals || !record.failureClass) continue;
       facts.push({
         at: record.at,
@@ -308,6 +356,9 @@ export class GeneStore {
         failureClass: record.failureClass,
         evidence: record.evidence ?? [],
         address: record.address,
+        filesWritten: record.filesWritten ?? 0,
+        linesWritten: record.linesWritten ?? 0,
+        budgetRefusals: record.budgetRefusals ?? 0,
       });
     }
     return facts;
@@ -323,6 +374,10 @@ export class GeneStore {
     const facts: SuccessFact[] = [];
     for (const record of records) {
       if (record.type !== "outcome" || !record.succeeded) continue;
+      // Induction mints from successes that used no gene. An ungraded success would
+      // become a gene for "answer questions agreeably" — the same mistake as
+      // crediting it, one step further downstream.
+      if (record.graded === false) continue;
       if (record.address !== null) continue;
       if (!record.intent || !record.signals) continue;
       facts.push({
@@ -331,6 +386,9 @@ export class GeneStore {
         signals: record.signals,
         tools: record.tools ?? [],
         evidence: record.evidence ?? [],
+        filesWritten: record.filesWritten ?? 0,
+        linesWritten: record.linesWritten ?? 0,
+        budgetRefusals: record.budgetRefusals ?? 0,
       });
     }
     return facts;
@@ -368,6 +426,12 @@ export class GeneStore {
         retired.set(record.address, record.reason);
         continue;
       }
+      // After the retire branch and before both credit branches, so an ungraded
+      // round leaves no trace at all: no attempt, no success, no streak, and no
+      // baseline count. Symmetric on purpose — charging an attempt while refusing
+      // the success would be strictly worse than either counting or ignoring it,
+      // because it manufactures a failure out of a round that produced no evidence.
+      if (record.graded === false) continue;
       if (record.address === null) {
         baseline.attempts += 1;
         if (record.succeeded) baseline.successes += 1;

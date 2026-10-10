@@ -8,6 +8,7 @@ import { GeneStore } from "../src/gene-store.ts";
 import type { Gene, GeneDraft, GeneExpression } from "../src/gene.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { AgentRuntime } from "../src/runtime.ts";
+import { ToolRegistry, createReadFileTool } from "../src/tools.ts";
 import { createEchoAdapter } from "../src/echo-adapter.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { TASKSPEC_VERSION, buildTaskSpec, extractSignals } from "../src/taskspec.ts";
@@ -103,6 +104,29 @@ describe("gene store", () => {
     assert.equal(entry?.expression.lastSuccessAt, NOW + 10);
     assert.equal(entry?.expression.streak, 1);
     assert.deepEqual({ ...state.baseline }, { attempts: 1, successes: 1 });
+  });
+
+  it("records an ungraded round without crediting it, and keeps it out of failures and induction", async () => {
+    const path = join(fixture.root, "ungraded.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
+    await store.appendOutcome({ address: minted.address, succeeded: true, graded: false }, NOW + 20);
+    // Still written: the log records what happened, including traffic it does not credit.
+    const lines = (await readFile(outcomesFile(path), "utf8")).split("\n").filter((l) => l !== "");
+    assert.equal(lines.length, 2, "未评级行仍要落盘");
+    assert.match(lines[1]!, /"graded":false/);
+    const entry = (await store.state()).genes.get(minted.address);
+    assert.equal(entry?.expression.attempts, 1, "未评级轮次不计入 attempts");
+    assert.equal(entry?.expression.successes, 1);
+    assert.equal(entry?.expression.streak, 0);
+    // Neither an induction gap nor a criteria for distillation: no evidence either way.
+    await store.appendOutcome({ address: null, succeeded: true, graded: false, intent: "build", signals: ["snippet"] }, NOW + 30);
+    await store.appendOutcome({ address: null, succeeded: false, graded: false, intent: "build", signals: ["snippet"], failureClass: "model" }, NOW + 40);
+    assert.equal((await store.geneLessSuccesses()).length, 0, "未评级的无基因成功不是归纳缺口");
+    assert.equal((await store.failures()).length, 0, "未评级的失败不进蒸馏档案");
+    assert.deepEqual({ ...(await store.state()).baseline }, { attempts: 0, successes: 0 });
   });
 
   it("D116: writes outcomes to a companion file, gene/retire to the main file, and folds both", async () => {
@@ -423,11 +447,26 @@ describe("runtime applies and journals genes", () => {
   it("injects the selected gene as system context and records a success outcome", async () => {
     const store = new SessionStore({ root: fixture.storeRoot });
     const geneStore = new GeneStore(join(fixture.root, "runtime-success.jsonl"));
-    const minted = mintGene(draft());
+    // "用 snippet 方式替换…" routes to fix under the Jev classifier, so the
+    // gene must declare fix; declaring build would fail selection and break
+    // this test on a routing bug instead of the one it actually exercises.
+    const minted = mintGene(draft({ intent: "fix" }));
     await geneStore.appendGene(minted, NOW);
+    // The round has to call a tool to be graded: a reply that touched nothing is
+    // journaled ungraded, so a tool-free round would leave `successes` at 0 and stop
+    // exercising the credit path this test is named for.
+    const target = join(fixture.workspaceRoot, "gene-applied.txt");
+    await writeFile(target, "新写法\n", "utf8");
     const runtime = new AgentRuntime({
-      adapter: createEchoAdapter(), store, sessionId: "gene-applied",
+      // A substantive reply: `roundVeto` (D125) downgrades a pure echo, and this
+      // test is about the applied-gene journal row, not about echoes.
+      adapter: createScriptedAdapter({ steps: [
+        { content: "", toolCalls: [{ id: "call_1", name: "read_file", arguments: JSON.stringify({ path: target }) }] },
+        { content: "已替换：那一行换成了新写法。" },
+      ] }),
+      store, sessionId: "gene-applied",
       home: fixture.home, workspaceRoot: fixture.workspaceRoot, geneStore,
+      tools: new ToolRegistry([createReadFileTool()]),
     });
     const result = await runtime.send("用 snippet 方式替换这段代码");
     assert.equal(result.appliedGene?.address, minted.address);
@@ -454,8 +493,8 @@ describe("runtime applies and journals genes", () => {
     // on a lucky draw. The rng is still injected, because a test that reads the log
     // must know which gene to expect.
     const geneStore = new GeneStore(path, { rng: (() => { const d = [0.5, 0.9]; let n = 0; return () => d[n++] ?? 0; })() });
-    const first = mintGene(draft({ name: "runtime-drift-first" }));
-    const second = mintGene(draft({ name: "runtime-drift-second" }));
+    const first = mintGene(draft({ name: "runtime-drift-first", intent: "fix" }));
+    const second = mintGene(draft({ name: "runtime-drift-second", intent: "fix" }));
     await geneStore.appendGene(first, NOW);
     await geneStore.appendGene(second, NOW + 1);
     const runtime = new AgentRuntime({
@@ -488,7 +527,7 @@ describe("runtime applies and journals genes", () => {
     const path = join(fixture.root, "runtime-solo.jsonl");
     const store = new SessionStore({ root: fixture.storeRoot });
     const geneStore = new GeneStore(path);
-    const only = mintGene(draft({ name: "runtime-solo-only" }));
+    const only = mintGene(draft({ name: "runtime-solo-only", intent: "fix" }));
     await geneStore.appendGene(only, NOW);
     const runtime = new AgentRuntime({
       adapter: createEchoAdapter(), store, sessionId: "gene-solo",
@@ -501,26 +540,36 @@ describe("runtime applies and journals genes", () => {
     assert.ok(!outcome.includes("candidates"), "只有一条候选时不写 candidates 键 —— 没有竞争可记");
   });
 
-  it("records a gene-less baseline row when nothing matches", async () => {
+  it("writes a gene-less baseline row when nothing matches, ungraded when it called no tool", async () => {
     const store = new SessionStore({ root: fixture.storeRoot });
-    const geneStore = new GeneStore(join(fixture.root, "runtime-baseline.jsonl"));
+    const genePath = join(fixture.root, "runtime-baseline.jsonl");
+    const geneStore = new GeneStore(genePath);
     const minted = mintGene(draft());
     await geneStore.appendGene(minted, NOW);
     const runtime = new AgentRuntime({
-      adapter: createEchoAdapter(), store, sessionId: "gene-baseline",
+      adapter: createScriptedAdapter({ steps: [{ content: "明天多云转晴，最高 24 度。" }] }),
+      store, sessionId: "gene-baseline",
       home: fixture.home, workspaceRoot: fixture.workspaceRoot, geneStore,
     });
     const result = await runtime.send("聊聊明天的天气");
     assert.equal(result.appliedGene, undefined);
+    // The row is still written: the gene-less baseline is the counterfactual gain pricing
+    // needs, and a round that matched no gene is still a round. This is the one test that
+    // pins the whole path — runtime → journalOutcome → the row on disk.
+    const rows = (await readFile(outcomesFile(genePath), "utf8")).split("\n").filter((line) => line !== "");
+    assert.match(rows.at(-1)!, /"address":null/);
+    // But a reply that called no tool is not evidence about anything, so it credits nothing.
+    // This exact shape — success, no tool — was 20 of the 24 credited successes measured here.
+    assert.match(rows.at(-1)!, /"graded":false/);
     const state = await geneStore.state();
-    assert.deepEqual({ ...state.baseline }, { attempts: 1, successes: 1 });
+    assert.deepEqual({ ...state.baseline }, { attempts: 0, successes: 0 });
     assert.equal(state.genes.get(minted.address)?.expression.attempts, 0);
   });
 
   it("journals a failed round against the applied gene", async () => {
     const store = new SessionStore({ root: fixture.storeRoot });
     const geneStore = new GeneStore(join(fixture.root, "runtime-failure.jsonl"));
-    const minted = mintGene(draft());
+    const minted = mintGene(draft({ intent: "fix" }));
     await geneStore.appendGene(minted, NOW);
     const runtime = new AgentRuntime({
       adapter: createScriptedAdapter({ steps: [] }), store, sessionId: "gene-failed",
@@ -531,6 +580,6 @@ describe("runtime applies and journals genes", () => {
     assert.equal(state.genes.get(minted.address)?.expression.attempts, 1);
     assert.equal(state.genes.get(minted.address)?.expression.successes, 0);
     // The next send is not poisoned by the failed round's leftover state.
-    assert.equal(await geneStore.selectFor({ intent: "build", signals: ["snippet"], text: "snippet" }, NOW + 1000) === undefined, false);
+    assert.equal(await geneStore.selectFor({ intent: "fix", signals: ["snippet"], text: "snippet" }, NOW + 1000) === undefined, false);
   });
 });

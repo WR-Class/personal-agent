@@ -784,6 +784,17 @@ export class AgentRuntime {
     this.outcomeDrifted = undefined;
     this.outcomeCandidates = undefined;
     if (address === undefined || !this.geneStore) return;
+    // A round that ended in success while calling no tool made no claim about the
+    // strategy it ran under: it is a chat answer, not work. The row is still written
+    // (the log is the record of what happened) but marked ungraded, so the fold
+    // leaves the gene's track record untouched.
+    //
+    // ⚠️ Narrow on purpose. The condition is success **and** no tool, so a refusal
+    // (which lands on `partial`) and a pre-cycle failure keep their verdict and stay
+    // charged — this must not become a way for a bad strategy to stop being blamed.
+    // `tools` is `undefined` rather than empty on that failure path, which is a
+    // second reason the success test comes first.
+    const graded = !(evaluation.status === "success" && (tools?.length ?? 0) === 0);
     await this.geneStore.appendOutcome({
       address,
       succeeded: evaluation.status === "success",
@@ -817,6 +828,9 @@ export class AgentRuntime {
         }
         : {}),
       evidence: evaluation.evidence,
+      // Written only when false: rows already on disk predate this field and read as
+      // graded, which is what they were.
+      ...(graded ? {} : { graded: false }),
     });
   }
 
