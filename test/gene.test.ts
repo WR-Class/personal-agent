@@ -38,7 +38,7 @@ function draft(overrides: Partial<GeneDraft> = {}): GeneDraft {
       { kind: "act", text: "用唯一锚点做最小片段替换" },
       { kind: "verify", text: "重读文件确认改动" },
     ],
-    constraints: { maxFiles: 1, maxLines: 40, forbiddenPaths: ["docs/"] },
+    constraints: { maxFiles: 1, forbiddenPaths: ["docs/"] },
     validation: ["npm.cmd run build", "npm.cmd test"],
     avoid: ["不要整文件重写"],
     ...overrides,
@@ -69,7 +69,14 @@ describe("mint", () => {
     assert.throws(() => mintGene(draft({ intent: "spawn" as never })), /intent must be one of/);
     assert.throws(() => mintGene(draft({ signalsMatch: [] })), /signalsMatch/);
     assert.throws(() => mintGene(draft({ validation: [] })), /validation/);
-    assert.throws(() => mintGene(draft({ constraints: { maxFiles: 0, maxLines: 10, forbiddenPaths: [] } })), /maxFiles/);
+    assert.throws(() => mintGene(draft({ constraints: { maxFiles: 0, forbiddenPaths: [] } })), /maxFiles/);
+    // A gene file that still declares a line budget is refused rather than read
+    // past. "Declared-but-unenforced is worse than absent" is `write-budget.ts`'s
+    // own rule for `forbiddenPaths`, and it applies with more force to a field
+    // that no longer has an enforcement path at all: an operator who writes a
+    // line limit and gets it silently dropped believes they have one.
+    const staleConstraints = { maxFiles: 2, maxLines: 50, forbiddenPaths: [] };
+    assert.throws(() => mintGene(draft({ constraints: staleConstraints as never })), /maxLines was removed/);
   });
 
   it("canonicalize is key-order independent", () => {
@@ -146,7 +153,7 @@ describe("gene store", () => {
     await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
     await store.appendOutcome({
       address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-      filesWritten: 1, linesWritten: 20, budgetRefusals: 1, writeCeiling: { files: 1, lines: 20 },
+      filesWritten: 1, linesWritten: 20, budgetRefusals: 1, writeCeiling: { files: 1 },
     }, NOW + 20);
 
     const facts = await store.failures();
@@ -191,19 +198,18 @@ describe("gene store", () => {
     // {6, 7, 7, 7}, and a median of 7. Not 6, which would be the fixed point, and
     // not 8, which would be believing the loudest round.
     const store = new GeneStore(join(fixture.root, "remeasure-up.jsonl"));
-    const minted = mintGene(draft({ constraints: { maxFiles: 6, maxLines: 60, forbiddenPaths: ["docs/"] } }));
+    const minted = mintGene(draft({ constraints: { maxFiles: 6, forbiddenPaths: ["docs/"] } }));
     await store.appendGene(minted, NOW);
     assert.equal((await store.selectFor(matchingRequest, NOW))?.constraints.maxFiles, 6, "the prior, before any round");
     for (let round = 0; round < 3; round++) {
       await store.appendOutcome({
         address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-        filesWritten: 6, linesWritten: 60, budgetRefusals: 1, writeCeiling: { files: 6, lines: 60 },
+        filesWritten: 6, linesWritten: 60, budgetRefusals: 1, writeCeiling: { files: 6 },
       }, NOW + 10 + round);
     }
     const applied = await store.selectFor(matchingRequest, NOW + 100);
     assert.equal(applied?.address, minted.address, "the gene is still the same gene — no successor, same address");
     assert.equal(applied?.constraints.maxFiles, 7, "three capped rounds lift it to 7");
-    assert.equal(applied?.constraints.maxLines, 61);
   });
 
   it("⚠️ and downward, which is the half p95 could never do", async () => {
@@ -212,22 +218,21 @@ describe("gene store", () => {
     // 4. Under p95 it stayed 7 for good, because a tail quantile has nothing
     // pulling it back down — the estimate could only ratchet upward.
     const store = new GeneStore(join(fixture.root, "remeasure-down.jsonl"));
-    const minted = mintGene(draft({ constraints: { maxFiles: 7, maxLines: 70, forbiddenPaths: [] } }));
+    const minted = mintGene(draft({ constraints: { maxFiles: 7, forbiddenPaths: [] } }));
     await store.appendGene(minted, NOW);
     for (const [files, lines] of [[4, 40], [4, 40], [3, 30]] as const) {
       await store.appendOutcome({
         address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-        filesWritten: files, linesWritten: lines, writeCeiling: { files: 7, lines: 70 },
+        filesWritten: files, linesWritten: lines, writeCeiling: { files: 7 },
       }, NOW + 10 + files);
     }
     const applied = await store.selectFor(matchingRequest, NOW + 100);
     assert.equal(applied?.constraints.maxFiles, 4, "samples are {7, 4, 4, 3}; the median is 4");
-    assert.equal(applied?.constraints.maxLines, 40);
   });
 
   it("keeps the declared number before any round, and never re-measures a ban", async () => {
     const store = new GeneStore(join(fixture.root, "remeasure-prior.jsonl"));
-    const minted = mintGene(draft({ constraints: { maxFiles: 6, maxLines: 60, forbiddenPaths: ["docs/"] } }));
+    const minted = mintGene(draft({ constraints: { maxFiles: 6, forbiddenPaths: ["docs/"] } }));
     await store.appendGene(minted, NOW);
     const fresh = await store.selectFor(matchingRequest, NOW);
     assert.equal(fresh?.constraints.maxFiles, 6, "no rounds yet, so the prior stands");

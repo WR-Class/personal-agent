@@ -178,7 +178,16 @@ function parseConstraints(constraints: unknown): GeneConstraints {
     if (!Number.isInteger(value) || (value as number) < 1) throw new GeneValidationError(`${what} must be a positive integer`);
     return value as number;
   };
-  return { maxFiles: positive(raw.maxFiles, "constraints.maxFiles"), maxLines: positive(raw.maxLines, "constraints.maxLines"), forbiddenPaths: strings(raw.forbiddenPaths ?? [], "constraints.forbiddenPaths", { allowEmpty: true }) };
+  // A gene file that still declares `maxLines` is refused rather than quietly
+  // read past. This module's own principle, stated at `write-budget.ts`'s
+  // `forbiddenPaths` member, is that "declared-but-unenforced is worse than
+  // absent": an operator who writes a line limit and gets it dropped believes
+  // they have one. The library holds no gene written before the field was
+  // removed, so nothing legitimate is being invalidated.
+  if (raw.maxLines !== undefined) {
+    throw new GeneValidationError("constraints.maxLines was removed: a write budget has one axis (maxFiles); delete the field");
+  }
+  return { maxFiles: positive(raw.maxFiles, "constraints.maxFiles"), forbiddenPaths: strings(raw.forbiddenPaths ?? [], "constraints.forbiddenPaths", { allowEmpty: true }) };
 }
 
 /**

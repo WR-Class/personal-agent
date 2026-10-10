@@ -60,8 +60,12 @@ export interface GeneStep {
 }
 
 export interface GeneConstraints {
+  /**
+   * Distinct files a round under this gene may touch. The budget's only axis:
+   * a per-round line limit was removed because it governed "write one document",
+   * which is ordinary work — see `write-budget.ts`'s header.
+   */
   readonly maxFiles: number;
-  readonly maxLines: number;
   readonly forbiddenPaths: readonly string[];
 }
 

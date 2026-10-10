@@ -57,7 +57,7 @@ function draft(name: string, signalsMatch: readonly string[]): GeneDraft {
       { kind: "act", text: "用 edit 做定点替换" },
       { kind: "verify", text: "跑测试" },
     ],
-    constraints: { maxFiles: 1, maxLines: 40, forbiddenPaths: [] },
+    constraints: { maxFiles: 1, forbiddenPaths: [] },
     validation: ["npm.cmd run build"],
     avoid: ["不要整文件重写"],
   };

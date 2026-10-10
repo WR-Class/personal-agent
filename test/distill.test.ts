@@ -158,19 +158,18 @@ describe("failures survive to distillation end to end", () => {
 // proves the measured figure actually reaches the draft, which is the part that
 // would silently regress if `distillGuards` stopped threading the facts through.
 describe("distilled budget is measured, not guessed", () => {
-  it("sizes the guard from the file and line counts the rounds actually reached", () => {
+  it("sizes the guard from the file counts the rounds actually reached", () => {
     const drafts = distillGuards([
       fact({ filesWritten: 4, linesWritten: 90 }),
       fact({ filesWritten: 5, linesWritten: 120 }),
       fact({ filesWritten: 3, linesWritten: 70 }),
     ]);
     assert.equal(drafts.length, 1);
-    // The middle of 3, 4 and 5 — and the middle of 70, 90 and 120. This assertion
-    // used to be 5 and "at least 120", which is what a p95 quantile does: take the
-    // top. That let the figure rise with every unusual round and never come back
-    // down, so a guard could be widened but never tightened.
+    // The middle of 3, 4 and 5. This assertion used to be 5 and "at least 120",
+    // which is what a p95 quantile does: take the top. That let the figure rise
+    // with every unusual round and never come back down, so a guard could be
+    // widened but never tightened.
     assert.equal(drafts[0]?.gene.constraints.maxFiles, 4);
-    assert.equal(drafts[0]?.gene.constraints.maxLines, 90);
   });
 
   it("keeps the cold-start fallback for a group with no measurements yet", () => {
@@ -180,9 +179,6 @@ describe("distilled budget is measured, not guessed", () => {
     // rather than becoming a measurement of zero.
     const drafts = distillGuards([fact(), fact(), fact()]);
     assert.equal(drafts.length, 1);
-    assert.deepEqual(
-      { maxFiles: drafts[0]?.gene.constraints.maxFiles, maxLines: drafts[0]?.gene.constraints.maxLines },
-      { maxFiles: 1, maxLines: 20 },
-    );
+    assert.equal(drafts[0]?.gene.constraints.maxFiles, 1);
   });
 });

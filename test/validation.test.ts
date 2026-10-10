@@ -32,7 +32,7 @@ function draft(validation: readonly (GeneValidation | string)[], overrides: Part
   return {
     name: "checked", intent: "build", signalsMatch: ["改文件"], preconditions: [],
     strategy: [{ kind: "act", text: "改" }, { kind: "verify", text: "查" }],
-    constraints: { maxFiles: 2, maxLines: 50, forbiddenPaths: [] },
+    constraints: { maxFiles: 2, forbiddenPaths: [] },
     validation, avoid: [],
     ...overrides,
   };

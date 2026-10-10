@@ -135,7 +135,7 @@ describe("gene-less success archive", () => {
     const minted = mintGene({
       name: "applied", intent: "build", signalsMatch: ["甲"], preconditions: [],
       strategy: [{ kind: "act", text: "做" }, { kind: "verify", text: "查" }],
-      constraints: { maxFiles: 1, maxLines: 5, forbiddenPaths: [] }, validation: ["npm.cmd test"], avoid: [],
+      constraints: { maxFiles: 1, forbiddenPaths: [] }, validation: ["npm.cmd test"], avoid: [],
     });
     await store.appendGene(minted, T0);
     // A gap: succeeded with no gene to use.

@@ -50,7 +50,7 @@ function gene(overrides: Partial<GeneDraft> = {}): GeneDraft {
       { kind: "act", text: "minimal edit" },
       { kind: "verify", text: "re-read" },
     ],
-    constraints: { maxFiles: 1, maxLines: 20, forbiddenPaths: [] },
+    constraints: { maxFiles: 1, forbiddenPaths: [] },
     validation: ["npm.cmd test"],
     avoid: [],
     ...overrides,

@@ -90,7 +90,7 @@ export type GeneStoreRecord =
      * field keep their exact bytes and read as "the ceiling is unknown", which
      * contributes no ceiling sample rather than a zero.
      */
-    readonly writeCeiling?: { readonly files: number; readonly lines: number };
+    readonly writeCeiling?: { readonly files: number };
     /**
      * Whether drift, not the score, chose the gene this outcome belongs to (D108).
      *
@@ -332,7 +332,7 @@ export class GeneStore {
       filesWritten?: number;
       linesWritten?: number;
       budgetRefusals?: number;
-      writeCeiling?: { files: number; lines: number };
+      writeCeiling?: { files: number };
       graded?: boolean;
     },
     at: number = Date.now(),
@@ -409,7 +409,6 @@ export class GeneStore {
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
         ceilingFiles: record.writeCeiling?.files,
-        ceilingLines: record.writeCeiling?.lines,
       });
     }
     return facts;
@@ -441,7 +440,6 @@ export class GeneStore {
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
         ceilingFiles: record.writeCeiling?.files,
-        ceilingLines: record.writeCeiling?.lines,
       });
     }
     return facts;
@@ -519,7 +517,6 @@ export class GeneStore {
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
         ceilingFiles: record.writeCeiling?.files,
-        ceilingLines: record.writeCeiling?.lines,
       });
       if (record.succeeded && !truncated) {
         entry.expression.successes += 1;

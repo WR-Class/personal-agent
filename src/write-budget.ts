@@ -1,35 +1,48 @@
 /**
  * Per-cycle write budget (D18).
  *
- * A gene's `constraints` were a record, not a rule: `maxFiles` and `maxLines`
- * were written down and nothing enforced them. A constraint that is only
- * recorded is a suggestion, and this module is what turns it into a rule.
+ * A gene's `constraints` were a record, not a rule: the numbers in them were
+ * written down and nothing enforced them. A constraint that is only recorded is
+ * a suggestion, and this module is what turns it into a rule.
  *
- * The ledger is pure arithmetic over what a round has already written. Counting
- * is deliberately conservative: files are counted exactly (distinct paths), and
- * lines are counted only where the tool arguments make them mechanically
- * readable. Where they are not — delete, rename, a patch — the file is counted
- * and the lines are not estimated, because an invented number would make the
- * budget meaningless in exactly the case where it matters.
+ * ⚠️ **The budget has one axis: files.** It used to have two, and the second one
+ * was the binding one in practice. Measured over this repo's own last twelve
+ * commits, lines-per-file runs 20–80, so a single 400-line document — one file,
+ * comfortably inside any file budget — was refused by the line counter, while a
+ * four-file fifty-line change was refused by the file counter. The two limits
+ * governed two different shapes of work, and the one that governed "write a
+ * document" was the one nobody meant to constrain.
+ *
+ * The reference implementation (EvoMap/Evolver) has **no line budget at all**:
+ * its gene constraints carry `max_files` and `forbidden_paths` and nothing else,
+ * and lines are compared only against one global ceiling. This module now has
+ * the same shape — one per-round axis, and one global line ceiling
+ * (`GLOBAL_LINE_CAP`) whose only job is to stop a runaway write.
+ *
+ * Lines are still **counted and journaled**: what a round actually wrote is
+ * evidence, and the evidence is what `measuredBudget` runs on. What is gone is
+ * lines as a thing a round may be refused for.
+ *
+ * Counting is deliberately conservative: files are counted exactly (distinct
+ * paths), and lines are counted only where the tool arguments make them
+ * mechanically readable. Where they are not — delete, rename, a patch — the file
+ * is counted and the lines are not estimated, because an invented number would
+ * make the budget meaningless in exactly the case where it matters.
  */
 
 export interface WriteBudget {
   /** Distinct files this cycle may touch. */
   readonly maxFiles: number;
-  /** Lines added plus changed across this cycle. */
-  readonly maxLines: number;
   /**
    * Workspace-relative paths this cycle may not write, added by D103.
    *
    * The header of this module already states the principle: "A gene's
-   * `constraints` were a record, not a rule: `maxFiles` and `maxLines` were
-   * written down and nothing enforced them. A constraint that is only recorded is
-   * a suggestion." D18 turned two of the three members into rules and left the
-   * third a suggestion — `forbiddenPaths` was declared in `types.ts`, parsed in
-   * `gene.ts`, and written by both `distill.ts` and `induct.ts`, but this
-   * function's own signature was `{ maxFiles: number; maxLines: number } | null`,
-   * so it never reached an enforcement path. Nothing in `src/` refused a write on
-   * account of it.
+   * `constraints` were a record, not a rule ... A constraint that is only
+   * recorded is a suggestion." D18 turned the counted members into rules and left
+   * the third a suggestion — `forbiddenPaths` was declared in `types.ts`, parsed
+   * in `gene.ts`, and written by both `distill.ts` and `induct.ts`, but this
+   * function's own signature listed only the counters, so it never reached an
+   * enforcement path. Nothing in `src/` refused a write on account of it.
    *
    * Declared-but-unenforced is worse than absent, which is why this came before
    * the budget-derivation work: an absent limit is a debt anybody can see, while a
@@ -37,6 +50,17 @@ export interface WriteBudget {
    */
   readonly forbiddenPaths: readonly string[];
 }
+
+/**
+ * The only line ceiling left, and it is global rather than per round.
+ *
+ * It does not measure a round's ambition; it stops one. Every real round this
+ * repo has recorded is orders of magnitude below it, so it cannot refuse
+ * ordinary work — which is the point. The value is the largest line count that
+ * still reads as a deliberate backstop rather than as a budget, and it exists so
+ * that removing the per-round counter did not leave the axis unguarded.
+ */
+export const GLOBAL_LINE_CAP = 65_535;
 
 /** Tools that change the workspace. Reads are not writes. */
 const WRITE_TOOL_LINE_ARGUMENT: Readonly<Record<string, string | null>> = {
@@ -238,8 +262,12 @@ export function checkWrite(
     return refusal(`cycle file budget exhausted: ${budget.maxFiles} file(s) per cycle, ${attempt.path} would be number ${state.files.length + 1}`);
   }
   const lines = attempt.lines ?? 0;
-  if (state.lines + lines > budget.maxLines) {
-    return refusal(`cycle line budget exhausted: ${budget.maxLines} line(s) per cycle, this write adds ${lines} to ${state.lines}`);
+  // The only line check left, and it is global. A round's own line budget is gone
+  // (see the header): lines governed "one big document", which is ordinary work,
+  // and the per-round counter refused it while the file counter never would have.
+  // What remains stops a runaway write and cannot refuse real work.
+  if (state.lines + lines > GLOBAL_LINE_CAP) {
+    return refusal(`global line ceiling reached: ${GLOBAL_LINE_CAP} line(s) in one cycle, this write adds ${lines} to ${state.lines}`);
   }
   return { allowed: true };
 }
@@ -287,11 +315,12 @@ export function raiseFor(
   const filesNeeded = attempt.path === null
     ? anonymous + 1
     : state.files.includes(attempt.path) ? state.files.length : state.files.length + 1;
-  const linesNeeded = state.lines + (attempt.lines ?? 0);
   const maxFiles = Math.max(budget.maxFiles, filesNeeded);
-  const maxLines = Math.max(budget.maxLines, linesNeeded);
-  if (maxFiles === budget.maxFiles && maxLines === budget.maxLines) return null;
-  return { maxFiles, maxLines, forbiddenPaths: budget.forbiddenPaths };
+  // Files only. Lines no longer have a per-round ceiling to widen, and a refusal
+  // on the global cap is not a measurement of this round's ambition — inventing
+  // room for it would be adding back a number the operator just removed.
+  if (maxFiles === budget.maxFiles) return null;
+  return { maxFiles, forbiddenPaths: budget.forbiddenPaths };
 }
 
 /** Charge an attempt that was actually performed. */
@@ -312,7 +341,7 @@ export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: nu
  * ⚠️ **A gene's numbers stand as declared — the default is a default, not a
  * floor.** This function used to widen them with `Math.max(declared, fallback)`
  * (甲). Its reasoning was sound about the *cold start* and wrong about the
- * *contract*: `COLD_START_BUDGET` = `{1, 20}` is a guess, and enforcing a guess
+ * *contract*: `COLD_START_BUDGET` = `{1}` is a guess, and enforcing a guess
  * as a ceiling cuts a normal multi-file round to one file, after which the round
  * is charged to the gene for a number nobody measured.
  *
@@ -332,25 +361,24 @@ export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: nu
  * smallest at 1. A floor that raised those would contradict the genes its own
  * author wrote.
  *
- * `MIN_MEASURED_BUDGET` (1/1) is a different thing and stays: it blocks **zero**,
+ * `MIN_MEASURED_BUDGET` (1) is a different thing and stays: it blocks **zero**,
  * not smallness, and it lives in the estimator where a group's median is taken.
  * `forbiddenPaths` is not floored and never was — a ban is policy, not a
  * measurement, and widening it would silently lift a restriction.
  *
- * The parameter type names all three members of `GeneConstraints` rather than
- * accepting the interface itself, so a caller holding something else cannot pass
- * it by accident — and so that the omission D103 fixed is visible here: this
- * signature used to list two of the three, which is how a declared constraint
- * stayed unenforced while every producer kept writing it.
+ * The parameter type names the members of `GeneConstraints` rather than accepting
+ * the interface itself, so a caller holding something else cannot pass it by
+ * accident — and so that the omission D103 fixed is visible here: this signature
+ * used to list fewer members than the interface had, which is how a declared
+ * constraint stayed unenforced while every producer kept writing it.
  */
 export function budgetFor(
-  constraints: { maxFiles: number; maxLines: number; forbiddenPaths?: readonly string[] } | null,
+  constraints: { maxFiles: number; forbiddenPaths?: readonly string[] } | null,
   fallback: WriteBudget,
 ): WriteBudget {
   if (constraints === null) return fallback;
   return {
     maxFiles: constraints.maxFiles,
-    maxLines: constraints.maxLines,
     forbiddenPaths: constraints.forbiddenPaths ?? [],
   };
 }
@@ -371,11 +399,18 @@ export interface WriteObservation {
    * contribute no ceiling sample, which reads the same as a cold start.
    */
   readonly ceilingFiles?: number;
-  readonly ceilingLines?: number;
 }
 
-/** The guess used before any round has been measured. */
-export const COLD_START_BUDGET = { maxFiles: 1, maxLines: 20 } as const;
+/**
+ * The guess used before any round has been measured.
+ *
+ * One file, because files are the only axis a budget has. It fires only for a
+ * group whose rounds recorded no write at all — a group that did write gets its
+ * median instead, and the fold re-measures an existing gene from its own rounds.
+ * `measuredBudget`'s doc says why an all-zero group reads as a cold start rather
+ * than as a measurement of zero.
+ */
+export const COLD_START_BUDGET = { maxFiles: 1 } as const;
 
 /**
  * The floor under a measured budget, and deliberately not `COLD_START_BUDGET`.
@@ -386,7 +421,7 @@ export const COLD_START_BUDGET = { maxFiles: 1, maxLines: 20 } as const;
  * could never be narrower than a number nobody measured — and narrowing is the
  * whole point of taking the median below.
  */
-export const MIN_MEASURED_BUDGET = { maxFiles: 1, maxLines: 1 } as const;
+export const MIN_MEASURED_BUDGET = { maxFiles: 1 } as const;
 
 /** Quantile of an already-sorted array. Nearest-rank; no interpolation. */
 function quantile(sorted: readonly number[], q: number): number {
@@ -466,26 +501,25 @@ function ceilings(
  */
 export function measuredBudget(
   observations: readonly WriteObservation[],
-  fallback: { maxFiles: number; maxLines: number } = COLD_START_BUDGET,
-): { maxFiles: number; maxLines: number } {
+  fallback: { maxFiles: number } = COLD_START_BUDGET,
+): { maxFiles: number } {
   // ⚠️ A row that recorded no footprint at all is **not** a measurement of zero.
   // It is a row written before the footprint was journaled, and `gene-store.ts`
   // promises exactly that reading ("the estimator treats it as a cold start
   // rather than as a zero"). The reader maps the absent fields with `?? 0`, so
   // the promise can only be kept here. Without this, a group nobody ever measured
-  // mints a 1-line gene — the constant-guess defect again, one layer down, and
+  // mints a 1-file gene — the constant-guess defect again, one layer down, and
   // hidden until the median replaced the floor that used to rescue it.
+  //
+  // The filter is stated on the axis that exists. `linesWritten` is still
+  // journaled as blast radius but is no longer a budget axis, so it cannot make a
+  // row "measured" — a row with no file count has nothing this estimator can size.
   const measured = observations.filter((o) =>
-    o.filesWritten !== 0 || o.linesWritten !== 0 || o.budgetRefusals !== 0
-    || o.ceilingFiles !== undefined || o.ceilingLines !== undefined);
+    o.filesWritten !== 0 || o.budgetRefusals !== 0 || o.ceilingFiles !== undefined);
   if (measured.length === 0) return { ...fallback };
   // Uncensored value: `reached + 1` whenever this round was refused at least
   // once, because a refusal proves at least one more unit was wanted.
   const demand = (reached: number, refusals: number): number => (refusals > 0 ? reached + 1 : reached);
   const files = [...measured.map((o) => demand(o.filesWritten, o.budgetRefusals)), ...ceilings(measured, (o) => o.ceilingFiles)].sort((a, b) => a - b);
-  const lines = [...measured.map((o) => demand(o.linesWritten, o.budgetRefusals)), ...ceilings(measured, (o) => o.ceilingLines)].sort((a, b) => a - b);
-  return {
-    maxFiles: Math.max(MIN_MEASURED_BUDGET.maxFiles, quantile(files, MEDIAN)),
-    maxLines: Math.max(MIN_MEASURED_BUDGET.maxLines, quantile(lines, MEDIAN)),
-  };
+  return { maxFiles: Math.max(MIN_MEASURED_BUDGET.maxFiles, quantile(files, MEDIAN)) };
 }

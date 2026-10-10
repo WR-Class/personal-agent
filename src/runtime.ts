@@ -103,12 +103,6 @@ export interface AgentRuntimeOptions {
    */
   maxWriteFiles?: number;
   /**
-   * Lines one cycle may add or change when no gene constrains the round.
-   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene replaces this for the
-   * round it applies to, in either direction.
-   */
-  maxWriteLines?: number;
-  /**
    * Wall-clock ceiling for one `send`, in milliseconds.
    *
    * Omitted/null means no whole-send deadline. Per-request/tool timers and
@@ -212,7 +206,6 @@ export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = Infinity;
  * either direction — see `budgetFor` for why the default is not also a floor.
  */
 export const DEFAULT_WRITE_MAX_FILES = 3;
-export const DEFAULT_WRITE_MAX_LINES = 200;
 export const DEFAULT_DEADLINE_MS = Infinity;
 export const DEFAULT_MAX_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 131_072;
@@ -424,8 +417,12 @@ export interface RunBudget {
   /** Writes charged to this cycle, against the budget the round ran under (D18). */
   filesWritten?: number;
   filesWrittenLimit?: number;
+  /**
+   * Lines this cycle actually wrote. **Recorded, never limited** — the budget has
+   * one axis, so this is blast radius for the operator and evidence for the
+   * estimator, not a number the round can run out of.
+   */
   linesWritten?: number;
-  linesWrittenLimit?: number;
 }
 
 /**
@@ -459,7 +456,7 @@ export function formatBudget(budget: RunBudget): string {
     // Printed only once a write budget was established (the field is optional on
     // the type). Showing writes only when they happened keeps a read-only round's
     // budget line exactly as short as it was.
-    (budget.filesWritten === undefined ? "" : ` · 写入 ${budget.filesWritten}/${budget.filesWrittenLimit} 文件 ${budget.linesWritten}/${budget.linesWrittenLimit} 行`) +
+    (budget.filesWritten === undefined ? "" : ` · 写入 ${budget.filesWritten}/${budget.filesWrittenLimit} 文件 ${budget.linesWritten} 行`) +
     ` · 用时 ${time(budget.elapsedMs)}/${Number.isFinite(budget.deadlineMs)?time(budget.deadlineMs):'不限'}]`;
 }
 
@@ -688,7 +685,6 @@ export class AgentRuntime {
     this.maxToolCallsPerRun = options.maxToolCallsPerRun === undefined || options.maxToolCallsPerRun === Infinity ? Infinity : positiveInt("maxToolCallsPerRun", options.maxToolCallsPerRun, DEFAULT_MAX_TOOL_CALLS_PER_RUN);
     this.writeBudget = {
       maxFiles: positiveInt("maxWriteFiles", options.maxWriteFiles, DEFAULT_WRITE_MAX_FILES),
-      maxLines: positiveInt("maxWriteLines", options.maxWriteLines, DEFAULT_WRITE_MAX_LINES),
       // Empty by design, and deliberately not an `options.*` knob. Forbidden paths
       // come from the applied gene, which is the layer that knows what this kind of
       // work must not touch; the runtime's defaults are arithmetic ceilings that
@@ -853,7 +849,7 @@ export class AgentRuntime {
           filesWritten: this.writeLedger.files.length,
           linesWritten: this.writeLedger.lines,
           ...(budgetRefusals > 0 ? { budgetRefusals } : {}),
-          writeCeiling: { files: this.writeBudget.maxFiles, lines: this.writeBudget.maxLines },
+          writeCeiling: { files: this.writeBudget.maxFiles },
         }
         : {}),
       evidence: evaluation.evidence,
@@ -1122,7 +1118,6 @@ export class AgentRuntime {
             filesWritten: this.writeLedger.files.length,
             filesWrittenLimit: this.writeBudget.maxFiles,
             linesWritten: this.writeLedger.lines,
-            linesWrittenLimit: this.writeBudget.maxLines,
           },
         };
       }
@@ -1232,7 +1227,7 @@ export class AgentRuntime {
           this.writeBudget = widened;
           await this.store.appendAudit(this.sessionId, {
             tool: call.name, decision: "allowed", cause: "budget",
-            reason: `write budget raised to ${widened.maxFiles} file(s) / ${widened.maxLines} line(s): ${decision.reason ?? "the ceiling refused this write"}`,
+            reason: `write budget raised to ${widened.maxFiles} file(s): ${decision.reason ?? "the ceiling refused this write"}`,
           });
         } else if (!decision.allowed) {
           budgetRefusals += 1;
