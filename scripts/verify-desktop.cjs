@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 (async () => {
-  const pages = await (await fetch('http://127.0.0.1:9224/json/list')).json();
+  const pages = await (await fetch(`http://127.0.0.1:${process.env.PA_VERIFY_PORT||9224}/json/list`)).json();
   const page = pages.find(p => p.type === 'page' && p.url.endsWith('/desktop/renderer/index.html'));
   assert.ok(page, 'Personal Agent desktop page must be running');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -30,6 +30,10 @@ const path = require('node:path');
     fs.writeFileSync(path.join(out, name + '.png'), Buffer.from(r.data, 'base64'));
   }
   try {
+    if(process.env.PA_VERIFY_WORKSPACE==='1'){
+      const layout=await evaluate(`(()=>{const p=document.querySelector('.workspace-panel'),s=p.querySelector('[role=separator]'),b=document.querySelector('#workspaceFullscreen'),r=p.getBoundingClientRect();return {separator:!!s,orientation:s?.getAttribute('aria-orientation'),label:b?.getAttribute('aria-label'),left:r.left,right:r.right,width:innerWidth};})()`);
+      assert.ok(layout.separator);assert.equal(layout.orientation,'vertical');assert.equal(layout.label,'全屏');assert.ok(layout.left>=0&&layout.right<=layout.width);console.log('PASS desktop workspace layout and accessible controls');return;
+    }
     await call('Page.reload');
     await evaluate(`new Promise(resolve=>{if(document.readyState==='complete')resolve();else addEventListener('load',resolve,{once:true});})`);
     const backgrounds = await evaluate(`Array.from(document.querySelectorAll('dialog'),d=>getComputedStyle(d).backgroundColor)`);

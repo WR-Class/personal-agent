@@ -154,7 +154,9 @@ describe("openai adapter", () => {
       max_tokens: 8192,
     });
     assert.equal(response.content, "pong");
-    assert.deepEqual(response.usage, { inputTokens: 7, outputTokens: 2 });
+    const { durationMs, ...usage } = response.usage;
+    assert.ok(durationMs! > 0 && Number.isFinite(durationMs));
+    assert.deepEqual(usage, { inputTokens: 7, outputTokens: 2, reported: true });
   });
 
   it("sends the operator's maxTokens when given one", async () => {

@@ -13,18 +13,14 @@
  * time it out, and kill it — we do not link it.
  *
  * **Process discipline is borrowed from `background-jobs.ts`, deliberately:**
- * - The child is **not detached** — attached to our process tree so cleanup
- *   depends on the parent relationship, not on finding a stray pid later.
+ * - Unix children use their own process group; Windows retains the parent tree.
+ *   The shared process-tree helper stops registered descendants before close resolves.
  * - `shell: false`, `windowsHide: true`, explicit `stdio` — no interposed shell,
  *   which is what created orphans and quoting bugs there.
  * - Shutdown kills the **whole tree**: on Windows `child.kill()` leaves
  *   grandchildren running (measured in background-jobs.ts:216-236), so
- *   `taskkill /T /F` is used, with a direct-kill fallback.
- *
- * The kill logic is inlined rather than shared with `background-jobs.ts`: the two
- * differ in what they hold (a JobRecord vs a live child), and this is only the
- * second user. If a third appears, extract `killProcessTree(pid, child)` then —
- * not now (YAGNI).
+ *   the shared trusted `taskkill /T /F` helper is used; cleanup errors remain visible
+ *   to callers of closeAndWait().
  *
  * **The environment is the already-scrubbed `ToolEnvironment`.** `buildToolEnvironment`
  * allowlists a handful of variables and redirects HOME/TMP into the agent home, so
@@ -47,6 +43,7 @@ import {
   type JsonRpcResponse,
 } from "./mcp-jsonrpc.ts";
 import type { ToolEnvironment } from "./tool-environment.ts";
+import { boundedCleanup, processGroupOptions, terminateProcessTree } from './process-tree.ts';
 
 /** How the MCP server is launched: a program and its arguments. */
 export interface McpServerSpec {
@@ -81,6 +78,9 @@ export class McpClient {
   #closed = false;
   readonly #notifications: JsonRpcNotification[] = [];
   readonly #timeoutMs: number;
+  readonly #done: Promise<void>;
+  #exited = false;
+  #closing?: Promise<void>;
 
   constructor(child: ChildProcessWithoutNullStreams, timeoutMs: number) {
     this.#child = child;
@@ -92,8 +92,12 @@ export class McpClient {
     // drained so the pipe never fills and blocks the child, but not parsed.
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", () => {});
-    child.on("close", () => this.#onClose("MCP 服务器进程已退出"));
+    this.#done = new Promise(resolve => child.once('close', () => { this.#exited = true; this.#onClose('MCP 服务器进程已退出'); resolve(); }));
     child.on("error", (error) => this.#onClose(`MCP 服务器进程启动失败：${error.message}`));
+    // A pending write may fail after close; consume EPIPE instead of crashing the host.
+    child.stdin.on('error', () => { this.#onClose('MCP 输入管道已关闭'); this.close(); });
+    child.stdout.on('error', () => { this.#onClose('MCP 输出管道已关闭'); this.close(); });
+    child.stderr.on('error', () => {});
   }
 
   #onData(chunk: string): void {
@@ -105,12 +109,13 @@ export class McpClient {
       // A malformed protocol line is a fault: fail every pending call and close,
       // rather than letting a broken server hang the turn.
       this.#onClose(`MCP 协议错误：${(error as Error).message}`);
+      this.close();
       return;
     }
     this.#buffer = drained.rest;
     for (const message of drained.messages) {
       if ("method" in message) {
-        this.#notifications.push(message);
+        if (this.#notifications.length < 128) this.#notifications.push(message);
         continue;
       }
       // A response to an id we never sent is a server fault; drop it rather than
@@ -179,38 +184,25 @@ export class McpClient {
    * Stop the child and fail any outstanding calls.
    *
    * Kills the whole process tree. On Windows the direct child may be a launcher
-   * whose grandchildren survive `kill()`, so `taskkill /T /F` is used with a
-   * direct-kill fallback — the discipline background-jobs.ts:216-236 established
-   * after measuring a job that kept running after kill() reported success.
+   * whose grandchildren survive `kill()`, so trusted `taskkill /T /F` is used.
+   * Legacy close remains fire-and-forget; desktop lifecycle uses closeAndWait.
    */
-  close(): void {
-    this.#onClose("MCP 连接已被客户端关闭");
-    const pid = this.#child.pid;
-    if (pid !== undefined && process.platform === "win32") {
-      try {
-        const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-        killer.on("error", () => this.#directKill());
-        return;
-      } catch {
-        // fall through
-      }
-    }
-    this.#directKill();
-  }
+  close(): void { void this.closeAndWait().catch(() => {}); }
 
-  #directKill(): void {
-    try {
-      this.#child.kill();
-    } catch {
-      // Already gone.
-    }
+  /** Desktop callers await actual process close; cleanup failure is never reported as success. */
+  closeAndWait(): Promise<void> {
+    this.#onClose('MCP 连接已被客户端关闭');
+    return this.#closing ??= (async () => {
+      if (!this.#exited && this.#child.pid !== undefined) await terminateProcessTree(this.#child);
+      await boundedCleanup(this.#done);
+    })();
   }
 }
 
 /**
  * Spawn an MCP server subprocess and wrap it in a client.
  *
- * The child is attached (not detached) and runs under the scrubbed
+ * The child uses the platform's process-group cleanup discipline and the scrubbed
  * {@link ToolEnvironment}, so it inherits neither the operator's secrets nor a
  * shell. Call {@link McpClient.initialize} on the result before any other request.
  */
@@ -223,6 +215,7 @@ export function startMcpClient(
     cwd: environment.cwd,
     env: environment.env as NodeJS.ProcessEnv,
     shell: false,
+    ...processGroupOptions,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;

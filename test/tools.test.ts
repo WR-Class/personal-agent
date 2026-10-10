@@ -74,6 +74,14 @@ function makeRuntime(
   return { runtime, adapter };
 }
 
+it('emits tool arguments and output before the next model request', async () => {
+  const activities: import('../src/runtime.ts').RuntimeActivity[]=[];
+  const scripted=createScriptedAdapter({steps:[{toolCalls:[call('read_file',{path:'hello.txt'})]},{content:'done'}]});
+  let requests=0;
+  const runtime=new AgentRuntime({adapter:{...scripted,async chat(request){if(++requests===2){assert.equal(activities.find(e=>e.type==='tool-start')?.arguments,JSON.stringify({path:'hello.txt'}));assert.match(activities.find(e=>e.type==='tool-end')?.content??'',/file contents here/);}return scripted.chat(request);}},store:new SessionStore({root:storeRoot}),sessionId:'live-evidence',home,workspaceRoot:workspace(),tools:makeRegistry(),onActivity:e=>activities.push(e)});
+  await runtime.send('read hello');assert.equal(requests,2);
+});
+
 describe("edit_file", () => {
   it("replaces one existing file only after approval", async () => {
     await writeFile(join(workspace(), "editable.txt"), "old text", "utf8");
@@ -534,14 +542,21 @@ describe("agent loop with tools", () => {
     assert.deepEqual(toolMessages.map((message) => message.content), ["file contents here", "nested"]);
   });
 
+  it('default exceeds ten steps and configured cap returns a tool-free summary',async()=>{
+    const responses=[...Array.from({length:33},()=>({toolCalls:[call('read_file',{path:'hello.txt'})]})),{content:'done'}];
+    const a=makeRuntime('unlimited',responses);assert.equal((await a.runtime.send('go')).steps,34);assert.equal(DEFAULT_MAX_STEPS,Infinity);
+    const b=makeRuntime('summary-cap',[responses[0]!,{content:'Completed reading; remaining edits need another turn.'}],{maxSteps:1});const result=await b.runtime.send('go');assert.equal(result.toolCalls,1);assert.equal(result.evaluation.status,'partial');assert.match(result.reply.content,/remaining/);assert.equal(b.adapter.requests[1]!.tools,undefined);
+  });
+
   it("stops at maxSteps when the model keeps asking for tools", async () => {
-    const forever = Array.from({ length: DEFAULT_MAX_STEPS + 5 }, () => ({
+    const forever = Array.from({ length: 8 }, () => ({
       toolCalls: [call("read_file", { path: "hello.txt" })],
     }));
     const { runtime, adapter } = makeRuntime("limit", forever, { maxSteps: 3 });
 
     await assert.rejects(() => runtime.send("go"), StepLimitError);
-    assert.equal(adapter.consumed, 3, "the cap must bound model calls, not just loop iterations");
+    assert.equal(adapter.consumed, 4, "one tool-free summary attempt follows the configured cap");
+    assert.equal(adapter.requests.at(-1)!.tools,undefined,'finalization cannot execute tools');
 
     // The cap is a termination guarantee, so what ran must still be auditable.
     const { events } = await new SessionStore({ root: storeRoot }).inspect("limit");
@@ -554,8 +569,8 @@ describe("agent loop with tools", () => {
     );
   });
 
-  it("uses 10 steps by default", () => {
-    assert.equal(DEFAULT_MAX_STEPS, 10);
+  it("does not cap steps by default", () => {
+    assert.equal(DEFAULT_MAX_STEPS, Infinity);
   });
 
   it("rejects a non-positive maxSteps at construction", () => {

@@ -1,14 +1,16 @@
 import { resolve } from 'node:path';
 import { SessionStore } from './session-store.ts';
 import { listSessions } from './interactive.ts';
+import { desktopUsageSummary } from './desktop-usage.ts';
 
 export async function desktopHistory(home: string, id: unknown) {
   if (typeof id !== 'string' || id.length > 200 || !/^[A-Za-z0-9._-]+$/.test(id) || ['genes', 'cycles'].includes(id.toLowerCase())) throw new Error('invalid session id');
   const store = new SessionStore({ root: resolve(home), maxReadBytes: 1024 * 1024 });
   const events = await store.read(id);
   if (!events.length) throw new Error('session missing');
+  const pending = await store.pendingTools(id); // Strict semantic validation; opening never repairs.
   const messages = events.filter(e => e.kind === 'message');
-  return { id, total: messages.length, truncated: messages.length > 200,
+  return { id, total: messages.length, truncated: messages.length > 200, pendingTools: pending.length, usageSummary: desktopUsageSummary(events),
     messages: messages.slice(-200).map(e => ({ role: e.message.role, content: e.message.content, toolCallId: e.message.toolCallId, isError: e.isError,
       toolCalls: e.message.toolCalls?.map(call => ({ id: call.id, name: call.name, arguments: call.arguments })) })) };
 }

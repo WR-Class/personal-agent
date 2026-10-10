@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { SessionStore } from "./session-store.ts";
@@ -12,7 +12,8 @@ import { createEchoAdapter } from "./echo-adapter.ts";
 import { createOpenAIChatAdapter } from "./openai-adapter.ts";
 import { findTier, resolveTier } from "./tiers.ts";
 import { grantReadableRoot, readTrustedRoots, revokeReadableRoot } from "./trusted-roots.ts";
-import { ToolRegistry, createBatchFilesTool, createCreateFileTool, createDeleteFileTool, createEditFileTool, createInspectFileTool, createPatchFileTool, createJobKillTool, createJobOutputTool, createReadFileTool, createRenameFileTool, createRunCommandTool, createUpdateTaskStateTool } from "./tools.ts";
+import { ToolRegistry } from "./tools.ts";
+import { createCoreTools } from "./core-tools.ts";
 import { mintGene } from "./gene.ts";
 import { shutdownJobs } from "./background-jobs.ts";
 import type { Gene } from "./gene.ts";
@@ -31,6 +32,47 @@ import type { TerminalIO } from "./terminal.ts";
 import { runInteractive } from "./interactive.ts";
 import { formatPreflight, preflight } from "./preflight.ts";
 import type { ChatMessage, ModelAdapter } from "./types.ts";
+import { createHash } from "node:crypto";
+
+/**
+ * Build an `approve` callback for non-TTY runs. For each call it writes a
+ * request file under `<dir>/<hash>.request` containing the prompt, then polls
+ * `<dir>/<hash>.decision` once a second for up to 120s. A decision file with
+ * exactly `yes` returns true; `no` returns false; anything else (or timeout)
+ * is treated as no. A `<hash>.resolved` file is written when the loop exits
+ * so a follow-up call with the same hash is a no-op.
+ */
+export function createFileApprover(dir: string, options: { signal: AbortSignal | undefined; requestLog: (line: string) => void; timeoutMs?: number; pollMs?: number }): (prompt: string) => Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? 120_000;
+  const pollMs = options.pollMs ?? 1_000;
+  return async (prompt: string): Promise<boolean> => {
+    const hash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
+    await mkdir(dir, { recursive: true });
+    const request = `${dir}/${hash}.request`;
+    const decision = `${dir}/${hash}.decision`;
+    const resolved = `${dir}/${hash}.resolved`;
+    try { await unlink(resolved); } catch { /* fine */ }
+    await writeFile(request, prompt, "utf8");
+    options.requestLog(`request written: ${request}`);
+    const started = Date.now();
+    const deadline = started + timeoutMs;
+    while (Date.now() < deadline) {
+      options.signal?.throwIfAborted();
+      await new Promise((r) => setTimeout(r, pollMs));
+      let text: string;
+      try { text = (await readFile(decision, "utf8")).trim(); }
+      catch { continue; }
+      if (text === "yes" || text === "no") {
+        await writeFile(resolved, text, "utf8");
+        try { await unlink(decision); } catch { /* fine */ }
+        options.requestLog(`decision ${text} for ${hash}`);
+        return text === "yes";
+      }
+    }
+    options.requestLog(`decision timed out for ${hash}`);
+    return false;
+  };
+}
 
 export const HELP = `Personal Agent — 交互式只读 Agent
 用法：npm start                         持续对话/首次配置向导
@@ -46,7 +88,7 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       npm start -- --induct            把"没有基因可用但成功了"的轮次归纳成候选草稿并打印，不自动铸造
       npm start -- --trust-root <dir>  授予对工作区外某目录的**只读**访问（写入仍限于工作区）
       npm start -- --trusted           列出已授予的只读目录；--untrust-root <dir> 撤销
-      npm start -- --tier <name>       权限档位：read-only / ask-before-writing / workspace-write（默认）/ full-access
+      npm start -- --tier <name>       权限档位：read-only / ask-before-writing / workspace-write（默认）/ full-access / infra-read / infra-write
       npm start -- --stream "问题"     用 SSE 流式传输（服务端只支持流式时使用；不改变回答内容）
 选项：--home <dir> --workspace <dir> --max-steps <n> --max-tools <n>
       --max-tools-per-step <n> --max-send-ms <n> --max-context-bytes <n> --max-context-tokens <n> --totals
@@ -55,6 +97,7 @@ export const HELP = `Personal Agent — 交互式只读 Agent
       三项须一起配置；不与已保存配置混合，不再静默回退 Echo。
       预算：PERSONAL_AGENT_MAX_STEPS / _MAX_TOOL_CALLS / _MAX_TOOLS_PER_STEP / _MAX_SEND_MS / _MAX_CONTEXT_BYTES / _MAX_CONTEXT_TOKENS
       档位：PERSONAL_AGENT_TIER（不从工作区内的文件读取，克隆来的仓库无法自行提权）
+      审批：--approve interactive|file:<dir>|none  控制非 TTY 时如何处理 approveExact 的询问
       配置文件：<home>/config.json —— 设默认档位与规则；**只读 agent home，绝不读工作区**。
                 形如 {"tier":"ask-before-writing","rules":[{"tool":"run_command","decision":"deny","reason":"…"}]}
                 规则里**不接受** tier 与 when 字段（前者会让配置压过所选档位，后者等于让配置文件执行代码）；
@@ -90,6 +133,19 @@ export interface CliOptions {
   untrustRoot?: string;
   /** Print the granted readable roots and exit. */
   listTrusted: boolean;
+  /**
+   * Approval channel for non-TTY runs. `interactive` (the default) uses an
+   * ask/answer prompt and only attaches an approver when the session is also
+   * interactive. `file:<dir>` writes a request file under `<dir>` and polls
+   * for a sibling decision file, so a non-TTY container can still gate writes
+   * through operator action. `none` disables approval entirely.
+   */
+  approveMode: "interactive" | `file:${string}` | "none";
+  /**
+   * Per-mode approval timeout. Currently only used by the `file:` mode to
+   * decide when a missing decision becomes a default-deny. Default 120_000.
+   */
+  approveTtlMs: number;
 }
 export class UsageError extends Error {}
 function valueFor(argv: readonly string[], index: number, flag: string): string {
@@ -116,6 +172,11 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     // must not be able to grant itself full access.
     tier:env.PERSONAL_AGENT_TIER,
     listTrusted:false,
+    // Default is interactive: only attach an `approve` callback when we are
+    // also interactive. Non-TTY runs (containers, headless scripts) must
+    // opt into `file:<dir>` or `none` explicitly.
+    approveMode: "interactive",
+    approveTtlMs: 120_000,
     // Opt-in, because unlike every other preflight check this one spends a token
     // and puts the key on the wire. It answers the question a status probe
     // structurally cannot: does this provider accept our request shape, and does
@@ -147,6 +208,26 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     else if(arg==="--trust-root")options.trustRoot=valueFor(argv,++i,arg);
     else if(arg==="--untrust-root")options.untrustRoot=valueFor(argv,++i,arg);
     else if(arg==="--trusted")options.listTrusted=true;
+    else if(arg==="--approve"){
+      const raw=valueFor(argv,++i,arg);
+      if(raw==="interactive"||raw==="none")options.approveMode=raw;
+      else if(raw.startsWith("file:")){
+        // Optional `file:<dir>:<seconds>` suffix overrides the default 120s
+        // timeout. The colon-separated form is parsed here rather than at
+        // approver construction so an invalid value is rejected before any
+        // tool call is queued.
+        const parts=raw.split(":");
+        if(parts.length===3){
+          const sec=Number(parts[2]);
+          if(!Number.isInteger(sec)||sec<1)throw new UsageError("--approve file:<dir>:<seconds> requires a positive integer");
+          options.approveTtlMs=sec*1_000;
+        }else if(parts.length!==2){
+          throw new UsageError("--approve must be 'interactive', 'none', or 'file:<dir>[:<seconds>]'");
+        }
+        options.approveMode=raw as `file:${string}`;
+      }
+      else throw new UsageError("--approve must be 'interactive', 'none', or 'file:<dir>[:<seconds>]'");
+    }
     else if(arg==="--mint-gene")options.mintGene=valueFor(argv,++i,arg);
     else if(arg==="--distill")options.distill=true;
     else if(arg==="--induct")options.induct=true;
@@ -156,10 +237,10 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
   }
   if(options.help)return options;
   if(!/^[A-Za-z0-9._-]+$/.test(options.session))throw new UsageError("invalid session id");
-  positiveFlag("--max-steps", options.maxSteps);
-  positiveFlag("--max-tools", options.maxToolCallsPerRun);
+  if(options.maxSteps !== Infinity)positiveFlag("--max-steps", options.maxSteps);
+  if(options.maxToolCallsPerRun !== Infinity)positiveFlag("--max-tools", options.maxToolCallsPerRun);
   positiveFlag("--max-tools-per-step", options.maxToolCallsPerStep);
-  positiveFlag("--max-send-ms", options.deadlineMs);
+  if(options.deadlineMs !== Infinity)positiveFlag("--max-send-ms", options.deadlineMs);
   positiveFlag("--max-context-bytes", options.maxContextBytes);
   positiveFlag("--max-context-tokens", options.maxContextTokens);
   if(options.list&&(rest.length||options.showTotals))throw new UsageError("--list 不能与 prompt 或 --totals 混用");
@@ -349,12 +430,9 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       if(config===null)return 0;
       if(config==="echo")adapter=createEchoAdapter();
       else if(!config||config.apiKey==="__ASK_AT_START__")throw new UsageError("没有完整模型配置。运行 npm start 配置，或显式 --echo。");
-      // The per-request timeout must not be shorter than the send deadline, or
-      // the adapter becomes the binding constraint and a slow-but-working
-      // provider fails with a timeout the operator never configured. Observed
-      // for real: a local gateway took 65-75s for a one-word completion, so the
-      // 120s adapter default left almost no headroom once tool calls were added.
-      else adapter=createOpenAIChatAdapter({...config,timeoutMs:options.deadlineMs,...(options.stream?{stream:true}:{})});
+      // Whole-send deadlines are opt-in; the transport still needs a finite
+      // request timer. Never pass the unlimited sentinel to AbortSignal.timeout.
+      else adapter=createOpenAIChatAdapter({...config,timeoutMs:Number.isFinite(options.deadlineMs)?options.deadlineMs:600_000,...(options.stream?{stream:true}:{})});
     }
     // Operator configuration, read from the agent home only (D26). A corrupt file
     // throws rather than being ignored: it exists to change what the agent may do,
@@ -428,21 +506,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       // outside would either capture a stale session id — letting one session write
       // another's task state — or need a mutable holder, which is the same hazard with
       // more steps.
-      const allTools={read_file:createReadFileTool,inspect_file:createInspectFileTool,run_command:createRunCommandTool,job_output:createJobOutputTool,job_kill:createJobKillTool,
-        edit_file:createEditFileTool,patch_file:createPatchFileTool,
-        create_file:createCreateFileTool,delete_file:createDeleteFileTool,rename_file:createRenameFileTool,
-        batch_files:createBatchFilesTool,
-        update_task_state:()=>createUpdateTaskStateTool(store,sessionId)} as const;
-      // ⚠️ D90: check before calling. Without this, a tier naming a tool that has no
-      // factory dies as `TypeError: allTools[...] is not a function`, and it dies
-      // *before* `ToolRegistry`'s own "available tool is not registered" check
-      // (tools.ts:1226-1230) can say anything useful. Naming the offending tool and
-      // listing what does exist is the difference between a diagnosis and a stack trace.
-      const tierTools=tier.tools.map(name=>{
-        const factory=allTools[name as keyof typeof allTools];
-        if(!factory) throw new Error(`档位声明了工具 ${JSON.stringify(name)}，但没有对应的工厂；表里有的是 ${Object.keys(allTools).join(", ")}`);
-        return factory();
-      });
+      const tierTools = createCoreTools(tier.tools, { store, id: sessionId }, { home: options.home });
       // MCP-bridged tools are folded in alongside the tier's own, and their
       // names are added to the `available` list `ToolRegistry` is given below —
       // a tool present in the registry but absent from `available` is refused
@@ -456,11 +520,24 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       ...(contextWindows===undefined?{}:{contextWindows}),
       ...(countPromptTokens===undefined?{}:{countPromptTokens}),
       systemPrompt:"You are a concise, capable assistant working in a real workspace. Use run_command to build, test, search and inspect: anything you would otherwise type into a terminal. Use read_file for workspace text and inspect_file for binaries, executables and archives. File changes use edit_file, create_file, delete_file, rename_file, or batch_files. A command that exits non-zero is not a failure of the tool, so read its output and correct the command rather than reporting the task as impossible. When you change something, verify it by running it. Respect denied paths; never pretend a tool succeeded.",
-      ...(interactive && io ? { approve: async (prompt: string) => {
+      ...(options.approveMode === "interactive" && interactive && io ? { approve: async (prompt: string) => {
         io.write(`${prompt}\n回答“是”才执行这一次。\n`);
         const answer = await io.ask("批准？> ");
         return answer?.trim() === "是";
       } } : {}),
+      ...(options.approveMode.startsWith("file:") ? (() => {
+        const parts = options.approveMode.split(":");
+        // forms: file:<dir>  or  file:<dir>:<seconds>; the optional <dir> may
+        // itself contain `:` on Windows, so take the trailing part as the TTL
+        // only if it parses as a positive integer.
+        let dir: string; let ttl = options.approveTtlMs;
+        const last = parts[parts.length - 1] ?? "";
+        if (parts.length >= 3 && /^\d+$/.test(last)) {
+          dir = parts.slice(1, -1).join(":");
+          ttl = Number(last) * 1_000;
+        } else { dir = parts.slice(1).join(":"); }
+        return { approve: createFileApprover(dir, { signal: undefined, requestLog: (line) => io?.write(`[approval] ${line}\n`), timeoutMs: ttl }) };
+      })() : {}),
       onActivity:event=>{
         if(!interactive)return;
         if(event.type==="model")io!.write("[正在请求模型……]\n");
@@ -471,7 +548,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     };
     if(interactive)return await runInteractive({io:io!,store,workspace:paths.workspaceRoot,
       model:`${adapter.id} / ${adapter.defaultModel}`,sessionId:options.sessionExplicit?options.session:undefined,createRuntime,
-      budgetLimits:`步骤 ${options.maxSteps} · 每步工具 ${options.maxToolCallsPerStep} · 整轮工具 ${options.maxToolCallsPerRun} · prompt ${options.maxContextBytes} 字节 · 令牌 ${options.maxContextTokens}${contextWindows?` · 按模型窗口 ${Object.entries(contextWindows).map(([m,v])=>`${m}=${v}`).join(", ")}`:""} · 挂钟 ${options.deadlineMs}ms`});
+      budgetLimits:`步骤 ${Number.isFinite(options.maxSteps)?options.maxSteps:'不限'} · 每步工具 ${options.maxToolCallsPerStep} · 整轮工具 ${Number.isFinite(options.maxToolCallsPerRun)?options.maxToolCallsPerRun:'不限'} · prompt ${options.maxContextBytes} 字节 · 令牌 ${options.maxContextTokens}${contextWindows?` · 按模型窗口 ${Object.entries(contextWindows).map(([m,v])=>`${m}=${v}`).join(", ")}`:""} · 挂钟 ${Number.isFinite(options.deadlineMs)?options.deadlineMs+'ms':'不限'}`});
     const runtime=createRuntime(options.session);
     const controller=new AbortController();
     const abort=()=>controller.abort();process.on("SIGINT",abort);

@@ -221,3 +221,68 @@ export function budgetFor(
     forbiddenPaths: constraints.forbiddenPaths ?? [],
   };
 }
+
+/** One round's write footprint, as journaled. */
+export interface WriteObservation {
+  readonly filesWritten: number;
+  readonly linesWritten: number;
+  /** Refusals of this round's writes by the budget — see `measuredBudget`. */
+  readonly budgetRefusals: number;
+}
+
+/** The guess used before any round has been measured. */
+export const COLD_START_BUDGET = { maxFiles: 1, maxLines: 20 } as const;
+
+/** Quantile of an already-sorted array. Nearest-rank; no interpolation. */
+function quantile(sorted: readonly number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const rank = Math.ceil(q * sorted.length);
+  return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1]!;
+}
+
+/**
+ * Size a budget from what rounds of this kind actually needed (D127).
+ *
+ * The number this replaces was a constant. Every guard `distill.ts` minted
+ * carried `{maxFiles: 1, maxLines: 20}`, which nobody derived from anything, and
+ * a round that exceeded it lost its success — so the library learned "this
+ * strategy failed" from what was really "this strategy was given too little
+ * room". A budget is a measurement, so it should be taken rather than guessed.
+ *
+ * ⚠️ Two properties carry the whole design, and both are needed:
+ *
+ * **1. Censoring must be undone.** A round the budget stopped records what it
+ * *reached*, never what it *needed* — the observation is a lower bound, and its
+ * value is literally the cap. Reading it as demand would re-derive the same
+ * too-small budget on every pass, so the cap would never lift: a fixed point
+ * that measures nothing. A refusal therefore adds back the room that was
+ * missing (`max(reached, cap + 1)`). It is still only a lower bound on true
+ * demand — one file was refused, so at least one more was wanted — and that is
+ * the honest direction to be wrong in, because the alternative is a budget that
+ * can only ratchet downward.
+ *
+ * **2. The fallback is a floor, never a ceiling.** A measured budget may exceed
+ * the guess; it may not fall below it. Without this, a group whose rounds all
+ * happened to be tiny would mint a gene with a 0-file budget, which refuses the
+ * first write of the next round. Cold start (no observations at all) returns the
+ * fallback untouched, which is the normal case for a new request kind.
+ *
+ * p95 rather than the maximum: a single outsized round should widen the budget
+ * without defining it. p95 rather than the mean: one 50-file outlier must not
+ * drag a typical 3-file group up to 12.
+ */
+export function measuredBudget(
+  observations: readonly WriteObservation[],
+  fallback: { maxFiles: number; maxLines: number } = COLD_START_BUDGET,
+): { maxFiles: number; maxLines: number } {
+  if (observations.length === 0) return { ...fallback };
+  // Uncensored value: `reached + 1` whenever this round was refused at least
+  // once, because a refusal proves at least one more unit was wanted.
+  const demand = (reached: number, refusals: number): number => (refusals > 0 ? reached + 1 : reached);
+  const files = observations.map((o) => demand(o.filesWritten, o.budgetRefusals)).sort((a, b) => a - b);
+  const lines = observations.map((o) => demand(o.linesWritten, o.budgetRefusals)).sort((a, b) => a - b);
+  return {
+    maxFiles: Math.max(fallback.maxFiles, quantile(files, 0.95)),
+    maxLines: Math.max(fallback.maxLines, quantile(lines, 0.95)),
+  };
+}

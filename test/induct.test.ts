@@ -28,6 +28,11 @@ function fact(overrides: Partial<SuccessFact> = {}): SuccessFact {
     signals: ["研究", "文档"],
     tools: ["read_file"],
     evidence: ["steps=2"],
+    // Required rather than optional (D127): see the sibling helper in
+    // `distill.test.ts`.
+    filesWritten: 0,
+    linesWritten: 0,
+    budgetRefusals: 0,
     ...overrides,
   };
 }

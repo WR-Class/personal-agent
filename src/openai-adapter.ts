@@ -1,5 +1,24 @@
 import type { ChatMessage, ChatRequest, ChatResponse, ModelAdapter } from "./types.ts";
 
+export interface StreamProgress { bytes:number; textChars:number; reasoningChars:number; toolChars:number; lastDataAt:number; }
+
+/**
+ * Shape of a reply that ended before it was complete (`finish_reason: length`/`content_filter`).
+ * The counters are the reply's own, so a caller can tell a cutoff that spent everything on
+ * reasoning — which a thinking-disabled resume can still finish — from a partial answer that
+ * nobody may use. Attached to the thrown error; absent means "not this kind of failure".
+ */
+export interface IncompleteReply { reason:string; textChars:number; reasoningChars:number; toolArgsChars:number; }
+
+export function incompleteReply(error:unknown):IncompleteReply|undefined {
+  const value=(error as {incomplete?:unknown}|null)?.incomplete;
+  if(!value||typeof value!=='object')return undefined;
+  const info=value as Record<string,unknown>;
+  return typeof info.reason==='string'&&typeof info.textChars==='number'&&typeof info.reasoningChars==='number'&&typeof info.toolArgsChars==='number'
+    ? {reason:info.reason,textChars:info.textChars,reasoningChars:info.reasoningChars,toolArgsChars:info.toolArgsChars}
+    : undefined;
+}
+
 export interface OpenAIChatAdapterOptions {
   /** Base URL including the version segment, e.g. https://api.openai.com/v1 */
   baseUrl: string;
@@ -8,6 +27,11 @@ export interface OpenAIChatAdapterOptions {
   /** Injected for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  firstDataTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  onProgress?: (progress:StreamProgress)=>void;
+  /** Host-only diagnostics; never includes payloads, credentials or provider error text. */
+  onPhase?: (phase: 'headers' | 'body' | 'decode' | 'complete') => void;
   /**
    * Upper bound on tokens the provider may generate for one response.
    *
@@ -20,6 +44,8 @@ export interface OpenAIChatAdapterOptions {
    * defect, not an environment quirk, so the value is always sent.
    */
   maxTokens?: number;
+  /** Explicit opt-in for DeepSeek-compatible Chat endpoints only. */
+  thinkingDisabled?: boolean;
   /**
    * Ask the provider to stream (`stream: true`) and assemble the SSE transcript
    * back into the ordinary {@link ChatResponse}.
@@ -28,10 +54,14 @@ export interface OpenAIChatAdapterOptions {
    * `stream_options.include_usage` on this path, and a server that rejects unknown
    * fields should not have to reject the default path too. What streaming buys here
    * is compatibility (endpoints that only stream now work) plus the same byte
-   * ceiling and abortability as the non-streaming path — **not** incremental
-   * display; see `parseSseCompletion` for that boundary.
+   * ceiling and abortability as the non-streaming path. onText delivers tentative
+   * previews; final validation still gates persistence and tool execution.
    */
   stream?: boolean;
+  /** Tentative visible text only; never authorizes tool execution or persistence. */
+  onText?: (text: string) => void;
+  /** Provider-supplied preview only, never executable tool arguments. */
+  onProcess?: (event:{reasoning?:string;tool?:{index:number;name:string;argumentChars:number}})=>void;
 }
 
 import { record, tokenCount, validateResponse } from "./response-validation.ts";
@@ -44,6 +74,8 @@ import { readBoundedUtf8 } from "./bounded-read.ts";
  * ceiling the process buffers it all before any validation runs.
  */
 export const CHAT_RESPONSE_MAX_BYTES = 1024 * 1024;
+// SSE repeats JSON metadata per token; wire bytes are not generated text bytes.
+export const SSE_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * Default ceiling on generated tokens per response.
@@ -93,15 +125,47 @@ function readReasoning(value: unknown): string | undefined {
  * Assemble an SSE transcript into the same payload shape a non-streaming response
  * would have, so every step after this point stays on the existing code path.
  *
- * `ponytail:` the caller hands us the *whole* body, already bounded by
- * `readBoundedUtf8`, so there is no incremental reader and no live progress here —
- * this trades incremental display for not owning a streaming state machine. The
- * ceiling and abortability the transport needs are unchanged. Upgrade path: drive
- * this same assembler from a `for await` loop if live output is ever wanted.
+ * Incremental previews are tentative; this bounded transcript remains the
+ * authoritative input for final validation, usage and assembled tool arguments.
  *
  * A stream that ends without `[DONE]` **and** without any `finish_reason` was cut
  * mid-flight, and is refused rather than accepted as a short answer.
  */
+async function readStreamPreview(source: AsyncIterable<Uint8Array>, onText?: (text:string)=>void, onProgress?:(p:StreamProgress)=>void, onProcess?:OpenAIChatAdapterOptions['onProcess']): Promise<string> {
+  const decoder = new TextDecoder(); let raw='', pending='', total=0, done=false;
+  const progress:StreamProgress={bytes:0,textChars:0,reasoningChars:0,toolChars:0,lastDataAt:0};
+  const previews=new Map<number,{index:number;name:string;argumentChars:number}>();
+  function line(value:string) {
+    if(done || !value.startsWith('data:'))return;
+    const data=value.slice(5).trim(); if(!data)return;
+    if(data==='[DONE]'){done=true;return;}
+    let event;try{event=JSON.parse(data);}catch{throw new Error('model returned a malformed SSE event (原始分片已隐藏)');}
+    const chunk=record(event,'sse chunk');
+    if(chunk.error)throw new Error('model stream ended with an upstream error (原始错误已隐藏)');
+    if(!Array.isArray(chunk.choices)||!chunk.choices.length)return;
+    const delta=record(record(chunk.choices[0],'sse choice').delta??{},'sse delta');
+    const text=delta.content;
+    if(typeof text==='string' && text){progress.textChars+=text.length;onText?.(text);}
+    if(typeof delta.reasoning_content==='string'){progress.reasoningChars+=delta.reasoning_content.length;onProcess?.({reasoning:delta.reasoning_content});}
+    if(Array.isArray(delta.tool_calls))for(const call of delta.tool_calls){
+      const index=tokenCount(call?.index??0),args=call?.function?.arguments;
+      const tool=previews.get(index)??{index,name:'',argumentChars:0};
+      if(typeof call?.function?.name==='string')tool.name=(tool.name+call.function.name).slice(0,128);
+      if(typeof args==='string'){progress.toolChars+=args.length;tool.argumentChars+=args.length;}
+      previews.set(index,tool);onProcess?.({tool:{...tool}});
+    }
+  }
+  for await(const bytes of source){
+    total+=bytes.byteLength;if(total>SSE_RESPONSE_MAX_BYTES)throw new Error(`model response exceeds the ${SSE_RESPONSE_MAX_BYTES}-byte limit`);
+    const text=decoder.decode(bytes,{stream:true});raw+=text;pending+=text;
+    let end;while((end=pending.indexOf('\n'))>=0){line(pending.slice(0,end));pending=pending.slice(end+1);}
+    if(bytes.byteLength){progress.bytes=total;progress.lastDataAt=Date.now();onProgress?.({...progress});}
+    if(done)break; // DONE terminates SSE even when a proxy leaves its socket open.
+  }
+  const tail=decoder.decode();raw+=tail;pending+=tail;if(pending&&!done)line(pending);
+  return raw;
+}
+
 export function parseSseCompletion(raw: string): unknown {
   let model: unknown;
   let content = "";
@@ -121,6 +185,7 @@ export function parseSseCompletion(raw: string): unknown {
     try { event = JSON.parse(payload); }
     catch { throw new Error("model returned a malformed SSE event (原始分片已隐藏)"); }
     const chunk = record(event, "sse chunk");
+    if(chunk.error)throw new Error('model stream ended with an upstream error (原始错误已隐藏)');
     events += 1;
     if (chunk.model !== undefined && model === undefined) model = chunk.model;
     // Every chunk carries a `usage` key, almost always null; the real one arrives in
@@ -216,8 +281,19 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
     defaultModel: options.model,
     async chat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
       const timeout = AbortSignal.timeout(timeoutMs);
-      const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
-
+      const activityController=new AbortController();
+      const composed = AbortSignal.any([...(signal?[signal]:[]),timeout,activityController.signal]);
+      let activityTimer:ReturnType<typeof setTimeout>|undefined;
+      function arm(ms:number|undefined,name:string){
+        clearTimeout(activityTimer);if(ms===undefined)return;
+        if(!Number.isSafeInteger(ms)||ms<1)throw new Error('invalid transport timeout');
+        activityTimer=setTimeout(()=>activityController.abort(new DOMException(name,name)),ms);
+      }
+      arm(options.firstDataTimeoutMs,'FirstDataTimeoutError');
+      async function* watch(source:AsyncIterable<Uint8Array>){for await(const bytes of source){if(bytes.byteLength)arm(options.idleTimeoutMs,'StreamIdleTimeoutError');yield bytes;}}
+      try {
+      const requestStarted = performance.now();
+      options.onPhase?.('headers');
       const response = await sendRequest(`${options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
@@ -230,6 +306,7 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
           // Always present, never omitted: the caller declares the ceiling, and
           // this gateway rejects the request outright without it.
           max_tokens: maxTokens,
+          ...(options.thinkingDisabled===true?{thinking:{type:'disabled'}}:{}),
           ...(request.tools && request.tools.length > 0
             ? {
                 tools: request.tools.map((tool) => ({
@@ -250,6 +327,7 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
         signal: composed,
       });
 
+      options.onPhase?.('body');
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`model request failed: HTTP ${response.status} (检查服务地址、模型和密钥)`);
@@ -262,12 +340,18 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
       // understates the body cannot get past the ceiling.
       const raw = response.body === null
         ? ""
-        : await readBoundedUtf8(response.body, CHAT_RESPONSE_MAX_BYTES, "model response");
+        : options.stream ? await readStreamPreview(watch(response.body),options.onText,options.onProgress,options.onProcess)
+        : await readBoundedUtf8(watch(response.body), CHAT_RESPONSE_MAX_BYTES, "model response");
+      clearTimeout(activityTimer);
+      const durationMs = performance.now() - requestStarted;
+      options.onPhase?.('decode');
       // On the streaming path `parseSseCompletion` raises its own named errors, so
       // only the non-streaming body goes through the JSON catch.
       let decoded: unknown;
-      if (options.stream) decoded = parseSseCompletion(raw);
+      // Some compatible gateways ignore stream:true and return a complete JSON reply.
+      if (options.stream && !raw.trimStart().startsWith('{')) decoded = parseSseCompletion(raw);
       else {
+        if(Buffer.byteLength(raw)>CHAT_RESPONSE_MAX_BYTES)throw new Error(`model response exceeds the ${CHAT_RESPONSE_MAX_BYTES}-byte limit`);
         try { decoded = JSON.parse(raw); }
         catch { throw new Error("model returned a non-JSON body (原始响应已隐藏)"); }
       }
@@ -276,7 +360,14 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
       const choice = record(payload.choices[0], "choice");
       // Some compatible endpoints omit finish_reason; reject explicit incomplete endings.
       if (choice.finish_reason === "length" || choice.finish_reason === "content_filter") {
-        throw new Error(`model response incomplete: ${choice.finish_reason} (回复未完成，未保存或执行其中的工具调用)`);
+        const partial = (choice.message ?? {}) as { content?: unknown; reasoning_content?: unknown; tool_calls?: unknown };
+        const chars = (value: unknown) => typeof value === "string" ? value.length : 0;
+        const args = Array.isArray(partial.tool_calls)
+          ? partial.tool_calls.reduce<number>((total, call) => total + chars((call as { function?: { arguments?: unknown } } | null)?.function?.arguments), 0)
+          : 0;
+        const error = new Error(`model response incomplete: ${choice.finish_reason} (回复未完成，未保存或执行其中的工具调用)`) as Error & { incomplete?: IncompleteReply };
+        error.incomplete = { reason: String(choice.finish_reason), textChars: chars(partial.content), reasoningChars: chars(partial.reasoning_content), toolArgsChars: args };
+        throw error;
       }
       const message = record(choice.message, "message");
       const calls = message.tool_calls ?? [];
@@ -300,13 +391,25 @@ export function createOpenAIChatAdapter(options: OpenAIChatAdapterOptions): Mode
       const reasoningTokens = details?.reasoning_tokens === undefined || details.reasoning_tokens === null
         ? undefined
         : tokenCount(details.reasoning_tokens);
+      const promptDetails = usage.prompt_tokens_details == null ? undefined : record(usage.prompt_tokens_details, "usage.prompt_tokens_details");
+      const cached = promptDetails?.cached_tokens ?? usage.prompt_cache_hit_tokens;
+      const cachedInputTokens = cached == null ? undefined : tokenCount(cached);
       const result = { content: message.content === null || message.content === undefined ? "" : message.content,
         ...(reasoning === undefined ? {} : { reasoning }),
         model: payload.model ?? request.model ?? options.model, toolCalls,
         usage: { inputTokens: tokenCount(usage.prompt_tokens ?? 0), outputTokens: tokenCount(usage.completion_tokens ?? 0),
+          reported: typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number', durationMs,
+          ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
           ...(reasoningTokens === undefined ? {} : { reasoningTokens }) } };
       validateResponse(result);
+      options.onPhase?.('complete');
       return result;
+      } catch(error){
+        if(signal?.aborted)throw signal.reason;
+        if(timeout.aborted)throw timeout.reason;
+        if(activityController.signal.aborted)throw activityController.signal.reason;
+        throw error;
+      } finally {clearTimeout(activityTimer);}
     },
   };
 }

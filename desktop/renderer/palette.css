@@ -1,0 +1,179 @@
+/* ============================================================================
+   Personal Agent 设计语言 v1「暖工作室」· 完整调色板参考
+   ----------------------------------------------------------------------------
+   用途有两种，按需要选：
+
+   A. 你们只想让 Agent 状态层的颜色一致
+      → 只抄文件末尾「① --ag-* 角色取值」那一段，直接替换 agent-states.css
+        顶部映射块里的兜底值。改动面最小。
+
+   B. 你们要整套采用这个设计语言
+      → 抄「② 完整语义令牌」，连纸 / 墨两套一起。注意 DNA 部分（字体 / 圆角 /
+        动效）在两个模式里是同一套值，只有光照（颜色）会变 —— 这是刻意的：
+        两套模式用两套圆角，用户一切主题就等于换了产品。
+
+   一句话说清这套语言的立场：
+     色相锁赤陶 ~18°，深色不是浅色反相，而是重新配光 —— 暖墨底 #14110E
+     （棕黑，不是蓝黑），暖白字 #F5F1EA。
+   ========================================================================== */
+
+
+/* ============================================================================
+   ② 完整语义令牌 · 纸 Paper（浅色）
+   ========================================================================== */
+:root{
+  /* 调色板 */
+  --palette-gray-1:#FBF8F4;  --palette-gray-2:#F7F3EC;  --palette-gray-3:#F4EFE6;
+  --palette-gray-4:#EDE4D6;  --palette-gray-5:#E8E0D4;
+  --palette-white:#FFFFFF;   --palette-black:#1A1714;
+
+  /* 背景 */
+  --bg-content:var(--bg-primary-default);
+  --bg-primary-default:#F4EFE6;
+  --bg-primary-hover:#EDE4D6;
+  --bg-primary-active:#E8E0D4;
+  --bg-secondary:#F7F3EC;
+  --bg-elevated:#FFFFFF;
+  --bg-hover:rgba(26,23,20,.045);
+  --bg-selected:rgba(26,23,20,.075);
+
+  /* 边框 */
+  --border-primary:#E8E0D4;
+  --border-secondary:#EDE4D6;
+  --border-card:rgba(26,23,20,.09);
+
+  /* 文字 —— 暖调极值，不用中性黑 */
+  --text-primary:#1A1714;
+  --text-secondary:#5C544A;
+  --text-tertiary:#6A6258;      /* 对最差表面（侧栏 #F4EFE6）也有 5.24:1 */
+  --text-disabled:#B0A79B;
+  --text-inverse:#FAF7F2;
+
+  /* 品牌 · 赤陶 —— 按角色拆三支，中明度品牌色是死区 */
+  --pri:#C75B39;                /* 填充 · 图标 · 大字号 */
+  --pri-soft:#F7E4DC;           /* 极淡底 · 焦点环 */
+  --pri-ink:#9E4325;            /* 浅底上的正文用色 */
+  --pri-solid:#B04E30;          /* 实底：配白字 4.94:1 */
+  --pri-solid-h:#9C4329; --pri-solid-a:#8A3A23; --pri-solid-ink:#FAF7F2;
+  --brand:#B04E30; --brand-strong:#C75B39;
+  --colleague:#4F7A4A;          /* 助理身份色 = 橄榄绿（次级色） */
+
+  /* 状态 */
+  --status-success:#4F7A4A;
+  --status-warning:#8F6220;     /* 实测 4.99:1；原来那个 #C98A2E 只有 2.75:1 */
+  --status-error:#B4483F;
+
+  /* 标签 */
+  --tag-ok-bg:#E6EFE4;   --tag-ok-ink:#4A7245;
+  --tag-warn-bg:#F5EBD8; --tag-warn-ink:#8B5F1F;
+  --tag-err-bg:#F6E3E1;  --tag-err-ink:#AA443C;
+  --tag-pri-bg:#F7E4DC;  --tag-pri-ink:#A44B2F;
+
+  --code-bg:#F5F0E8;
+
+  /* —— DNA：两个模式共用，不随主题变 —— */
+  --radius-sm:6px;  --radius-lg:10px; --radius-2xl:14px; --radius-full:999px;
+  --fs-caption:12px; --fs-base:13px; --fs-body:14px; --fs-p1:15px;
+  --motion-fast:140ms;  /* 悬停 / 焦点反馈 */
+  --motion-medium:180ms;/* 面板展开 */
+  --motion-out:120ms;   /* 面板收起 —— 出场永远比进场快 */
+  --motion-theme:280ms; /* 主题切换 */
+
+  color-scheme:light;
+}
+
+/* ============================================================================
+   ② 完整语义令牌 · 墨 Ink（深色）
+   ----------------------------------------------------------------------------
+   只有颜色在变。字体 / 圆角 / 间距 / 动效一个都不动。
+   ========================================================================== */
+html[data-theme="dark"]{
+  --palette-gray-1:#1E1A16; --palette-gray-2:#171310; --palette-gray-3:#171310;
+  --palette-gray-4:#241E19; --palette-gray-5:#2E2823;
+  --palette-white:#1B1714;  --palette-black:#F5F1EA;
+
+  --bg-content:#1B1714;         /* 深色下内容面比底色略亮 */
+  --bg-primary-default:#171310;
+  --bg-primary-hover:#241E19;
+  --bg-primary-active:#2E2823;
+  --bg-secondary:#14110E;
+  --bg-elevated:#221D19;
+  --bg-hover:rgba(245,241,234,.05);
+  --bg-selected:rgba(245,241,234,.08);
+
+  --border-primary:#2E2823;
+  --border-secondary:#262120;
+  --border-card:rgba(245,241,234,.10);
+
+  --text-primary:#F5F1EA;
+  --text-secondary:#B5ACA0;
+  --text-tertiary:#918779;      /* 对最差表面（代码底 #221D19）也有 4.73:1 */
+  --text-disabled:#5A544B;
+  --text-inverse:#1A1714;
+
+  /* 赤陶色相不变，只提亮度 —— 暗底上需要更高明度才够对比 */
+  --pri:#E07A57;
+  --pri-soft:rgba(224,122,87,.16);
+  --pri-ink:#F0A184;
+  --pri-solid:#E07A57; --pri-solid-h:#E98D6D; --pri-solid-a:#F09C7F; --pri-solid-ink:#1A1008;
+  --brand:#E07A57; --brand-strong:#E07A57;
+  --colleague:#7FB069;
+
+  --status-success:#7FB069;
+  --status-warning:#E0A84A;
+  --status-error:#E2726A;
+
+  --tag-ok-bg:#292C20;   --tag-ok-ink:#7FB069;
+  --tag-warn-bg:#372B1C; --tag-warn-ink:#E0A84A;
+  --tag-err-bg:#372420;  --tag-err-ink:#E2726A;
+  --tag-pri-bg:#37251D;  --tag-pri-ink:#E07A57;
+
+  --code-bg:#221D19;
+  color-scheme:dark;
+}
+
+
+/* ============================================================================
+   ① --ag-* 角色取值（对应 agent-states.tokens.json）
+   ----------------------------------------------------------------------------
+   想直接用这套配色，把下面这段整体替换 agent-states.css 顶部的映射块即可。
+   注意替换时要保留 var(--你们的令牌, 取值) 的写法，别把兜底值写死 ——
+   否则以后想换回自家令牌还得再改一遍。
+   ========================================================================== */
+:root{
+  --ag-brand:#B04E30;        --ag-brand-strong:#C75B39;   --ag-brand-ink:#FAF7F2;
+  --ag-surface:#FFFFFF;      --ag-surface-2:#F7F3EC;      --ag-surface-3:#FFFFFF;
+  --ag-text-1:#1A1714;       --ag-text-2:#5C544A;
+  --ag-text-3:#6A6258;       --ag-text-off:#B0A79B;
+  --ag-border-1:#E8E0D4;     --ag-border-2:#EDE4D6;
+  --ag-ok:#4F7A4A;           --ag-err:#B4483F;            --ag-warn:#8F6220;
+  --ag-err-bg:#F6E3E1;       --ag-err-ink:#AA443C;
+  --ag-warn-bg:#F5EBD8;      --ag-warn-ink:#8B5F1F;
+  --ag-pri-bg:#F7E4DC;       --ag-pri-ink:#A44B2F;
+  --ag-code-bg:#F5F0E8;
+}
+html[data-theme="dark"]{
+  --ag-brand:#E07A57;        --ag-brand-strong:#E07A57;   --ag-brand-ink:#1A1008;
+  --ag-surface:#221D19;      --ag-surface-2:#14110E;      --ag-surface-3:#1B1714;
+  --ag-text-1:#F5F1EA;       --ag-text-2:#B5ACA0;
+  --ag-text-3:#918779;       --ag-text-off:#5A544B;
+  --ag-border-1:#2E2823;     --ag-border-2:#262120;
+  --ag-ok:#7FB069;           --ag-err:#E2726A;            --ag-warn:#E0A84A;
+  --ag-err-bg:#372420;       --ag-err-ink:#E2726A;
+  --ag-warn-bg:#372B1C;      --ag-warn-ink:#E0A84A;
+  --ag-pri-bg:#37251D;       --ag-pri-ink:#E07A57;
+  --ag-code-bg:#221D19;
+}
+
+.msg--agent .msg-avatar{background:var(--pri-solid);color:var(--pri-solid-ink)}
+html[data-theme="dark"] .slot{background:linear-gradient(180deg,var(--palette-gray-4),var(--palette-gray-2))}
+
+/* Existing shell roles share the same Paper/Ink semantic colors. Layout stays intact. */
+:root,html[data-theme="dark"]{
+  --bg-sidebar:var(--bg-primary-default);--bg-menubar:var(--bg-secondary);
+  --bg-titlebar:var(--bg-content);--bg-statusbar:var(--bg-secondary);--bg-card:var(--palette-gray-1);
+  --border-input:var(--border-secondary);--text-quaternary:var(--text-tertiary);--text-placeholder:var(--text-tertiary);
+  --accent:var(--pri);--colleague-soft:var(--tag-ok-bg);--colleague-line:var(--colleague);
+  --btn-primary-bg:var(--pri-solid);--btn-primary-fg:var(--pri-solid-ink);--btn-primary-hover:var(--pri-solid-h);--btn-dark-bg:var(--pri-solid);
+}
+

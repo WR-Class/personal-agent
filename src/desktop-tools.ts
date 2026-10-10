@@ -4,13 +4,15 @@ import type { RuntimeActivity } from './runtime.ts';
 import { assertReadablePath, canonicalPath, sensitivePathName } from './security-config.ts';
 import { resolveTier } from './tiers.ts';
 import { RULE_TIERS } from './rule-table.ts';
-import { ToolRegistry, createReadFileTool, createCreateFileTool, createEditFileTool, createPatchFileTool } from './tools.ts';
+import { ToolRegistry } from './tools.ts';
+import { createCoreTools } from './core-tools.ts';
+import type { SessionStore } from './session-store.ts';
 import type { Tool, ToolContext } from './tools.ts';
 
-/** Trusted main-process values only. No CLI config, commands, MCP or skill loading. */
+/** Trusted main-process values only; CLI configuration and plugin loading are not inherited. */
 export interface DesktopToolOptions {
   workspaceRoot: string;
-  writable: boolean;
+  permission: 'read' | 'write' | 'full';
   check: () => void;
   approve: (prompt: string, signal?: AbortSignal) => Promise<boolean>;
   onActivity?: (event: RuntimeActivity) => void;
@@ -24,9 +26,11 @@ function check(options: DesktopToolOptions, signal?: AbortSignal): void {
 }
 
 /** Reject links in every path component, not just a leaf resolving outside the root. */
-async function checkedPath(target: string, context: ToolContext): Promise<string> {
+async function checkedPath(target: string, context: ToolContext, writing = false): Promise<string> {
   const lexical = path.resolve(context.workspaceRoot, target);
-  const actual = assertReadablePath(lexical, context.workspaceRoot, context.protectedRoots);
+  const actual = assertReadablePath(lexical, context.workspaceRoot,
+    [...(context.protectedRoots ?? []), ...(context.protectedStateRoots ?? [])],
+    writing ? context.unrestrictedWrites === true : context.unrestrictedReads === true);
   const root = canonicalPath(context.workspaceRoot);
   // Resolve policy first, then inspect the lexical ancestors for links.
   let cursor = path.parse(lexical).root;
@@ -72,35 +76,45 @@ function directoryTool(): Tool {
   };
 }
 
-export function createDesktopTools(options: DesktopToolOptions): { tools: ToolRegistry; rules: ReturnType<typeof resolveTier>['rules'] } {
+export function createDesktopTools(options: DesktopToolOptions, session: { store: SessionStore; id: string }): { tools: ToolRegistry; rules: ReturnType<typeof resolveTier>['rules'] } {
   if (typeof options.workspaceRoot !== 'string' || !path.isAbsolute(options.workspaceRoot) ||
-      typeof options.writable !== 'boolean' || typeof options.check !== 'function' || typeof options.approve !== 'function') {
+      !['read', 'write', 'full'].includes(options.permission) || typeof options.check !== 'function' || typeof options.approve !== 'function') {
     throw new Error('invalid trusted desktop tool options');
   }
   check(options);
   const workspaceRoot = canonicalPath(options.workspaceRoot);
-  const tier = resolveTier(options.writable ? 'workspace-write' : 'read-only');
-  const originals = [createReadFileTool(), directoryTool(),
-    ...(options.writable ? [createCreateFileTool(), createEditFileTool(), createPatchFileTool()] : [])];
+  const tier = resolveTier({ read: 'read-only', write: 'workspace-write', full: 'full-access' }[options.permission]);
+  if (!session || !session.store || typeof session.id !== 'string' || !session.id) throw new Error('trusted desktop session is required');
+  const full = options.permission === 'full';
+  const originals = [...createCoreTools(tier.tools, session), directoryTool()];
+  const automatic = tier.tools.filter(name => name !== 'run_command');
   const tools = originals.map((tool): Tool => ({ ...tool,
     async execute(args, context) {
       check(options, context.signal);
       if (canonicalPath(options.workspaceRoot) !== workspaceRoot) throw new Error('workspace changed');
-      const bounded: ToolContext = { ...context, workspaceRoot, readableRoots: [], unrestrictedWrites: false,
-        grants: [], preApproved: false,
+      const bounded: ToolContext = { ...context, workspaceRoot, readableRoots: [], unrestrictedWrites: full,
+        unrestrictedReads: full, jobOwner: session.id,
+        grants: [], preApproved: full || automatic.includes(tool.name),
         approve: async prompt => {
           check(options, context.signal);
-          if (typeof args.path === 'string') await checkedPath(args.path, bounded);
+          if (typeof args.path === 'string') await checkedPath(args.path, bounded, tool.readOnly !== true);
           check(options, context.signal);
           const approved = await options.approve(prompt, context.signal);
           check(options, context.signal);
           if (canonicalPath(options.workspaceRoot) !== workspaceRoot) throw new Error('workspace changed');
-          if (typeof args.path === 'string') await checkedPath(args.path, bounded);
+          if (typeof args.path === 'string') await checkedPath(args.path, bounded, tool.readOnly !== true);
           check(options, context.signal);
           return approved === true;
         },
       };
-      if (typeof args.path === 'string') await checkedPath(args.path, bounded);
+      const targets = tool.name === 'batch_files' && Array.isArray(args.operations) ? args.operations : [args];
+      for (const item of targets) {
+        if (!item || typeof item !== 'object') continue;
+        for (const key of ['path', 'from', 'to']) {
+          const target = (item as Record<string, unknown>)[key];
+          if (typeof target === 'string') await checkedPath(target, bounded, tool.readOnly !== true);
+        }
+      }
       check(options, context.signal);
       const result = await tool.execute(args, bounded);
       check(options, context.signal);
@@ -109,6 +123,7 @@ export function createDesktopTools(options: DesktopToolOptions): { tools: ToolRe
   }));
   return { tools: new ToolRegistry(tools, tools.map(tool => tool.name)), rules: [
     { id: 'desktop.list-directory', tool: 'list_directory', decision: 'allow', tier: RULE_TIERS.USER, priority: 950 },
+    ...(options.permission === 'write' ? automatic.map(name => ({ id: `desktop.auto.${name}`, tool: name, decision: 'allow' as const, tier: RULE_TIERS.USER, priority: 940 })) : []),
     ...tier.rules,
   ] };
 }

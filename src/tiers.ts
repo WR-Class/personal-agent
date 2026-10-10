@@ -350,6 +350,75 @@ export const TIERS: readonly Tier[] = [
   },
 ];
 
+// Remote-host tools live in their own tier family (D51). They are deliberately
+// not added to READ_ONLY_TOOLS / WRITE_TOOLS, so the four default tiers above
+// cannot reach them. Admission requires an operator choosing `infra-read` or
+// `infra-write` on the command line, which is a name the runner has to type.
+const INFRA_READ_TOOLS = ["read_remote"] as const;
+const INFRA_WRITE_TOOLS = ["run_remote"] as const;
+const INFRA_READ_RULES: readonly Rule[] = [
+  ...READ_ONLY_TOOLS.map((tool, index) => ({
+    id: `infra-read.allow-${tool}`,
+    tool,
+    decision: "allow" as Decision,
+    tier: RULE_TIERS.USER,
+    priority: 80 - index,
+  })),
+  ...INFRA_READ_TOOLS.map((tool, i) => ({
+    id: `infra-read.remote-${tool}`,
+    tool,
+    decision: "allow" as Decision,
+    tier: RULE_TIERS.USER,
+    priority: 60 - i,
+  })),
+];
+const INFRA_WRITE_RULES: readonly Rule[] = [
+  ...READ_ONLY_TOOLS.map((tool, index): Rule => ({
+    id: `infra-write.allow-${tool}`,
+    tool,
+    decision: "allow" as Decision,
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 80 - index,
+  })),
+  ...WRITE_TOOLS.map((tool): Rule => ({
+    id: `infra-write.${tool}`,
+    tool,
+    decision: "approve",
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 10,
+    reason: "infra-write: write tools still require approval",
+  })),
+  ...INFRA_READ_TOOLS.map((tool, i) => ({
+    id: `infra-write.remote-${tool}`,
+    tool,
+    decision: "allow" as Decision,
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 60 - i,
+  })),
+  ...INFRA_WRITE_TOOLS.map((tool): Rule => ({
+    id: `infra-write.remote-${tool}`,
+    tool,
+    decision: "approve",
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 9,
+    reason: "infra-write: remote execution requires approval",
+  })),
+];
+(TIERS as Tier[]).push(
+  {
+    name: "infra-read",
+    summary: "远程主机读文件；不修改任何 agent home 之外的本地文件",
+    tools: [...READ_ONLY_TOOLS, ...INFRA_READ_TOOLS],
+    rules: INFRA_READ_RULES,
+  },
+  {
+    name: "infra-write",
+    summary: "远程读 + 远程执行；run_remote 默认 dry-run，真实执行需逐次批准",
+    tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...INFRA_READ_TOOLS, ...INFRA_WRITE_TOOLS],
+    rules: INFRA_WRITE_RULES,
+  },
+);
+
 /** The tier used when nothing was chosen. Safe for a stranger's first run. */
 export const DEFAULT_TIER = "workspace-write";
 

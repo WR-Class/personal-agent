@@ -35,6 +35,7 @@ import { FOREGROUND_GRACE_MS, findJob, killJob, listJobs, readJobOutput, startBa
 // Type-only, so the registry gains no runtime dependency on the session store.
 import type { SessionStore } from "./session-store.ts";
 import { parseTaskStateArguments } from "./task-state.ts";
+import { recallPage } from "./obs-recall.ts";
 
 export interface ToolResult {
   content: string;
@@ -66,6 +67,10 @@ export interface ToolContext {
    * to be a decision on the record, not a label a caller happens to hold.
    */
   unrestrictedWrites?: boolean;
+  /** Trusted desktop full-access only; CLI continues using its explicit readable roots. */
+  unrestrictedReads?: boolean;
+  /** Trusted session owner for process-local job isolation; absent means legacy unowned jobs. */
+  jobOwner?: string;
   /**
    * Extra roots that may be *read*, never written (D35).
    *
@@ -200,6 +205,7 @@ async function denied(name: string, reason: string, context: ToolContext): Promi
  * shared function cannot drift from itself the way two hand-written copies could.
  */
 export async function approveExact(name: string, args: unknown, prompt: string, context: ToolContext): Promise<string | undefined> {
+  context.signal?.throwIfAborted();
   // The tier already allowed this call, so asking would contradict the posture
   // the operator chose. This is what makes `full-access` mean "do not ask"
   // rather than "do not ask, except for the file tools".
@@ -245,6 +251,8 @@ export async function approveExact(name: string, args: unknown, prompt: string, 
 function assertReadablePathOutcome(target: string, context: ToolContext): string {
   const workspace = context.workspaceRoot;
   const extra = context.readableRoots ?? [];
+  if (context.unrestrictedReads === true) return assertReadablePath(target, workspace,
+    [...(context.protectedRoots ?? []), ...(context.protectedStateRoots ?? [])], true);
   if (extra.length === 0) return assertReadablePath(target, workspace, context.protectedRoots);
   const lexical = path.resolve(target);
   const actual = canonicalPath(lexical);
@@ -664,7 +672,7 @@ export function createRunCommandTool(): Tool {
         return fail("run_command", (error as Error).message);
       }
       if (background === true) {
-        const job = await startBackgroundJob(command, environment, shellFor());
+        const job = await startBackgroundJob(command, environment, shellFor(), { owner: context.jobOwner, signal: context.signal });
         // The id is the whole point of the reply: it is what the model uses to
         // read the output later, and it cannot be derived from the command.
         return { content: `started background job ${job.id}\n${command}\n\nRead its output with job_output.` };
@@ -702,13 +710,13 @@ export function createJobOutputTool(): Tool {
       required: [],
     },
     readOnly: true,
-    async execute(args) {
+    async execute(args, context) {
       const id = args.job_id;
       if (id !== undefined && typeof id !== "string") {
         return fail("job_output", "'job_id' must be a string");
       }
       if (id === undefined || id === "") {
-        const all = listJobs();
+        const all = listJobs(context.jobOwner);
         if (all.length === 0) return { content: "no background jobs have been started in this session" };
         const lines = all.map((job) => {
           const state = job.finishedAt === null ? "running" : `exit ${job.exitCode}`;
@@ -716,7 +724,8 @@ export function createJobOutputTool(): Tool {
         });
         return { content: lines.join("\n") };
       }
-      return { content: await readJobOutput(id) };
+      if (!findJob(id, context.jobOwner)) return fail('job_output', `no such job: ${id}`);
+      return { content: await readJobOutput(id, context.jobOwner) };
     },
   };
 }
@@ -746,10 +755,10 @@ export function createJobKillTool(): Tool {
       // and the rule table is consulted for this tool under the same rules.
       const denial = await approveExact("job_kill", args, `Stop background job ${id}?`, context);
       if (denial) return denied("job_kill", denial, context);
-      const job = findJob(id);
+      const job = findJob(id, context.jobOwner);
       if (!job) return fail("job_kill", `no such job: ${id}`);
       if (job.finishedAt !== null) return { content: `${id} had already finished with exit code ${job.exitCode}` };
-      killJob(id);
+      await killJob(id, context.jobOwner);
       // "Asked to stop" rather than "stopped": the kill is delivered immediately
       // but the process may take a moment to exit, and claiming it is gone would
       // be a claim this call cannot observe.
@@ -852,6 +861,73 @@ export function createUpdateTaskStateTool(store: SessionStore, sessionId: string
   };
 }
 
+/**
+ * Read an omitted tool result back out of the session log (D52, SoL-Pi
+ * `observation-pack` shape — MIT, NVIDIA). Session-bound: the store and id are
+ * captured at construction, never read from arguments, because the only path
+ * through this tool is a lookup key into data this session already owns.
+ */
+export function createObsRecallTool(store: SessionStore, sessionId: string): Tool {
+  return {
+    name: "obs_recall",
+    description:
+      "Read a tool result that was replaced by an omission placeholder to save context. " +
+      "`callId` is the one shown in the placeholder text. Pass `offset` to continue a multi-page " +
+      "result (omit it for the first page; the result reports `next_offset` to use for the next). " +
+      "Pages are bounded to 16 KiB / 400 lines and never split a UTF-8 sequence. This tool reads " +
+      "session data the model already owns — it has no path parameter, does not touch the filesystem, " +
+      "and does not write anywhere.",
+    parameters: {
+      type: "object",
+      properties: {
+        callId: {
+          type: "string",
+          description: "The tool call id shown in the omission placeholder.",
+        },
+        offset: {
+          type: "integer",
+          description:
+            "Byte offset to read from. Omit (or use 0) for the first page; pass the `next offset` " +
+            "from the previous call to continue. Past the end of the result is an error.",
+        },
+      },
+      required: ["callId"],
+    },
+    readOnly: true,
+    async execute(args) {
+      const callId = args.callId;
+      if (typeof callId !== "string" || callId === "") {
+        return fail("obs_recall", "'callId' must be a non-empty string");
+      }
+      const rawOffset = args.offset;
+      if (rawOffset !== undefined && (typeof rawOffset !== "number" || !Number.isInteger(rawOffset) || rawOffset < 0)) {
+        return fail("obs_recall", "'offset' must be a non-negative integer when given");
+      }
+      // Exact match against this session's tool messages. The argument is a
+      // lookup key into data this session already owns, not a path; nothing for
+      // path convergence to converge on, and an absent id is not an invitation
+      // to guess one.
+      const messages = await store.history(sessionId);
+      const matches = messages.filter((m) => m.role === "tool" && m.toolCallId === callId);
+      if (matches.length === 0) {
+        return fail("obs_recall", `no tool result with callId ${JSON.stringify(callId)} in this session`);
+      }
+      // Latest-wins, consistent with the rest of the store's "latest" folds:
+      // a same-id replay or transcript import keeps the most recent record.
+      const content = matches[matches.length - 1]!.content;
+      let page;
+      try {
+        page = recallPage(content, rawOffset ?? 0);
+      } catch (error) {
+        return fail("obs_recall", error instanceof Error ? error.message : String(error));
+      }
+      const header = `obs_recall ${JSON.stringify(callId)}: page at byte ${page.offset} of ${page.totalBytes} (${page.totalLines} lines total)` +
+        (page.eof ? " — end of result" : ` — more follows; next offset ${page.nextOffset}`);
+      return { content: `${header}\n${page.text}` };
+    },
+  };
+}
+
 export function createReadFileTool(): Tool {
   return {
     name: "read_file",
@@ -919,7 +995,7 @@ export function createReadFileTool(): Tool {
       const want = typeof length === "number" ? length : READ_FILE_MAX_BYTES;
       const span = Math.min(want, READ_FILE_MAX_BYTES);
       if (span === 0) return fail("read_file", "'length' must be greater than zero");
-      if (start >= info.size) return fail("read_file", `offset ${start} is past the end of ${target} (${info.size} bytes)`);
+      if (start >= info.size && !(start === 0 && info.size === 0)) return fail("read_file", `offset ${start} is past the end of ${target} (${info.size} bytes)`);
       if (typeof length !== "number" && start === 0 && info.size > READ_FILE_MAX_BYTES) {
         return fail(
           "read_file",
@@ -1225,6 +1301,7 @@ export function createBatchFilesTool(): Tool {
       const expiresAt = askedAt + APPROVAL_TTL_MS;
       const lines: string[] = [];
       for (const [index, operation] of operations.entries()) {
+        context.signal?.throwIfAborted();
         const name = (operation as { tool: keyof typeof FILE_ACTIONS }).tool;
         const { tool: _tool, ...childArgs } = operation as Record<string, unknown>;
         const result = await FILE_ACTIONS[name]().execute(childArgs, {

@@ -1,0 +1,25 @@
+{"text":"怎么使用","gold":"?","probs":{"fix":0.01,"verify":0.01,"research":0.85,"operate":0.15,"build":0.02},"source":"claude"}
+{"text":"那就开始吧","gold":"?","probs":{"fix":0.08,"verify":0.08,"research":0.15,"operate":0.15,"build":0.25},"source":"claude"}
+{"text":"中文告诉我","gold":"?","probs":{"fix":0.01,"verify":0.01,"research":0.2,"operate":0.01,"build":0.05},"source":"claude"}
+{"text":"中转聚合站","gold":"?","probs":{"fix":0.01,"verify":0.01,"research":0.72,"operate":0.18,"build":0.28},"source":"claude"}
+{"text":"帮我查清楚啊","gold":"?","probs":{"fix":0.02,"verify":0.3,"research":0.95,"operate":0.01,"build":0.01},"source":"claude"}
+{"text":"还没做完吧？","gold":"?","probs":{"fix":0.03,"verify":0.94,"research":0.02,"operate":0.03,"build":0.12},"source":"claude"}
+{"text":"渗透安全测试","gold":"?","probs":{"fix":0.08,"verify":0.96,"research":0.25,"operate":0.12,"build":0.04},"source":"claude"}
+{"text":"个人Agent","gold":"?","probs":{"fix":0.01,"verify":0.01,"research":0.45,"operate":0.2,"build":0.6},"source":"claude"}
+{"text":"现在确实可用了","gold":"?","probs":{"fix":0.03,"verify":0.18,"research":0.01,"operate":0.02,"build":0.01},"source":"claude"}
+{"text":"能给个中文面板吗","gold":"?","probs":{"fix":0.06,"verify":0.01,"research":0.03,"operate":0.2,"build":0.87},"source":"claude"}
+{"text":"已经重启了，试试","gold":"?","probs":{"fix":0.35,"verify":0.96,"research":0.01,"operate":0.24,"build":0.01},"source":"claude"}
+{"text":"中转站每日签到功能","gold":"?","probs":{"fix":0.03,"verify":0.02,"research":0.22,"operate":0.12,"build":0.82},"source":"claude"}
+{"text":"已经重启并恢复了会话","gold":"?","probs":{"fix":0.25,"verify":0.05,"research":0.01,"operate":0.65,"build":0.01},"source":"claude"}
+{"text":"个人Agent (1)","gold":"?","probs":{"fix":0.02,"verify":0.03,"research":0.25,"operate":0.2,"build":0.55},"source":"claude"}
+{"text":"恢复Dsh项目历史记录","gold":"?","probs":{"fix":0.7,"verify":0.02,"research":0.03,"operate":0.9,"build":0.02},"source":"claude"}
+{"text":"运行项目目录下的项目文件","gold":"?","probs":{"fix":0.02,"verify":0.16,"research":0.01,"operate":0.94,"build":0.03},"source":"claude"}
+{"text":"静默启动，我刚刚把窗口关了","gold":"?","probs":{"fix":0.12,"verify":0.01,"research":0.01,"operate":0.97,"build":0.05},"source":"claude"}
+{"text":"看下项目目录里面的东西，知","gold":"?","probs":{"fix":0.01,"verify":0.15,"research":0.92,"operate":0.02,"build":0.02},"source":"claude"}
+{"text":"看项目目录，了解这个项目是","gold":"?","probs":{"fix":0.01,"verify":0.05,"research":0.98,"operate":0.01,"build":0.01},"source":"claude"}
+{"text":"你是技术调研员。请调研开源","gold":"?","probs":{"fix":0.01,"verify":0.02,"research":0.99,"operate":0.01,"build":0.02},"source":"claude"}
+{"text":"你是技术调研员。请调研两个","gold":"?","probs":{"fix":0.01,"verify":0.02,"research":0.99,"operate":0.01,"build":0.01},"source":"claude"}
+{"text":"你是技术调研员。任务：把用","gold":"?","probs":{"fix":0.01,"verify":0.02,"research":0.9,"operate":0.02,"build":0.05},"source":"claude"}
+{"text":"为什么之前的聊天全部没有了","gold":"?","probs":{"fix":0.78,"verify":0.08,"research":0.85,"operate":0.12,"build":0.01},"source":"claude"}
+{"text":"只回复两个字：收到。不要调","gold":"?","probs":{"fix":0.01,"verify":0.02,"research":0.01,"operate":0.01,"build":0.01},"source":"claude"}
+{"text":"**窄任务，只读不改，中文报","gold":"?","probs":{"fix":0.02,"verify":0.35,"research":0.55,"operate":0.05,"build":0.02},"source":"claude"}

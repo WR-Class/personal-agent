@@ -104,7 +104,9 @@ describe("OpenAI-compatible adapter over a real socket", () => {
 
     assert.equal(response.content, "hello from the server");
     assert.equal(response.model, "local-test-model");
-    assert.deepEqual(response.usage, { inputTokens: 11, outputTokens: 4 });
+    const { durationMs, ...usage } = response.usage;
+    assert.ok(durationMs! > 0 && Number.isFinite(durationMs));
+    assert.deepEqual(usage, { inputTokens: 11, outputTokens: 4, reported: true });
 
     assert.equal(captured.length, 1);
     const request = captured[0]!;
@@ -244,7 +246,9 @@ describe("reasoning traces from a real provider", () => {
     assert.equal(response.content, "**2**");
     assert.equal(response.reasoning, "Add one and one.");
     // 119 of 131, not 131 + 119.
-    assert.deepEqual(response.usage, { inputTokens: 16, outputTokens: 131, reasoningTokens: 119 });
+    const { durationMs, ...usage } = response.usage;
+    assert.ok(durationMs! > 0 && Number.isFinite(durationMs));
+    assert.deepEqual(usage, { inputTokens: 16, outputTokens: 131, reasoningTokens: 119, reported: true });
   });
 
   it("reports no trace when there is none, and refuses a malformed one", async () => {
@@ -252,7 +256,9 @@ describe("reasoning traces from a real provider", () => {
     const adapter = createOpenAIChatAdapter({ baseUrl: plain.baseUrl, apiKey: "k", model: "m" });
     const response = await adapter.chat({ messages: [{ role: "user", content: "x" }] });
     assert.equal(response.reasoning, undefined, "absent means absent, not an empty string");
-    assert.deepEqual(response.usage, { inputTokens: 11, outputTokens: 4 }, "and no zero-valued share either");
+    const { durationMs, ...usage } = response.usage;
+    assert.ok(durationMs! > 0 && Number.isFinite(durationMs));
+    assert.deepEqual(usage, { inputTokens: 11, outputTokens: 4, reported: true }, "and no zero-valued share either");
 
     // A non-string trace would render as `[object Object]` if coerced.
     const nested = await serve(() => ({ body: reasoningCompletion({ text: "nested" }) }));
@@ -324,7 +330,7 @@ describe("CLI against a local provider", () => {
     // catches that.
     assert.equal(output.split("answer from a real socket").length - 1, 1, "the reply is printed exactly once");
     assert.equal(output.split("[步骤 ").length - 1, 1, "and so is the budget line");
-    assert.match(output, /\[步骤 1\/10 · 工具 0\/32 · prompt \d+B\/512\.0KB · 令牌 11\/131072\(剩131061\)/);
+    assert.match(output, /\[步骤 1\/不限 · 工具 0\/不限 · prompt \d+B\/512\.0KB · 令牌 11\/131072\(剩131061\)/);
     assert.ok(!output.includes(apiKey), "the key never reaches stdout");
     assert.equal(captured.length, 1);
 

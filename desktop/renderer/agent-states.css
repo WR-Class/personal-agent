@@ -1,0 +1,352 @@
+/* ============================================================================
+   Agent 状态层 · 可移植样式
+   规范与 DOM 契约见 AGENT-STATES-HANDOFF.md
+   ----------------------------------------------------------------------------
+   这个文件只有两件事要做：
+     ① 顶部「令牌映射」—— 把 30 个 --ag-* 角色指到你们自己的令牌上
+     ② 其余部分 —— 让 DOM 符合契约后，一个字都不用改
+   ----------------------------------------------------------------------------
+   设计原则（决定了它为什么长这样）：
+
+   · 所有状态都住在 data-* 属性里，不用 class 修饰符。
+     原因有三：断言好写（一个属性说清状态）、不会和宿主应用的类名打优先级官司、
+     一个属性就能驱动整棵子树的样式。
+
+   · 五条折叠铁律里有两条直接编码进 CSS。
+     「正在执行的那一步永不折叠」由 [data-status="running"] 强制，
+     不交给组件自觉 —— 组件出 bug 也违反不了规则。
+
+   · 所有令牌都带兜底值。即使你们的令牌一个都没定义，这份样式也能正常渲染，
+     只是颜色不是你们的。这样「接进来」和「调颜色」就是两件可以分开做的事。
+   ========================================================================== */
+
+
+/* ============================================================================
+   ① 令牌映射 —— 只需要改这一段
+   ----------------------------------------------------------------------------
+   每个角色都写成 var(--你们的令牌, 兜底值)。
+   兜底值是 Personal Agent「暖工作室」纸模式的取值，可直接跑；
+   完整纸 / 墨两套取值见 palette-reference.css。
+   ========================================================================== */
+:root{
+  /* —— 品牌 —— */
+  --ag-brand:        var(--brand, #B04E30);          /* 运行中指示点 · 光标 · 焦点环 */
+  --ag-brand-strong: var(--brand-strong, #C75B39);   /* 品牌实底悬停 */
+  --ag-brand-ink:    var(--pri-solid-ink, #FAF7F2);  /* 品牌实底上的字色 */
+
+  /* —— 表面（三层，靠亮度分层而不是靠阴影）—— */
+  --ag-surface:      var(--bg-elevated, #FFFFFF);    /* 卡片：工具卡 / 思考块 */
+  --ag-surface-2:    var(--bg-secondary, #F7F3EC);   /* 次级面：工具卡头 / 调试块 */
+  --ag-surface-3:    var(--bg-content, #FFFFFF);     /* 内容面：工具输出 */
+
+  /* —— 文字（四级，按信息层级而不是按字号）—— */
+  --ag-text-1:       var(--text-primary, #1A1714);   /* 结论正文 */
+  --ag-text-2:       var(--text-secondary, #5C544A); /* 工具名 / 参数 */
+  --ag-text-3:       var(--text-secondary, #6A6258);  /* 过程元信息：耗时 / 推理 / 日志 */
+  --ag-text-off:     var(--text-disabled, #B0A79B);  /* 禁用态（WCAG 豁免，别去"修"它） */
+
+  /* —— 描边 —— */
+  --ag-border-1:     var(--border-primary, #E8E0D4);   /* 虚线框：L3 调试块 */
+  --ag-border-2:     var(--border-secondary, #EDE4D6); /* 实线框 / 分隔线 */
+
+  /* —— 语义色 —— */
+  --ag-ok:           var(--status-success, #4F7A4A);
+  --ag-err:          var(--status-error, #B4483F);
+  --ag-warn:         var(--status-warning, #8F6220);   /* 中断用琥珀，不是红 */
+  --ag-err-bg:       color-mix(in srgb, var(--status-error) 12%, var(--bg-content));
+  --ag-err-ink:      var(--text-primary, #AA443C);
+  --ag-warn-bg:      color-mix(in srgb, var(--status-warning) 12%, var(--bg-content));
+  --ag-warn-ink:     var(--text-primary, #8B5F1F);
+  --ag-pri-bg:       var(--tag-pri-bg, #F7E4DC);
+  --ag-pri-ink:      var(--tag-pri-ink, #A44B2F);
+
+  /* —— 几何 · 动效 · 字体 —— */
+  --ag-r-sm:         var(--radius-sm, 6px);
+  --ag-r-lg:         var(--radius-lg, 10px);
+  --ag-r-full:       var(--radius-full, 999px);
+  --ag-m-fast:       var(--motion-fast, 140ms);
+  --ag-m-med:        var(--motion-medium, 180ms);
+  --ag-fs-cap:       var(--fs-caption, 12px);
+  --ag-fs-body:      var(--fs-body, 14px);
+  --ag-mono:         var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  --ag-code-bg:      var(--code-bg, #F5F0E8);
+}
+
+
+/* ============================================================================
+   ② 轮 —— 设计单位是「轮」，不是「条」
+   ----------------------------------------------------------------------------
+   一条 agent 消息和它后面那条可能是同一轮的两半（推理 / 工具 / 结论）。
+   把它们合并进一个 .agent-turn__body，24px 的消息间距就不会把一步逻辑劈成两半。
+   ========================================================================== */
+.agent-turn{ display:flex; gap:12px; align-items:flex-start; }
+#liveChatList>.agent-turn>.agent-turn__body{flex:1;max-width:calc(100% - 40px);gap:8px}
+#liveChatList .agent-tool,#liveChatList .agent-think{border:1px solid var(--ag-border-2);border-radius:var(--ag-r-lg);background:var(--ag-surface);margin:0}
+#liveChatList .agent-tool[data-status="failed"]{border-color:var(--ag-err)}
+.agent-turn__head{flex-wrap:wrap}
+.agent-turn__dot[hidden]{display:none}
+.agent-tool__name,.agent-think__name{min-width:0;overflow-wrap:anywhere}
+.agent-tool__body pre,.agent-think__body pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.agent-think__body{max-height:240px;overflow:auto}
+.agent-tool__head:focus-visible,.agent-think__head:focus-visible,.agent-act:focus-visible{outline:2px solid var(--ag-brand);outline-offset:-2px}
+.agent-turn .agent-tool__time{color:var(--ag-text-3)}
+.agent-answer[hidden]{display:none}
+/* 头像是 .agent-turn 的兄弟节点，不是 __head 的子节点 ——
+   这样名字/状态那一行才是右栏的第一行，头像能跟整轮左对齐。 */
+.agent-turn__avatar{
+  width:28px; height:28px; border-radius:var(--ag-r-lg); flex:none;
+  display:grid; place-items:center; font-size:12px; font-weight:700;
+  background:var(--ag-surface-2); color:var(--ag-text-2);
+}
+.agent-turn__body{ flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+.agent-turn__head{ display:flex; align-items:center; gap:6px; font-size:var(--ag-fs-cap); }
+.agent-turn__name{ font-weight:700; color:var(--ag-text-2); }
+.agent-turn__tag{
+  font-size:10px; padding:1px 5px; border-radius:var(--ag-r-sm);
+  background:var(--ag-surface-2); color:var(--ag-text-3);
+}
+
+/* 状态指示：点 + 文案。文案必须自带时间与用量（铁律 5：折叠不丢信息） */
+.agent-turn__state{
+  display:inline-flex; align-items:center; gap:5px; margin-left:2px;
+  font-size:10.5px; color:var(--ag-text-3); font-variant-numeric:tabular-nums;
+}
+.agent-turn__dot{
+  width:6px; height:6px; border-radius:50%; flex:none; display:block;
+  background:var(--ag-text-off);
+}
+/* 七态 → 点的颜色。idle 不渲染 .agent-turn__dot */
+.agent-turn[data-state="thinking"]  .agent-turn__dot,
+.agent-turn[data-state="running"]   .agent-turn__dot,
+.agent-turn[data-state="streaming"] .agent-turn__dot{
+  background:var(--ag-brand); animation:ag-pulse 1.4s ease-in-out infinite;
+}
+.agent-turn[data-state="done"]    .agent-turn__dot{ background:var(--ag-ok); }
+.agent-turn[data-state="failed"]  .agent-turn__dot{ background:var(--ag-err); }
+.agent-turn[data-state="stopped"] .agent-turn__dot{ background:var(--ag-warn); }
+
+@keyframes ag-pulse{ 0%,100%{opacity:1} 50%{opacity:.28} }
+
+
+/* ============================================================================
+   ③ 折叠三角 —— 装饰性字形，旋转角度由祖先的 data-open / data-status 决定
+   ----------------------------------------------------------------------------
+   用 CSS 画（两条边 + 旋转）而不是塞一个 SVG：少一个资源，少一次请求，
+   而且它能跟着 currentColor 自动变色。
+   ========================================================================== */
+.agent-chevron{
+  width:7px; height:7px; flex:none; display:block; margin-top:-2px;
+  border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor;
+  transform:rotate(-45deg);                       /* 收起：指向右 */
+  transition:transform var(--ag-m-med);
+}
+/* 展开：指向下。两级祖先都认，因为 data-open 在 .agent-think / .agent-tool 上，
+   而 chevron 在它俩的 __head 里 */
+[data-open="true"] > * > .agent-chevron,
+.agent-tool[data-status="running"] > .agent-tool__head > .agent-chevron{
+  transform:rotate(45deg); margin-top:-4px;
+}
+
+
+/* ============================================================================
+   ④ 思考块 —— 过程，默认折叠（铁律 1：只折叠过程，不折叠结论）
+   ========================================================================== */
+.agent-think{
+  border:1px solid var(--ag-border-2); border-radius:var(--ag-r-lg);
+  overflow:hidden; background:var(--ag-surface-2);
+}
+.agent-think__head{
+  width:100%; display:flex; align-items:center; gap:8px; padding:7px 12px;
+  font:inherit; font-size:var(--ag-fs-cap); text-align:left;
+  color:var(--ag-text-3); background:none; border:0; cursor:pointer;
+}
+.agent-think__head b{ color:var(--ag-text-2); font-weight:700; }
+.agent-think__body{
+  display:none;                     /* 默认折叠 —— 与工具卡同一套思路 */
+  flex-direction:column; gap:2px;
+  padding:8px 12px 10px; border-top:1px solid var(--ag-border-2);
+  font-size:var(--ag-fs-cap); line-height:1.85; color:var(--ag-text-3);
+}
+.agent-think[data-open="true"] .agent-think__body{ display:flex; }
+.agent-think__body > span{
+  opacity:0; transform:translateY(3px);
+  transition:opacity var(--ag-m-med), transform var(--ag-m-med);
+}
+.agent-think__body > span.is-in{ opacity:1; transform:none; }
+
+
+/* ============================================================================
+   ⑤ 工具卡 —— 折叠规则的主要战场
+   ========================================================================== */
+.agent-tool{
+  border:1px solid var(--ag-border-2); border-radius:var(--ag-r-lg);
+  overflow:hidden; background:var(--ag-surface);
+}
+.agent-tool__head{
+  width:100%; display:flex; align-items:center; gap:8px; padding:8px 12px;
+  font:inherit; font-size:var(--ag-fs-cap); text-align:left;
+  color:var(--ag-text-2); background:var(--ag-surface-2); border:0; cursor:pointer;
+}
+.agent-tool__icon{ width:14px; height:14px; flex:none; color:var(--ag-text-3); }
+.agent-tool__name{
+  font-family:var(--ag-mono); font-size:12px; font-weight:400; color:var(--ag-text-1);
+}
+.agent-tool__arg{
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--ag-text-3);
+}
+.agent-tool__spacer{ flex:1; }
+.agent-tool__time{
+  flex:none; color:var(--ag-text-off); font-variant-numeric:tabular-nums;
+}
+/* 状态字形是真实文本节点（不是 ::before）——
+   屏幕阅读器读得到，测试也能直接断言 textContent 而不用去读伪元素。 */
+.agent-tool__glyph{
+  flex:none; width:11px; text-align:center;
+  font-weight:700; font-size:11px; line-height:1; color:var(--ag-text-off);
+}
+.agent-tool[data-status="done"]    .agent-tool__glyph{ color:var(--ag-ok); }
+.agent-tool[data-status="failed"]  .agent-tool__glyph{ color:var(--ag-err); }
+.agent-tool[data-status="stopped"] .agent-tool__glyph{ color:var(--ag-warn); }
+
+.agent-tool__body{
+  padding:10px 12px; font-family:var(--ag-mono); font-size:12px; line-height:19px;
+  color:var(--ag-text-3); background:var(--ag-surface-3);
+  border-top:1px solid var(--ag-border-2);
+  max-height:320px; overflow:auto; white-space:pre-wrap;
+}
+
+/* —— 折叠规则：全部 display 决策集中在这里，别在别处再写一遍 —— */
+/* 1. 默认收起 */
+.agent-tool__body{ display:none; }
+/* 2. 显式展开（组件按 data-kind 算出默认值：conclusion → true，log → false） */
+.agent-tool[data-open="true"] .agent-tool__body{ display:block; }
+/* 3. 铁律 2 —— 正在执行的那一步永不折叠。
+      写在 CSS 里而不是只交给组件：组件算错了也藏不住正在发生的事。 */
+.agent-tool[data-status="running"] .agent-tool__body{ display:block; }
+/* 注意 failed 不在这里强制展开。失败那步由组件置 data-open="true"（铁律 4），
+   但用户读完后有权把它收起来。只有 running 是"必须看得见"。 */
+
+/* —— 失败：反向操作（铁律 4）—— 出错那步标红，其它照常折叠 —— */
+.agent-tool[data-status="failed"]{ border-color:var(--ag-err); }
+.agent-tool[data-status="failed"] .agent-tool__head{
+  background:var(--ag-err-bg); color:var(--ag-err-ink);
+}
+.agent-tool[data-status="failed"] .agent-tool__name,
+.agent-tool[data-status="failed"] .agent-tool__icon,
+.agent-tool[data-status="failed"] .agent-tool__arg{ color:var(--ag-err-ink); }
+
+/* 工具输出里的语义片段 */
+.agent-tool__body .is-dim{ color:var(--ag-text-off); }
+.agent-tool__body .is-err{ color:var(--ag-err); font-weight:700; }
+.agent-tool__body .is-hi{ color:var(--ag-pri-ink); font-weight:700; }
+
+
+/* ============================================================================
+   ⑥ 流式回答 —— 光标是"还在写"与"写完了"的唯一视觉差别
+   ----------------------------------------------------------------------------
+   光标必须是 __text 的【内联子元素】。放在 <p> 外面的话 display:inline-block
+   会另起一行，光标就跑到结论下面单独一行去了。
+   ========================================================================== */
+.agent-answer{
+  display:flex; flex-direction:column; gap:6px;
+  font-size:var(--ag-fs-body); line-height:22px; color:var(--ag-text-1);
+}
+.agent-answer__text{ margin:0; }
+.agent-answer__caret{
+  display:none; width:6px; height:13px; margin-left:2px; vertical-align:-2px;
+  background:var(--ag-brand); animation:ag-blink 1s step-end infinite;
+}
+.agent-answer[data-streaming="true"] .agent-answer__caret{ display:inline-block; }
+@keyframes ag-blink{ 50%{opacity:0} }
+
+.agent-answer__points{
+  margin:0; padding:0; list-style:none;
+  display:flex; flex-direction:column; gap:3px;
+}
+.agent-answer__points li{
+  display:flex; gap:8px; opacity:0; transform:translateY(3px);
+  transition:opacity var(--ag-m-med), transform var(--ag-m-med);
+}
+.agent-answer__points li.is-in{ opacity:1; transform:none; }
+.agent-answer__points li > i{
+  width:5px; height:5px; border-radius:50%; flex:none; margin-top:9px;
+  background:var(--ag-brand);
+}
+.agent-answer__points li b{ font-weight:700; }
+
+
+/* ============================================================================
+   ⑦ 失败 / 中断条 —— 永不折叠（铁律 5：折叠不能丢掉"为什么失败"）
+   ========================================================================== */
+.agent-alert{
+  padding:9px 12px; border-radius:var(--ag-r-lg);
+  border:1px solid var(--ag-err); background:var(--ag-err-bg); color:var(--ag-err-ink);
+  font-size:var(--ag-fs-cap); line-height:1.75;
+}
+.agent-alert b{ font-weight:700; }
+.agent-alert code{
+  font-family:var(--ag-mono); font-size:11.5px;
+  background:var(--ag-code-bg); padding:1px 5px; border-radius:var(--ag-r-sm);
+}
+/* 中断走琥珀：停止不是错误 */
+.agent-alert[data-level="warn"]{
+  border-color:var(--ag-warn); background:var(--ag-warn-bg); color:var(--ag-warn-ink);
+}
+
+
+/* ============================================================================
+   ⑧ 操作行 —— L1：常显，零点击
+   ----------------------------------------------------------------------------
+   宿主应用常见的 .msg-actions{opacity:0} + :hover 才显示，在 Agent 场景是错的：
+   用户刚读完结论，最想做的事（复制 / 重试 / 展开过程）不该要求他先悬停。
+   ========================================================================== */
+.agent-actions{
+  display:flex; align-items:center; gap:5px; flex-wrap:wrap; opacity:1;
+}
+.agent-act{
+  font:inherit; font-size:11.5px; padding:3px 10px; cursor:pointer;
+  border-radius:var(--ag-r-full); border:1px solid var(--ag-border-2);
+  background:var(--ag-surface); color:var(--ag-text-3);
+  transition:background var(--ag-m-fast), color var(--ag-m-fast),
+             border-color var(--ag-m-fast);
+}
+.agent-act:hover{ background:var(--ag-pri-bg); color:var(--ag-pri-ink); border-color:transparent; }
+.agent-act[data-primary]{
+  background:var(--ag-brand); color:var(--ag-brand-ink);
+  border-color:transparent; font-weight:700;
+}
+.agent-act[data-primary]:hover{ background:var(--ag-brand-strong); color:var(--ag-brand-ink); }
+
+
+/* ============================================================================
+   ⑨ L3 调试层 —— 默认关闭
+   ----------------------------------------------------------------------------
+   L3 是排障工具，不是"高级功能"。它必须在设置里有明确开关，
+   而且开关要落在文档根节点上，这样任何一层都能打开它。
+   ========================================================================== */
+.agent-debug{
+  display:none; padding:8px 12px; border-radius:var(--ag-r-lg);
+  border:1px dashed var(--ag-border-1); background:var(--ag-surface-2);
+  font-family:var(--ag-mono); font-size:11px; line-height:1.8; color:var(--ag-text-3);
+}
+html[data-agent-debug="1"] .agent-debug{ display:block; }
+
+
+/* ============================================================================
+   ⑩ 无障碍 · 减弱动效
+   ----------------------------------------------------------------------------
+   Agent 界面的动效密度天然比聊天界面高（脉冲点 + 光标 + 逐条入场）。
+   开了「减弱动效」之后必须全部关掉，只留状态色 —— 状态信息一个都不能丢。
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce){
+  .agent-turn .agent-turn__dot,
+  .agent-turn .agent-answer__caret{ animation:none !important; }
+  .agent-chevron,
+  .agent-think__body > span,
+  .agent-answer__points li,
+  .agent-act{ transition:none; }
+  /* 逐条入场直接给终态，否则会停在 opacity:0 上，什么都看不见 */
+  .agent-think__body > span,
+  .agent-answer__points li{ opacity:1; transform:none; }
+}

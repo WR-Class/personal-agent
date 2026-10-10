@@ -24,7 +24,7 @@ function call(name: string, args: Record<string, unknown> = {}, id = `call_${nam
 
 describe("tiers: naming and resolution", () => {
   it("offers the four designed postures", () => {
-    assert.deepEqual(TIERS.map((t) => t.name), ["read-only", "ask-before-writing", "workspace-write", "full-access"]);
+    assert.deepEqual(TIERS.map((t) => t.name), ["read-only", "ask-before-writing", "workspace-write", "full-access", "infra-read", "infra-write"]);
   });
 
   it("has a middle tier that differs from the default in what it asks", () => {

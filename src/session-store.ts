@@ -1,5 +1,6 @@
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { withSessionLease } from "./session-lease.ts";
+import { validateUsageMetadata } from "./response-validation.ts";
 import { dirname, join } from "node:path";
 import { lstatSync, createReadStream } from "node:fs";
 import { readBoundedUtf8 } from './bounded-read.ts';
@@ -174,6 +175,19 @@ export interface AuditEvent {
   reason: string;
   /** The rule that refused, when a rule decided it. Null when nothing matched. */
   rule?: string | null;
+  /**
+   * Names a denial that is not a failure of the tool (D127).
+   *
+   * A write-budget refusal denies the call without anything having gone wrong:
+   * the tool never ran, nothing broke. It is recorded so the pressure is
+   * observable and can be counted toward the budget's calibration — and so it
+   * is *not* counted as a tool error, which would charge the applied gene for a
+   * budget that was mis-sized rather than for a strategy that did not work.
+   *
+   * Optional and absent by default, so rows written before this field keep
+   * their exact bytes.
+   */
+  cause?: "budget";
 }
 
 /**
@@ -600,7 +614,11 @@ export function migrateEvent(raw: unknown): SessionEvent | ExternalSessionEvent 
           (typeof reasoningTokens !== "number" || !Number.isSafeInteger(reasoningTokens) || reasoningTokens < 0)) {
         throw new Error("usage.reasoningTokens must be a nonnegative safe integer");
       }
+      validateUsageMetadata(usage);
       return { v: CURRENT_EVENT_VERSION, kind, at, usage: { inputTokens, outputTokens,
+        ...(usage.reported === undefined ? {} : { reported: usage.reported as boolean }),
+        ...(usage.cachedInputTokens === undefined ? {} : { cachedInputTokens: usage.cachedInputTokens as number }),
+        ...(usage.durationMs === undefined ? {} : { durationMs: usage.durationMs as number }),
         ...(reasoningTokens === undefined ? {} : { reasoningTokens }) } };
     }
     case "tool/call": {
@@ -1091,7 +1109,7 @@ export class SessionStore {
   }
 
   /** Record one denied or expired approval without changing the conversation. */
-  async appendAudit(sessionId: string, audit: Pick<AuditEvent, "tool" | "decision" | "reason"> & { rule?: string | null }): Promise<AuditEvent> {
+  async appendAudit(sessionId: string, audit: Pick<AuditEvent, "tool" | "decision" | "reason"> & { rule?: string | null; cause?: "budget" }): Promise<AuditEvent> {
     const event: AuditEvent = {
       v: CURRENT_EVENT_VERSION, kind: "audit", ignorable: true, at: new Date().toISOString(), ...audit,
     };

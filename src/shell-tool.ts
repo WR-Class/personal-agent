@@ -23,14 +23,12 @@
  * (`workspace-write`), or is not offered at all (`read-only`, where the tool is
  * absent rather than refused).
  *
- * A command that outlasts {@link FOREGROUND_GRACE_MS} does not get killed. It is
- * moved to the background instead, because killing it throws away work that was
- * nearly done, and that is precisely what happened in a measured round: a
- * write-and-verify task died at the run deadline with the script already on disk.
- * Background jobs live in `background-jobs.ts`.
+ * Foreground commands time out and terminate their process tree. Longer work must
+ * explicitly request a background job, managed by `background-jobs.ts`.
  */
 
 import { spawn } from "node:child_process";
+import { boundedCleanup, processGroupOptions, terminateProcessTree } from './process-tree.ts';
 import type { ToolEnvironment } from "./tool-environment.ts";
 
 /** Output is capped: a build log or a recursive listing can dwarf any context. */
@@ -52,9 +50,10 @@ export interface ShellResult {
  * this file rather than the command, and the model reading the error would draw
  * the wrong conclusion about the machine.
  */
-export function shellFor(): { executable: string; args: (command: string) => string[] } {
+export function shellFor(): { executable: string; args: (command: string) => string[]; windowsVerbatimArguments?: boolean } {
   if (process.platform === "win32") {
-    return { executable: process.env.ComSpec ?? "cmd.exe", args: (command) => ["/d", "/s", "/c", command] };
+    // cmd /s strips this outer pair; CRT-style backslash escaping corrupts inner path quotes.
+    return { executable: process.env.ComSpec ?? "cmd.exe", args: (command) => ["/d", "/s", "/c", `"${command}"`], windowsVerbatimArguments: true };
   }
   return { executable: "/bin/sh", args: (command) => ["-c", command] };
 }
@@ -75,6 +74,7 @@ export async function runShellCommand(
   signal?: AbortSignal,
 ): Promise<ShellResult> {
   if (command.trim() === "") return { content: "command is empty", isError: true };
+  if (signal?.aborted) return { content: 'command cancelled before spawn', isError: true };
 
   const shell = shellFor();
   return await new Promise<ShellResult>((resolve) => {
@@ -91,7 +91,8 @@ export async function runShellCommand(
       // have to be parsed twice and would break on spaces in paths.
       shell: false,
       windowsHide: true,
-      signal,
+      windowsVerbatimArguments: shell.windowsVerbatimArguments,
+      ...processGroupOptions,
     });
 
     // Buffered and decoded once, for the reason measured earlier: a multi-byte
@@ -101,37 +102,47 @@ export async function runShellCommand(
     const errChunks: Buffer[] = [];
     let outBytes = 0;
     let truncated = false;
-    let settled = false;
+    let settled = false, stopping = false;
+    let closed!: () => void;
+    const closeEvent = new Promise<void>(resolve => { closed = resolve; });
+    const stop = async (reason: string) => {
+      if (stopping || settled) return;
+      stopping = true;
+      try {
+        await terminateProcessTree(child);
+        await boundedCleanup(closeEvent);
+        finish({ content: reason + '; process tree stopped', isError: true });
+      } catch { finish({ content: reason + '; process tree cleanup failed: termination is not confirmed', isError: true }); }
+    };
+    const abort = () => { void stop('command cancelled'); };
 
     const finish = (result: ShellResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      child.kill();
-      finish({
-        content: `command timed out after ${SHELL_TIMEOUT_MS}ms and was killed:\n${command}`,
-        isError: true,
-      });
-    }, SHELL_TIMEOUT_MS);
+    const timer = setTimeout(() => { void stop(`command timed out after ${SHELL_TIMEOUT_MS}ms`); }, SHELL_TIMEOUT_MS);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const collect = (chunks: Buffer[], chunk: Buffer) => {
+      const remaining = SHELL_MAX_OUTPUT_BYTES - outBytes;
+      if (chunk.length > remaining) truncated = true;
+      if (remaining <= 0) return;
+      const part = chunk.subarray(0, remaining); outBytes += part.length; chunks.push(part);
+    };
+    child.stdout.on('data', (chunk: Buffer) => collect(outChunks, chunk));
+    child.stderr.on('data', (chunk: Buffer) => collect(errChunks, chunk));
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (outBytes >= SHELL_MAX_OUTPUT_BYTES) {
-        truncated = true;
-        return;
-      }
-      outBytes += chunk.length;
-      outChunks.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => errChunks.push(chunk));
-
-    child.on("error", (error) =>
-      finish({ content: `could not run the shell: ${error.message}`, isError: true }));
+    let spawnError: Error | undefined;
+    child.on('error', error => { spawnError = error; });
 
     child.on("close", (code) => {
+      closed();
+      if (stopping) return;
+      if (spawnError) { finish({ content: `could not run the shell: ${spawnError.message}`, isError: true }); return; }
       const out = decode(Buffer.concat(outChunks));
       const err = decode(Buffer.concat(errChunks));
       const parts: string[] = [];

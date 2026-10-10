@@ -6,7 +6,20 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
 const require = createRequire(import.meta.url);
-const { launchOptions } = require('../desktop/launch.cjs');
+const { launchOptions, exitDiagnostic } = require('../desktop/launch.cjs');
+
+test('Windows breakpoint diagnostic is cautious, signedness-safe and platform-specific', () => {
+  const diagnostic = exitDiagnostic(2147483651, null, 'win32');
+  assert.match(diagnostic, /0x80000003/);
+  assert.match(diagnostic, /code alone does not identify the cause/);
+  assert.match(diagnostic, /integrity labels/);
+  assert.match(diagnostic, /Do not disable the sandbox/);
+  assert.match(exitDiagnostic(-2147483645, null, 'win32'), /STATUS_BREAKPOINT/);
+  assert.doesNotMatch(exitDiagnostic(0xc0000005, null, 'win32'), /STATUS_BREAKPOINT|Low label/);
+  assert.doesNotMatch(exitDiagnostic(2147483651, null, 'linux'), /STATUS_BREAKPOINT/);
+  assert.equal(exitDiagnostic(0, null, 'win32'), '');
+  assert.equal(exitDiagnostic(null, 'SIGTERM', 'win32'), 'Desktop exited: SIGTERM');
+});
 
 test('desktop launcher uses explicit runtime, absolute app path and isolated child environment', () => {
   const executable = path.resolve('runtime with spaces/electron.exe');
@@ -64,14 +77,14 @@ test('desktop removes demo panels but retains navigation, own branding and sandb
   assert.deepEqual(entries(html), entries(base).filter(e => !e.startsWith('data-pane=')));
   assert.doesNotMatch(html, /id="(?:panel|savedSessions|refreshSessions)"|Northwind|localhost:5173/);
   assert.match(html, /<title>Personal Agent — Agent 客户端<\/title>/);
-  assert.match(html, /class="tb-mark">PA</);
+  assert.match(html, /class="tb-mark" aria-hidden="true"><svg viewBox="0 0 200 200" width="18" height="18"><use href="#i-wurong"\/><\/svg><\/div>/);
   assert.doesNotMatch(html, /WorkBuddy|>WB</);
   // Real wiring replaces placeholder count: do not require a minimum number of dead buttons.
   assert.doesNotMatch(js, /TASK_INDEX|var GROUPS|function showPane/);
   assert.match(js, /personal-agent\.ui\.v1/);
   assert.match(js, /listChats\(\)/);
   assert.match(js, /未实现，不保存或执行此选项/);
-  assert.match(js, /模型命令未接线/);
+  assert.match(js, /核心工具 · 命令与会话作业/);
   assert.match(main, /sandbox: true/);
   assert.match(main, /contextIsolation: true, nodeIntegration: false/);
 });

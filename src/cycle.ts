@@ -123,25 +123,95 @@ export interface RunFacts {
   readonly toolErrors: number;
   /** Set when the round threw; null when it ran to a reply. */
   readonly failureClass: FailureClass | null;
+  /** The final reply, when there was one. Used only for the shape veto below. */
+  readonly reply?: string;
+  /** The request this round answered, for the echo check. */
+  readonly prompt?: string;
+  /**
+   * Writes this round's budget refused (D127).
+   *
+   * Recorded in the evidence and **never** allowed to move the verdict. A refusal
+   * means the tool did not run — nothing broke — so treating it as a tool error
+   * made the round `partial`, which charged the applied gene for a budget that
+   * was sized wrong. The lesson "this strategy does not work" and the lesson
+   * "this round was given too little room" are different, and only the first is
+   * the gene's to answer for.
+   */
+  readonly budgetRefusals?: number;
+}
+
+/** A reply that opens by declining or reporting an inability, whatever follows. */
+const OPENS_WITH_REFUSAL =
+  /^\s*(抱歉|对不起|我没有|我需要(先)?(向您)?说明|无法|我不能|我这边没有|i (cannot|can't|am unable)|unable to|sorry)/i;
+
+function isEchoOf(prompt: string, reply: string): boolean {
+  const p = prompt.toLowerCase().replace(/\s+/g, " ").trim();
+  const r = reply.toLowerCase().replace(/^echo:\s*/, "").replace(/\s+/g, " ").trim();
+  return r.length > 0 && r.length <= p.length + 20 && p.includes(r);
+}
+
+/**
+ * Shapes that disqualify a round from counting as a *success*, however tidy the
+ * reply looks.
+ *
+ * These are not evidence to be weighed against other evidence — they are
+ * disqualifying forms. A refusal written with headings and bullet points was
+ * outscoring the refusal signal through the formatting alone when this was
+ * tried as a weighted model, which is why the four below are vetoes rather than
+ * weights.
+ *
+ * Calibrated against Jev's own judgment on 54 real rounds harvested from this
+ * workspace (D125): the weighted 21-feature model reached 79.6% agreement with
+ * Jev while breaking `evaluateRun`'s property that a genuine success is never
+ * called a failure. These four rules reach 87.0% and keep that property
+ * (fn=0), at zero network and zero model cost.
+ *
+ * Deliberately *not* here: "the work looked busy but used no tools". It reads
+ * as a signal but did not separate the classes, and a rule that fires on
+ * legitimate no-tool answers would cost more than it catches.
+ */
+export function roundVeto(facts: RunFacts): string | null {
+  if (facts.steps === 0) return "no model turn produced a reply";
+  // Absent data is not evidence: a caller that did not hand over the reply is
+  // not claiming the reply was bad, so the shape checks are skipped rather than
+  // fired against an empty string.
+  if (facts.reply === undefined) return null;
+  const reply = facts.reply.trim();
+  if (reply.length === 0) return "reply is empty";
+  if (facts.prompt !== undefined && isEchoOf(facts.prompt, reply)) return "reply only echoes the request";
+  if (OPENS_WITH_REFUSAL.test(reply)) return "reply opens by declining or reporting an inability";
+  return null;
 }
 
 /**
  * Read a verdict off the facts. Nothing here consults the model's own claim of
  * success: a round counts as a success only when it produced a reply and no tool
  * failed. That is weaker than "the objective was met" and is named so.
+ *
+ * `roundVeto` narrows the top: a reply with a disqualifying shape is downgraded
+ * to `partial`, never to `failed`, because something *was* produced — it just
+ * does not amount to having done the work.
  */
 export function evaluateRun(facts: RunFacts): CycleEvaluation {
   const evidence = [`steps=${facts.steps}`, `toolCalls=${facts.toolCalls}`, `toolErrors=${facts.toolErrors}`];
+  // Appended rather than folded into `toolErrors`: the count is worth seeing, and
+  // it is deliberately not an input to the status below. Absent when zero, so a
+  // round under no budget pressure keeps the evidence it always had.
+  if (facts.budgetRefusals) evidence.push(`budgetRefusals=${facts.budgetRefusals}`);
   if (facts.failureClass !== null) {
     // A model that never produced anything usable means the round could not
-    // start; anything after a working call is a failure, not a block.
-    const status: EvaluationStatus = facts.failureClass === "model" && facts.steps === 0 ? "blocked" : "failed";
+    // start; the same holds for a budget refusal at step 0, which refused the
+    // round before it began. Anything after a working call is a failure, not
+    // a block.
+    const blockedStart = (facts.failureClass === "model" || facts.failureClass === "budget") && facts.steps === 0;
+    const status: EvaluationStatus = blockedStart ? "blocked" : "failed";
     return { status, failureClass: facts.failureClass, evidence, reviewer: "mechanical" };
   }
+  const veto = roundVeto(facts);
   return {
-    status: facts.toolErrors === 0 ? "success" : "partial",
+    status: facts.toolErrors === 0 && veto === null ? "success" : "partial",
     failureClass: null,
-    evidence,
+    evidence: veto === null ? evidence : [...evidence, `veto=${veto}`],
     reviewer: "mechanical",
   };
 }

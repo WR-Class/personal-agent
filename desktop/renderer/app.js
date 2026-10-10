@@ -46,7 +46,7 @@
       const group = document.createElement('details'); group.className = 'session-group'; group.dataset.root = root || ''; group.open = expanded.get(root || '') !== false;
       const head = document.createElement('summary'); head.textContent = (root ? '▱ ' + root.split(/[\\/]/).filter(Boolean).pop() : '会话') + ' (' + items.length + ')'; head.title = root || '未关联工作区的历史'; group.append(head);
       for (const s of items) {
-        const b = document.createElement('button'); b.className = 'session-row'; b.dataset.session = s.id; b.textContent = s.title; b.title = s.title + ' · ' + FILTER_LABEL[sessionStatus(s)];
+        const b = document.createElement('button'); b.className = 'session-row'; b.dataset.session = s.id; b.textContent = (s.pinned ? '📌 ' : '') + s.title; b.title = s.title + ' · ' + FILTER_LABEL[sessionStatus(s)];
         const state = document.createElement('small'); state.textContent = ' · ' + FILTER_LABEL[sessionStatus(s)]; b.append(state);
         b.classList.toggle('is-on', s.id === selectedSessionId);
         b.onclick = () => void openSession(s.id); group.append(b);
@@ -73,7 +73,7 @@
       if (sequence === refreshSequence) toast('会话列表读取失败；保留现有列表与历史文件');
     }
   }
-  window.addEventListener('workspace-changed', async e => { if (e.detail?.changed) await newTask(); await refreshSessions(); });
+  window.addEventListener('workspace-changed', async e => { if (e.detail?.changed) toast('工作区已变更，当前聊天保留；已有会话需恢复原工作区后继续'); await refreshSessions(); });
 
   /* ===================== 视图切换 ===================== */
   var vHome = $('#vHome'), vChat = $('#vChat');
@@ -100,7 +100,7 @@
     ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
   }
   function syncSend(ta, btn){
-    var has = ta.value.trim().length > 0;
+    var has = ta.value.trim().length > 0 || mainChat.hasAttachments(ta) || btn.dataset.action === 'stop';
     btn.classList.toggle('is-ready', has);
   }
 
@@ -109,10 +109,10 @@
     ta.addEventListener('keydown', function(e){
       if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229 && (prefs.send === 'Ctrl+Enter' ? e.ctrlKey && !e.metaKey : !e.ctrlKey && !e.metaKey)){
         e.preventDefault();
-        if (ta.value.trim()) onSend(ta.value.trim());
+        if (ta.value.trim() || mainChat.hasAttachments(ta)) onSend(ta.value.trim());
       }
     });
-    btn.addEventListener('click', function(){ if (ta.value.trim()) onSend(ta.value.trim()); });
+    btn.addEventListener('click', function(){ if (btn.dataset.action === 'stop') { mainChat.stop(); return; } if (ta.value.trim() || mainChat.hasAttachments(ta)) onSend(ta.value.trim()); });
     autoGrow(ta); syncSend(ta, btn);
   }
 
@@ -121,7 +121,6 @@
   $('#openModel').onclick = () => { showHome(); $('#taHome').focus(); };
   bindComposer($('#taHome'), $('#sendHome'), function(v){ void mainChat.send(v, $('#taHome')); });
   bindComposer($('#taChat'), $('#sendChat'), function(v){ void mainChat.send(v, $('#taChat')); });
-  $('#btnStop').addEventListener('click', function(){ mainChat.stop(); });
   async function newTask() {
     if (await mainChat.reset()) { ++refreshSequence; selectedSessionId = null; renderSessions(); showHome(); $('#taHome').focus(); toast('已新建空白会话'); }
   }
@@ -144,7 +143,7 @@
     var bar = m.parentElement;
     $$('.chip-btn[data-mode]', bar).forEach(function(x){ x.classList.remove('is-on'); });
     m.classList.add('is-on');
-    toast('计划模式未实现；模型文件工具与手动终端权限在输入框下方分别控制');
+    window.dispatchEvent(new Event('open-task-plan'));
   });
 
   /* ===================== 侧栏交互 ===================== */
@@ -199,16 +198,19 @@
       $$('.nav-item').forEach(function(x){ x.classList.remove('is-on'); });
       $('#navMore').classList.add('is-on');
       if (b.dataset.sub === 'files') { openWorkspace('files'); return; }
+      if (b.dataset.sub === 'skills') { openSettings('skills'); return; }
+      if (b.dataset.sub === 'connector') { openSettings('mcp'); return; }
       toast('未实现：' + $('span', b).textContent);
     });
   });
 
+  $('#btnMcpSettings').addEventListener('click',()=>openSettings('mcp'));
   $('#btnNew').addEventListener('click', newTask);
   $('#btnBackHome').addEventListener('click', showHome);
 
   document.addEventListener('click', function(e){
     var a = e.target.closest('a[data-nav]');
-    if (a){ e.preventDefault(); toast('未接线：连接器管理'); }
+    if (a){ e.preventDefault(); openSettings('mcp'); }
   });
 
   /* ===================== 设置（结构对齐真实客户端 NAV_GROUPS / NAV_ITEMS） ===================== */
@@ -232,6 +234,9 @@
     { id:'memory',            label:'记忆与进化',      group:'feature',      ico:'i-book' },
     { id:'extensions',        label:'智能体',         group:'feature',      ico:'i-expert' },
     { id:'models',            label:'模型',           group:'feature',      ico:'i-cloud' },
+    { id:'plugins',           label:'插件',           group:'feature',      ico:'i-package' },
+    { id:'skills',            label:'技能（Skills）',  group:'feature',      ico:'i-book' },
+    { id:'mcp',               label:'MCP 连接器',     group:'feature',      ico:'i-plug' },
     { id:'claw',              label:'Personal Agent 设置',  group:'feature',      ico:'i-sparkle' },
     { id:'dataManagement',    label:'数据管理',        group:'dataSecurity', ico:'i-terminal' },
     { id:'buddyApps',         label:'应用管理',        group:'dataSecurity', ico:'i-grid' },
@@ -341,7 +346,7 @@
 
   PANELS.securityCenter = function(){
     return sSec('真实安全边界')
-      + sRow('模型会话', '消息和已启用工具读取的文件会发送到所选模型服务并保存历史；不承诺自动脱敏。模型文件工具默认关闭，写入逐次确认。', txt('文件工具可选 · 模型命令未接线'))
+      + sRow('模型会话', '选择工作区后使用核心工具链，工具结果会发送到模型服务并保存历史。默认工作区写入：区内文件修改自动执行、命令逐次批准；只读仅查看；完全访问允许区外读写和免确认命令。所选权限按会话记住，重开客户端或切回该会话会恢复。命令没有 OS 沙箱，不承诺自动脱敏。', txt('核心工具 · 命令与会话作业'))
       + sRow('手动工具权限', '只读禁止命令；完全访问允许手动命令访问工作区外，不是 OS 沙箱。权限与确认由工作区工具管理。', '<button class="set-btn" data-permissions>查看权限入口</button>')
       + sRow('渲染器隔离', 'Electron 渲染器隔离与本地命令权限不同；实际隔离状态见关于页。', txt('以运行信息为准'))
       + sRow('数据脱敏 / 安全审计面板', '未实现，不提供虚假开关或安全保证。', '<button class="set-btn" disabled>未实现</button>');
@@ -381,6 +386,20 @@
       + '<div class="set-ph-note">未接线：保留原型功能入口，后续接入真实能力。</div></div>';
   }
 
+  function mountMemory(host) {
+    let snapshot, alive=true, busy=false;
+    host.replaceChildren();const note=document.createElement('p'),list=document.createElement('div'),status=document.createElement('p'),add=document.createElement('button'),refresh=document.createElement('button'),clear=document.createElement('button');
+    note.textContent='仅保存你明确填写的偏好与背景。启用内容会随新请求发送给所选模型；不会自动提取聊天。请勿存放凭据。删除不撤回旧历史或已发送内容。';
+    note.className='capability-note';status.setAttribute('role','status');add.textContent='添加记忆';refresh.textContent='刷新';clear.textContent='清空全部';
+    [add,refresh,clear].forEach(b=>{b.className='set-btn';b.type='button';});host.append(note,list,add,refresh,clear,status);
+    async function run(action,payload={}){if(busy)return;busy=true;[add,refresh,clear].forEach(b=>b.disabled=true);try{const r=await window.personalAgentDesktop.memory(action,{...payload,revision:snapshot?.revision});if(!r.ok)throw Error(r.error);if(alive){snapshot=r.data;render();status.textContent='已读取实际保存状态';}}catch(e){if(alive)status.textContent=e.message;}finally{busy=false;if(alive)[add,refresh,clear].forEach(b=>b.disabled=false);}}
+    function editor(item){
+      const d=document.createElement('dialog'),f=document.createElement('form'),text=document.createElement('textarea'),scope=document.createElement('select'),label=document.createElement('label'),scopeLabel=document.createElement('label'),save=document.createElement('button'),cancel=document.createElement('button');d.className='capability-dialog';d.dataset.kind='memory';text.name='text';text.value=item?.text||'';text.rows=6;text.maxLength=2000;label.className=scopeLabel.className='capability-field';label.textContent='记忆内容（最多2000 UTF-8字节）';label.append(text);scopeLabel.textContent='适用范围';scope.name='scope';scope.add(new Option('所有工作区','global'));scope.add(new Option('当前工作区','workspace'));scope.value=item?.scope||'global';scopeLabel.append(scope);save.textContent='保存';save.type='submit';cancel.textContent='取消';cancel.type='button';[save,cancel].forEach(b=>b.className='set-btn');f.append(label,scopeLabel,save,cancel);d.append(f);host.append(d);d.showModal();
+      cancel.onclick=()=>d.close();d.onclose=()=>d.remove();f.onsubmit=async e=>{e.preventDefault();save.disabled=true;await run('save',{entry:{id:item?.id,text:text.value,scope:scope.value,enabled:item?.enabled??true}});save.disabled=false;if(alive&&snapshot?.entries.some(x=>x.text===text.value&&x.scope===scope.value))d.close();};
+    }
+    function render(){list.replaceChildren();for(const item of snapshot.entries){const card=document.createElement('div'),text=document.createElement('p'),scope=document.createElement('p');card.className='capability-card';card.dataset.memory=item.id;text.textContent=item.text;scope.textContent=(item.scope==='global'?'全局':item.workspaceRoot)+' · '+(item.enabled?'已启用':'已停用');card.append(text,scope);for(const [label,fn]of [['编辑',()=>editor(item)],[item.enabled?'停用':'启用',()=>run('toggle',{id:item.id,enabled:!item.enabled})],['删除',()=>run('remove',{id:item.id})]]){const b=document.createElement('button');b.type='button';b.className='set-btn';b.textContent=label;b.onclick=()=>{if(!busy)fn();};card.append(b);}list.append(card);}if(!snapshot.entries.length)list.textContent='尚未保存记忆';}
+    add.onclick=()=>editor();refresh.onclick=()=>run('list');clear.onclick=()=>run('clear');void run('list');return{destroy(){alive=false;host.querySelectorAll('dialog').forEach(d=>d.remove());}};
+  }
   var providerSettingsView, settingsSequence = 0;
   async function renderInfo(host, sequence){
     const output = document.createElement('pre'); output.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere'; output.textContent = '正在读取实际桌面运行信息…'; host.append(output);
@@ -390,7 +409,7 @@
       output.textContent = info ? JSON.stringify(info, null, 2) : '浏览器预览：无桌面运行信息';
     } catch (_) { if (sequence === settingsSequence) output.textContent = '桌面运行信息读取失败，请重试'; }
   }
-  PANELS.helpFeedback = PANELS.getHelp = function(){ return sSec('桌面实际运行信息') + '<p>模型设置配置文字问答；项目 / 更多 → 我的文件打开手动工作区工具。场景仅改变输入提示。模型文件工具需在输入框下方启用，写入逐项确认；支持停止当前请求但不会回滚已执行操作。模型命令、MCP、技能、语音、发布分享、账号与云服务未实现。</p>'; };
+  PANELS.helpFeedback = PANELS.getHelp = function(){ return sSec('桌面实际运行信息') + '<p>模型设置配置文字问答；项目 / 更多 → 我的文件打开手动工作区工具。场景仅改变输入提示。选择工作区后文件工具自动可用，由只读、工作区写入、完全访问三档权限控制；发送按钮在运行时变为停止，也可按 Esc 停止，已完成操作不会回滚。模型命令和后台任务复用核心工具；停止会清理当前会话的作业，切换会话与关闭窗口也会清理。技能支持文件夹 / ZIP 导入，在当前 Agent 的所有工作区可用，保留脚本与参考资源但不自动执行。MCP 支持 JSON 配置、本地 stdio 与远程 HTTP，需显式确认连接，可配置自备加密凭据；OAuth 浏览器登录、旧版 SSE、技能市场、语音、公开分享、账号与云服务尚未接入。会话菜单支持重命名、置顶、删除与本地导出。</p>'; };
   function renderSettings(id){
     const sequence = ++settingsSequence;
     if (providerSettingsView) { providerSettingsView.destroy(); providerSettingsView = null; }
@@ -409,7 +428,9 @@
     var it = SET_ITEMS.filter(function(x){ return x.id === currentTab; })[0];
     $('#setTitle').textContent = it ? it.label : '设置';
     $('#setBody').innerHTML = renderPanel(currentTab);
+    if (currentTab === 'memory') providerSettingsView = mountMemory($('#setBody'));
     if (currentTab === 'models') providerSettingsView = window.mountProviderSettings($('#setBody'));
+    if (['plugins','skills','mcp'].includes(currentTab)) { $('#setBody').replaceChildren(); providerSettingsView = window.mountCapabilitySettings($('#setBody'),{kind:currentTab}); }
     if (['helpFeedback','getHelp'].includes(currentTab)) void renderInfo($('#setBody'), sequence);
     $('#setBody').scrollTop = 0;
   }
@@ -426,7 +447,7 @@
     if (b) renderSettings(b.dataset.tab);
   });
   $('#setBody').addEventListener('click', function(e){
-    if (currentTab === 'models' || e.target.closest('[disabled]')) return;
+    if (['models','plugins','skills','mcp','memory'].includes(currentTab) || e.target.closest('[disabled]')) return;
     if (e.target.closest('[data-permissions]')) { closeSettings(); showHome(); openWorkspace('start'); toast('在输入框下方选择本地工具权限；完全访问不是 OS 沙箱'); return; }
     if (e.target.closest('#compactToggle')) { prefs.compact = !prefs.compact; applyCompact(); savePrefs(); renderSettings(currentTab); return; }
     var tp = e.target.closest('[data-theme-pick]');
@@ -545,11 +566,51 @@
   const historyButton = $('.chat-head [title="历史"]'); historyButton.id = 'btnChatHistory'; historyButton.onclick = openTaskSearch;
   const chatMore = $('.chat-head [title="更多"]'); chatMore.id = 'btnChatMore';
   chatMore.onclick = function(e){ e.stopPropagation(); openMenu(this, [
-    {ico:'i-plus',label:'新建任务',act:newTask}, {ico:'i-history',label:'历史任务',act:openTaskSearch}, {ico:'i-copy',label:'复制对话',act:copyConversation}
+    {ico:'i-plus',label:'新建任务',act:newTask}, {ico:'i-history',label:'历史任务',act:openTaskSearch}, {ico:'i-copy',label:'复制对话',act:copyConversation},
+    ...sessionActions(sessions.find(s=>s.id===selectedSessionId))
   ]); };
   $('.side-foot .icon-btn').onclick = function(e){ e.stopPropagation(); openMenu(this, [
     {ico:'i-people',label:'个人主页（未实现）',act:function(){openSettings('account');}}, {ico:'i-settings',label:'设置',act:function(){openSettings('settings');}}
   ]); };
+  async function manageSession(action, session, extra){
+    if (mainChat.isBusy()) { toast('请等待当前请求完成'); return; }
+    try {
+      const result = await window.personalAgentDesktop.manageChat(action,{id:session.id,...extra});
+      if (!result.ok) throw Error(result.error);
+      if (result.cancelled) return;
+      await refreshSessions();
+      toast(result.data?.purgePending ? '会话已移除，但历史归档清理未完成；请检查本地状态目录' : action === 'export' ? '会话已导出' : '会话已更新');
+      return true;
+    } catch(error) { toast(error.message || '会话操作失败'); }
+  }
+  function renameSession(session){
+    const dialog=document.createElement('dialog');dialog.className='capability-dialog';dialog.dataset.kind='rename-session';
+    const form=document.createElement('form'),heading=document.createElement('h3'),input=document.createElement('input'),save=document.createElement('button'),cancel=document.createElement('button'),note=document.createElement('p');
+    heading.textContent='重命名会话';input.value=session.title;input.name='title';input.maxLength=80;input.required=true;input.setAttribute('aria-label','会话名称');
+    save.textContent='保存';save.type='submit';cancel.textContent='取消';cancel.type='button';note.setAttribute('role','status');
+    form.append(heading,input,note,cancel,save);dialog.append(form);document.body.append(dialog);
+    cancel.onclick=()=>dialog.close();dialog.onclose=()=>dialog.remove();
+    dialog.addEventListener('keydown',e=>{if(e.key==='Escape')e.stopPropagation();});
+    form.onsubmit=async e=>{e.preventDefault();save.disabled=cancel.disabled=true; const ok=await manageSession('rename',session,{title:input.value});if(ok)dialog.close();else{save.disabled=cancel.disabled=false;note.textContent='保存未完成，请检查名称并重试';}};
+    dialog.showModal();input.focus();input.select();
+  }
+  function sessionActions(session){
+    if (!session?.indexed) return [];
+    return [
+      {ico:'i-edit',label:'重命名',act:()=>renameSession(session)},
+      {ico:'i-pin',label:session.pinned?'取消置顶':'置顶',act:()=>void manageSession('pin',session,{pinned:!session.pinned})},
+      {ico:'i-copy',label:'导出 Markdown',act:()=>void manageSession('export',session,{format:'markdown'})},
+      {ico:'i-copy',label:'导出 JSON',act:()=>void manageSession('export',session,{format:'json'})},
+      {ico:'i-trash',label:'删除会话',act:()=>void manageSession('delete',session)}
+    ];
+  }
+  window.personalAgentDesktop?.onChatManaged?.(event=>{
+    if(event.id===selectedSessionId){
+      if(event.action==='delete'){mainChat.clearDeleted();selectedSessionId=null;showHome();}
+      else if(event.action==='rename'){mainChat.renameTitle(event.title);}
+    }
+    void refreshSessions();
+  });
   $('#taskGroups').addEventListener('contextmenu', function(e){
     var row = e.target.closest('.session-row'); if (!row) return;
     e.preventDefault();
@@ -557,7 +618,8 @@
     openMenu(row, [
       { ico:'i-history', label:'打开会话', act:function(){ void openSession(session.id); } },
       { ico:'i-copy', label:'复制标题', act:function(){ void copyText(session.title); } },
-      { ico:'i-copy', label:'复制会话 ID', act:function(){ void copyText(session.id); } }
+      { ico:'i-copy', label:'复制会话 ID', act:function(){ void copyText(session.id); } },
+      ...sessionActions(session)
     ]);
   });
 
@@ -919,8 +981,6 @@
     if (e.target === searchScrim) closeTaskSearch();
   });
 
-  // Token usage stays explicitly unwired until supplied by the real runtime.
-
   /* ===================== 初始化 ===================== */
   renderSessions();
 
@@ -946,5 +1006,5 @@
   window.addEventListener('hashchange', route);
   route();
 
-  if (!location.hash) toast('选择模型开始聊天 · 无工具');
+  if (!location.hash) toast('选择模型开始聊天 · 选择工作区即可使用文件工具');
 })();

@@ -269,6 +269,12 @@ export interface ChatRequest {
 export interface ChatUsage {
   inputTokens: number;
   outputTokens: number;
+  /** True only when both token counts were explicitly reported by the provider. */
+  reported?: boolean;
+  /** Provider-reported cache-hit input subset, never inferred from a missing field. */
+  cachedInputTokens?: number;
+  /** Monotonic fetch + response-body wall time, not pure generation time. */
+  durationMs?: number;
   /**
    * Provider-reported share of {@link outputTokens} spent on the model's private
    * reasoning, when the provider reports it (e.g. `completion_tokens_details.

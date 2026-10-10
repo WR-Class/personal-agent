@@ -31,8 +31,13 @@
  * `job_output` is here because reading a job's output changes nothing; it is a
  * view of work that was already permitted to start. Every tier offers it, so a
  * read-only session can still see what a background job produced.
+ *
+ * `obs_recall` belongs alongside it for the same reason (D52): it reads session
+ * data the model already owns — a tool result that was replaced by an omission
+ * placeholder, already in the log this session holds. It has no path argument,
+ * so the "offered" and "permitted" lists here cannot disagree about reach.
  */
-export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file", "job_output"];
+export const READ_ONLY_TOOLS: readonly string[] = ["read_file", "inspect_file", "job_output", "obs_recall"];
 
 /**
  * Tools that change something outside the conversation.

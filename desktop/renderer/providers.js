@@ -38,6 +38,8 @@
       const dialog = el('dialog', '', document.body); activeDialog = dialog; dialog.className = 'provider-dialog';
       dialog.style.cssText = 'margin:auto;width:min(580px,92vw);max-height:90vh;overflow:auto;padding:24px;border:1px solid var(--border-primary);border-radius:16px;background:var(--bg-elevated);color:var(--text-primary)';
       let custom = existing?.kind === 'custom', busy = false, generation = 0, models = [...(existing?.models || [])];
+      const thinkingOff=new Set(existing?.thinkingOff||[]);
+      const outputLimits = new Map(Object.entries(existing?.outputLimits || {}).map(([m,n])=>[m,String(n)]));
       const top = el('div', '', dialog); top.style.cssText = 'display:flex;justify-content:space-between;align-items:center';
       el('h3', existing ? '编辑模型提供商' : '添加模型提供商', top);
       button(top, '关闭', () => dialog.close());
@@ -52,11 +54,12 @@
         const input = el('input', '', lab); input.type = type; input.value = value || ''; input.autocomplete = 'off'; input.maxLength = type === 'password' ? 8192 : 2048;
         input.style.cssText = 'display:block;width:100%;margin-top:6px;padding:9px;border:1px solid var(--border-input);border-radius:8px;background:var(--bg-elevated);color:inherit'; return input;
       }
-      function switchTab(value) { if (busy) return; key.value = ''; custom = value; models = []; render(); }
+      function switchTab(value) { if (busy) return; key.value = ''; custom = value; models = []; outputLimits.clear(); thinkingOff.clear(); render(); }
       function payload() {
+        const limits=Object.fromEntries(models.filter(m=>outputLimits.has(m)&&outputLimits.get(m)!=='').map(m=>{const v=Number(outputLimits.get(m));if(!Number.isSafeInteger(v)||v<1||v>1048576)throw Error('单次输出上限须为 1–1048576 的整数');return [m,v];}));
         return { revision, editingId: existing?.id, provider: { id: custom ? id.value : (existing?.id || preset.value), name: custom ? name.value : state.presets.find(p => p.id === preset.value).name,
           kind: custom ? 'custom' : preset.value, baseUrl: url.value || (custom ? '' : state.presets.find(p => p.id === preset.value)?.baseUrl),
-          protocol: 'openai-chat', models: [...models], apiKey: key.value } };
+          protocol: 'openai-chat', models: [...models], outputLimits: limits, thinkingOff:models.filter(m=>thinkingOff.has(m)), apiKey: key.value } };
       }
       function showModels() {
         modelList.replaceChildren();
@@ -64,7 +67,10 @@
         for (const m of models) {
           const row = el('div', '', modelList); row.style.cssText = 'display:flex;gap:8px;align-items:center;margin:6px 0';
           const label = el('span', m, row); label.style.cssText = 'flex:1;overflow-wrap:anywhere';
-          button(row, '移除', () => { if (!busy) { models = models.filter(x => x !== m); showModels(); } });
+          const budgetLabel=el('label','单次输出上限',row);budgetLabel.style.cssText='width:132px;flex:none;font-size:11px;color:var(--text-secondary)';
+          const budget=el('input','',budgetLabel);budget.type='number';budget.min='1';budget.max='1048576';budget.step='1';budget.placeholder='默认 64000';budget.value=outputLimits.get(m)||'';budget.dataset.outputModel=m;budget.setAttribute('aria-label',m+' 单次输出上限（tokens）');budget.style.cssText='width:100%;box-sizing:border-box;padding:6px;border:1px solid var(--border-input);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary)';budget.oninput=()=>outputLimits.set(m,budget.validity.badInput?'invalid':budget.value);
+          const thinkingLabel=el('label','',modelList);thinkingLabel.style.cssText='display:block;font-size:12px;margin:4px 0 14px;color:var(--text-secondary)';const toggle=el('input','',thinkingLabel);toggle.type='checkbox';toggle.dataset.thinkingModel=m;toggle.checked=thinkingOff.has(m);toggle.onchange=()=>toggle.checked?thinkingOff.add(m):thinkingOff.delete(m);thinkingLabel.append(document.createTextNode(' DeepSeek兼容：关闭思考（仅支持此参数的模型；未勾选保持服务商默认）'));
+          button(row, '移除', () => { if (!busy) { models = models.filter(x => x !== m); outputLimits.delete(m);thinkingOff.delete(m);showModels(); } });
         }
       }
       function lock(on) {
@@ -94,7 +100,7 @@
           details = el('details', '', form); details.open = !!existing;
           el('summary', '自定义设置', details).style.cssText = 'cursor:pointer;margin:16px 0';
           url = field(details, 'API 地址', existing?.baseUrl); url.placeholder = state.presets.find(p => p.id === preset.value).baseUrl;
-          preset.onchange = () => { url.value = ''; url.placeholder = state.presets.find(p => p.id === preset.value).baseUrl; key.value = ''; models = []; showModels(); };
+          preset.onchange = () => { url.value = ''; url.placeholder = state.presets.find(p => p.id === preset.value).baseUrl; key.value = ''; models = []; outputLimits.clear(); thinkingOff.clear(); showModels(); };
         }
         fetchButton = button(form, '获取可用模型', async () => {
           if (busy) return;
@@ -108,7 +114,7 @@
           finally { if (dialog.open && seq === generation) lock(false); }
         });
         fetchButton.classList.add('set-btn--primary'); fetchButton.style.cssText = 'margin:16px 0;width:100%;padding:10px';
-        el('h4', '模型目录', form); modelList = el('div', '', form); modelList.style.cssText = 'max-height:180px;overflow:auto'; showModels();
+        el('h4', '模型目录', form);el('p','单次输出上限单位为 tokens；留空默认 64000。不是上下文窗口，也不是模型能力认证，请勿超过服务商上限；更高预算可能增加费用与等待时间。',form).style.cssText='font-size:12px;line-height:1.6;color:var(--text-secondary)'; modelList = el('div', '', form); modelList.style.cssText = 'max-height:180px;overflow:auto'; showModels();
         const manual = field(form, '手动添加模型 ID', ''); manual.maxLength = 256; manual.placeholder = '例如 deepseek-chat';
         button(form, '＋ 添加模型', () => {
           const m = manual.value.trim(); if (!m) return;

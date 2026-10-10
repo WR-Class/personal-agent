@@ -1,0 +1,10 @@
+{"text":"怎么使用","gold":"?","probs":{"fix":0.05,"verify":0.05,"research":0.72,"operate":0.28,"build":0.05},"source":"grok"}
+{"text":"那就开始吧","gold":"?","probs":{"fix":0.05,"verify":0.05,"research":0.1,"operate":0.15,"build":0.2},"source":"grok"}
+{"text":"帮我查清楚啊","gold":"?","probs":{"fix":0,"verify":0.3,"research":0.8,"operate":0,"build":0},"source":"grok"}
+{"text":"还没做完吧？","gold":"?","probs":{"fix":0,"verify":1,"research":0,"operate":0,"build":0},"source":"grok"}
+{"text":"中转站每日签到功能","gold":"?","probs":{"fix":0,"verify":0,"research":0,"operate":0,"build":1},"source":"grok"}
+{"text":"个人Agent (1)","gold":"?","probs":{"fix":0.1,"verify":0.2,"research":0.3,"operate":0.5,"build":0.8},"source":"grok"}
+{"text":"看项目目录，了解这个项目是","gold":"?","probs":{"fix":0,"verify":0,"research":1,"operate":0,"build":0},"source":"grok"}
+{"text":"你是技术调研员。请调研开源","gold":"?","probs":{"fix":0,"verify":0,"research":1,"operate":0,"build":0},"source":"grok"}
+{"text":"你是技术调研员。请调研两个","gold":"?","probs":{"fix":0,"verify":0,"research":1,"operate":0,"build":0},"source":"grok"}
+{"text":"但是现在就是个界面不能用是吧？","gold":"?","probs":{"fix":0.7,"verify":0.6,"research":0.1,"operate":0.1,"build":0.1},"source":"grok"}

@@ -171,7 +171,7 @@ interface ToolProbeOutcome {
  */
 const ACCOUNT_PROBLEM_PATTERN = /credit|quota|insufficient|balance|billing|payment|top ?up|upgrade|额度|余额|充值|欠费/i;
 
-function looksLikeAccountProblem(text: string): boolean {
+export function looksLikeAccountProblem(text: string): boolean {
   return ACCOUNT_PROBLEM_PATTERN.test(text);
 }
 

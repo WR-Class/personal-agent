@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, COLD_START_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -216,7 +216,15 @@ describe("enforcement in the runtime", () => {
     assert.equal(await readFile(first, "utf8"), "w1\n");
     assert.equal(await readFile(second, "utf8"), "keep2\n", "the over-budget file must be untouched");
     assert.equal(result.budget.filesWritten, 1);
-    assert.equal(result.evaluation.status, "partial");
+    // D127: a budget refusal no longer makes the round `partial`. Nothing broke —
+    // the tool never ran — so charging it to the round's success charged the
+    // applied gene for a budget that was sized wrong. The pressure is still on
+    // the record, as a count that is explicitly not an input to the verdict.
+    assert.equal(result.evaluation.status, "success");
+    assert.ok(
+      result.evaluation.evidence.some((line) => line === "budgetRefusals=1"),
+      `expected the refusal to be counted in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
+    );
   });
 
   it("refuses on the line budget before the tool runs, leaving no tool message", async () => {
@@ -239,8 +247,10 @@ describe("enforcement in the runtime", () => {
     const result = await runtime.send("改文件");
     // The write was refused, so the file still holds its original content.
     assert.equal(await readFile(target, "utf8"), "keep\n");
-    // The refusal is visible as a failed tool result, not a silent skip.
-    assert.equal(result.evaluation.status, "partial");
+    // The refusal is visible as a failed tool result, not a silent skip — but it
+    // is not a tool *failure*, so the verdict stays `success` (D127).
+    assert.equal(result.evaluation.status, "success");
+    assert.ok(result.evaluation.evidence.some((line) => line === "budgetRefusals=1"));
     const history = await store.history("budget-lines");
     const refusal = history.find((message) => message.role === "tool" && message.content.startsWith("refused:"));
     assert.ok(refusal, "expected a recorded refusal");
@@ -293,7 +303,7 @@ describe("enforcement in the runtime", () => {
 
     const geneStore = new GeneStore(join(fixture.root, "gene-budget.jsonl"));
     const minted = mintGene({
-      name: "tight", intent: "build", signalsMatch: ["改一下文件"], preconditions: [],
+      name: "tight", intent: "research", signalsMatch: ["改一下文件"], preconditions: [],
       strategy: [{ kind: "act", text: "改" }, { kind: "verify", text: "查" }],
       constraints: { maxFiles: 1, maxLines: 1, forbiddenPaths: [] },
       validation: ["npm.cmd test"], avoid: [],
@@ -325,5 +335,54 @@ describe("enforcement in the runtime", () => {
   it("classifies an exhausted write budget as a budget failure", () => {
     const error = new WriteBudgetError("cycle file budget exhausted");
     assert.equal(error.name, "WriteBudgetError");
+  });
+});
+
+// D127: the budget is a measurement, not a guess. Every guard `distill.ts` minted
+// used to carry `{maxFiles: 1, maxLines: 20}` — a number nobody derived from
+// anything — and a round that exceeded it lost its success, so the library
+// learned "this strategy failed" from what was really "this strategy was given
+// too little room".
+describe("measuredBudget", () => {
+  const obs = (filesWritten: number, linesWritten: number, budgetRefusals = 0) => ({
+    filesWritten, linesWritten, budgetRefusals,
+  });
+
+  it("returns the fallback untouched when nothing has been measured", () => {
+    // A new request kind is a real cold start, not a zero. Returning 0 files
+    // would refuse the first write of the next round.
+    assert.deepEqual(measuredBudget([]), { ...COLD_START_BUDGET });
+    assert.deepEqual(measuredBudget([], { maxFiles: 9, maxLines: 400 }), { maxFiles: 9, maxLines: 400 });
+  });
+
+  it("never falls below the fallback, however small the observed rounds were", () => {
+    // Otherwise a group whose rounds all happened to be tiny would mint a gene
+    // that cannot write at all.
+    const small = [obs(0, 0), obs(1, 2), obs(0, 0)];
+    assert.deepEqual(measuredBudget(small), { ...COLD_START_BUDGET });
+  });
+
+  it("raises the budget above the fallback from uncensored observations", () => {
+    const measured = measuredBudget([obs(4, 90), obs(5, 120), obs(3, 70)]);
+    assert.equal(measured.maxFiles, 5);
+    assert.ok(measured.maxLines >= 120, `expected at least 120, got ${measured.maxLines}`);
+  });
+
+  it("⚠️ adds back the room a refusal proved was wanted, instead of re-deriving the cap", () => {
+    // The load-bearing case. A refused round records what it *reached*, and that
+    // value IS the cap — so reading it as demand re-derives the same too-small
+    // budget on every pass, and the budget can never lift. A fixed point that
+    // measures nothing.
+    const censored = measuredBudget([obs(1, 20, 1), obs(1, 20, 1), obs(1, 20, 1)]);
+    assert.equal(censored.maxFiles, 2, "one refused write proves a second file was wanted");
+    assert.equal(censored.maxLines, 21, "one refused write proves one more line was wanted");
+  });
+
+  it("lets one outsized round widen the budget without defining it (p95, not max)", () => {
+    const typical = Array.from({ length: 19 }, () => obs(3, 40));
+    const withOutlier = [...typical, obs(50, 900)];
+    const measured = measuredBudget(withOutlier);
+    assert.equal(measured.maxFiles, 3, "a single 50-file round must not become the budget");
+    assert.equal(measured.maxLines, 40);
   });
 });

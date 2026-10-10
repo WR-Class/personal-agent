@@ -31,6 +31,16 @@ after(async () => {
 });
 
 describe("reading binary files", () => {
+  it("reads an empty file successfully without weakening range validation", async () => {
+    await writeFile(path.join(workspace, "empty.txt"), "");
+    for (const args of [{}, { offset: 0 }, { offset: 0, length: 10 }]) {
+      const result = await read("empty.txt", args);
+      assert.notEqual(result.isError, true);
+      assert.equal(result.content, "");
+    }
+    assert.equal((await read("empty.txt", { offset: 1 })).isError, true);
+    assert.equal((await read("empty.txt", { length: 0 })).isError, true);
+  });
   it("returns hex for bytes that are not valid UTF-8", async () => {
     await writeFile(path.join(workspace, "hdr.dat"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0xfd, 0x00]));
     const result = await read("hdr.dat");

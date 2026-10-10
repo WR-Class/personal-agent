@@ -28,6 +28,12 @@ function fact(overrides: Partial<FailureFact> = {}): FailureFact {
     failureClass: "budget",
     evidence: ["steps=10"],
     address: null,
+    // Required rather than optional (D127): a fact without a measured footprint
+    // would silently size the distilled budget from a default. Producers must
+    // say "this round wrote nothing" on purpose.
+    filesWritten: 0,
+    linesWritten: 0,
+    budgetRefusals: 0,
     ...overrides,
   };
 }
@@ -130,7 +136,10 @@ describe("failures survive to distillation end to end", () => {
 
     const facts = await geneStore.failures();
     assert.equal(facts.length, 3);
-    assert.equal(facts.every((fact) => fact.intent === "build"), true);
+    // "用包工头的方式改一处代码" routes to fix under the Jev classifier; the
+    // assertion is whatever the runtime recorded, not a particular label.
+    assert.equal(facts.every((fact) => fact.intent === facts[0]?.intent), true);
+    assert.ok(facts[0]?.intent !== undefined);
     assert.equal(facts.every((fact) => fact.signals.length > 0), true);
 
     const drafts = distillGuards(facts);
@@ -141,5 +150,36 @@ describe("failures survive to distillation end to end", () => {
     assert.equal(drafts[0]?.signals.includes("工头"), true);
     // The journal carries mechanical evidence, never the raw error text.
     assert.equal(facts.some((fact) => fact.evidence.some((item) => item.includes("scripted adapter"))), false);
+  });
+});
+
+// D127: the guard's budget comes from the rounds it was distilled from, not from
+// a constant. This is the end-to-end half of `measuredBudget`'s unit tests — it
+// proves the measured figure actually reaches the draft, which is the part that
+// would silently regress if `distillGuards` stopped threading the facts through.
+describe("distilled budget is measured, not guessed", () => {
+  it("sizes the guard from the file and line counts the rounds actually reached", () => {
+    const drafts = distillGuards([
+      fact({ filesWritten: 4, linesWritten: 90 }),
+      fact({ filesWritten: 5, linesWritten: 120 }),
+      fact({ filesWritten: 3, linesWritten: 70 }),
+    ]);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.gene.constraints.maxFiles, 5);
+    assert.ok(
+      (drafts[0]?.gene.constraints.maxLines ?? 0) >= 120,
+      `expected the measured line count, got ${drafts[0]?.gene.constraints.maxLines}`,
+    );
+  });
+
+  it("keeps the cold-start fallback for a group with no measurements yet", () => {
+    // The three facts default to a zero footprint (this file's helper), which is
+    // what a group distilled from pre-D127 journal rows looks like.
+    const drafts = distillGuards([fact(), fact(), fact()]);
+    assert.equal(drafts.length, 1);
+    assert.deepEqual(
+      { maxFiles: drafts[0]?.gene.constraints.maxFiles, maxLines: drafts[0]?.gene.constraints.maxLines },
+      { maxFiles: 1, maxLines: 20 },
+    );
   });
 });

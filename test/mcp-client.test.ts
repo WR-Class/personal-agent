@@ -97,7 +97,7 @@ describe("mcp client over stdio", () => {
       };
       assert.equal(call.content[0]?.text, "echo:hi");
     } finally {
-      client.close();
+      await client.closeAndWait();
     }
   });
 
@@ -111,7 +111,7 @@ describe("mcp client over stdio", () => {
       const list = (await client.request("tools/list")) as { tools: unknown[] };
       assert.equal(list.tools.length, 1);
     } finally {
-      client.close();
+      await client.closeAndWait();
     }
   });
 
@@ -122,7 +122,7 @@ describe("mcp client over stdio", () => {
       await client.initialize("personal-agent");
       await assert.rejects(() => client.request("tools/call", { name: "echo" }, 300), /请求超时（300ms）/);
     } finally {
-      client.close();
+      await client.closeAndWait();
     }
   });
 
@@ -135,6 +135,7 @@ describe("mcp client over stdio", () => {
     await assert.rejects(() => pending, /已被客户端关闭|已退出/);
     assert.equal(client.closed, true);
     await assert.rejects(() => client.request("tools/list"), /连接已关闭/);
+    await client.closeAndWait();
   });
 
   it("fails calls when the server process dies on its own", async () => {
@@ -146,6 +147,7 @@ describe("mcp client over stdio", () => {
     client.close();
     await assert.rejects(() => pending);
     assert.equal(client.closed, true);
+    await client.closeAndWait();
   });
 
   it("rejects a request that cannot even spawn", async () => {
@@ -153,6 +155,6 @@ describe("mcp client over stdio", () => {
     const client = startMcpClient({ command: path.join(ws, "does-not-exist.exe") }, envFor(home, ws));
     await assert.rejects(() => client.initialize("personal-agent"));
     assert.equal(client.closed, true);
-    client.close();
+    await client.closeAndWait();
   });
 });

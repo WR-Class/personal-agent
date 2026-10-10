@@ -56,9 +56,8 @@
  * happens where the schema's author actually is — the server, which rejects a
  * malformed call through the ordinary `tools/call` error path.
  *
- * ponytail: no output-schema validation, no pagination handling for `tools/list`
- * beyond a single page (a paginated `tools/list` is a real MCP feature; adding it
- * without a server that exercises it would be speculative), no retry.
+ * ponytail: tools/list pagination is bounded to 16 pages / 256 tools / 512 KiB.
+ * No output-schema validation or automatic retry of side effects.
  */
 import type { McpClient } from "./mcp-client.ts";
 import { RULE_TIERS } from "./rule-table.ts";
@@ -92,12 +91,19 @@ interface McpCallResult {
 }
 
 /** Ask the server for its tools and validate the shape we actually rely on. */
-export async function listMcpTools(client: McpClient): Promise<readonly McpToolInfo[]> {
-  const result = (await client.request("tools/list")) as { tools?: unknown };
-  if (!Array.isArray(result.tools)) {
-    throw new Error("MCP 服务器的 tools/list 响应缺少 tools 数组");
+export async function listMcpTools(client: Pick<McpClient, 'request'>): Promise<readonly McpToolInfo[]> {
+  const tools: McpToolInfo[] = [], cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 16; page++) {
+    const result = (await client.request('tools/list', cursor ? {cursor} : undefined)) as {tools?:unknown;nextCursor?:unknown};
+    if (!result || !Array.isArray(result.tools)) throw Error('MCP 服务器的 tools/list 响应缺少 tools 数组');
+    tools.push(...result.tools.map((entry,index)=>parseMcpTool(entry,index)));
+    if (tools.length > 256 || Buffer.byteLength(JSON.stringify(tools)) > 512*1024) throw Error('MCP 工具目录过大');
+    if (result.nextCursor === undefined) return tools;
+    if (typeof result.nextCursor !== 'string' || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor)) throw Error('MCP 工具分页游标无效');
+    cursor = result.nextCursor; cursors.add(cursor);
   }
-  return result.tools.map((entry, index) => parseMcpTool(entry, index));
+  throw Error('MCP 工具分页超过限制');
 }
 
 function parseMcpTool(entry: unknown, index: number): McpToolInfo {
@@ -143,14 +149,14 @@ export function mcpToolRegistryName(serverName: string, toolName: string): strin
  * `allow` (`ToolRegistry.execute`), so an `approve` verdict still requires this
  * call to actually prompt.
  */
-export function mcpToolToTool(serverName: string, info: McpToolInfo, client: McpClient): Tool {
+export function mcpToolToTool(serverName: string, info: McpToolInfo, client: Pick<McpClient, 'request'>): Tool {
   const registryName = mcpToolRegistryName(serverName, info.name);
   const hintLine = describeAnnotations(info.annotations);
   return {
     name: registryName,
     description:
       (info.description ?? `MCP tool ${info.name} from server ${serverName}.`) +
-      ` [来自 MCP server "${serverName}"，未在本项目内实现，经审批后以独立进程调用；${hintLine}]`,
+      ` [来自 MCP server "${serverName}"，未在本项目内实现，经审批后调用外部服务；${hintLine}]`,
     parameters: { type: "object", ...info.inputSchema } as Tool["parameters"],
     readOnly: false,
     externalSchema: true,

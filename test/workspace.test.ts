@@ -8,6 +8,15 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { installWorkspace, safeRelative, sensitiveName, resolveWorkspacePath, safeURL, safeBounds, shellEnvironment } = require('../desktop/workspace.cjs');
 
+test('deliverable reads accept selected-root absolute paths but reject escapes and links',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'pa-delivery-'));const {readDeliverable}=require('../desktop/workspace.cjs');
+ try{fs.writeFileSync(path.join(root,'demo.html'),'<h1>Demo</h1>');assert.equal(readDeliverable(root,path.join(root,'demo.html')).content,'<h1>Demo</h1>');assert.equal(readDeliverable(root,'demo.html').relative,'demo.html');
+ for(const p of ['../demo.html',path.join(root,'..','demo.html'),'.env','file:///x','demo.html:stream'])assert.throws(()=>readDeliverable(root,p));
+ fs.linkSync(path.join(root,'demo.html'),path.join(root,'copy.html'));assert.throws(()=>readDeliverable(root,'copy.html'));fs.unlinkSync(path.join(root,'copy.html'));
+ fs.writeFileSync(path.join(root,'big.txt'),'a'.repeat(262145));assert.throws(()=>readDeliverable(root,'big.txt'));assert.throws(()=>readDeliverable(root,'.'));
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test('relative path policy denies traversal, absolute paths, streams and sensitive files', () => {
   assert.deepEqual(safeRelative('src/main.ts'), ['src', 'main.ts']);
   assert.deepEqual(safeRelative('.'), []);
@@ -65,14 +74,15 @@ function harness(root: string) {
       this.options = options; this.webContents = new EventEmitter(); const wc = this.webContents;
       wc.setWindowOpenHandler = (fn: any) => { wc.open = fn; }; wc.isDestroyed = () => false;
       wc.close = () => { wc.closed = true; }; wc.loadURL = async (url: string) => { wc.url = url; };
-      wc.getURL = () => wc.url; wc.reload = () => {}; wc.navigationHistory = { canGoBack: () => false };
+      wc.getURL = () => wc.url; wc.reload = () => {};wc.invalidate=()=>{};wc.debugger={isAttached:()=>false}; wc.navigationHistory = { canGoBack: () => false };
       views.push(this);
     }
     setVisible(visible: boolean) { this.visible = visible; }
     setBounds(bounds: any) { this.bounds = bounds; }
+    getBounds(){return this.bounds||{x:0,y:0,width:0,height:0};}
   }
-  const roots: string[] = [];
-  const workspaceApi = installWorkspace({ onRootChosen: async (root: string) => { roots.push(root); }, ipcMain: { handle(channel: string, fn: any) { assert.equal(channel, 'workspace:action'); handler = fn; } },
+  const roots: string[] = []; let busy = false;
+  const workspaceApi = installWorkspace({ isChatBusy: () => busy, onRootChosen: async (root: string) => { roots.push(root); }, ipcMain: { handle(channel: string, fn: any) { assert.equal(channel, 'workspace:action'); handler = fn; } },
     dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [root] }) },
     WebContentsView: View, session: { fromPartition(partition: string) {
       const ses: any = new EventEmitter(); ses.partition = partition;
@@ -83,7 +93,7 @@ function harness(root: string) {
     } }, trustedWindow: (event: any) => { if (event?.win !== win && event?.win !== second) throw new Error('untrusted'); return event.win; } });
   const call = (action: string, payload?: any, window = win) => handler({ win: window }, action, payload);
   const answer = (ok: boolean) => call('confirm-response', { id: confirms.at(-1).id, ok });
-  return { win, second, confirms, views, sessions, roots, workspaceApi, answer, call };
+  return { win, second, confirms, views, sessions, roots, workspaceApi, answer, call, setBusy(value: boolean) { busy = value; } };
 }
 
 test('IPC verifies sender, isolates state, confirms permissions, bounds file previews', async () => {
@@ -95,7 +105,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     fs.writeFileSync(path.join(fixture, 'binary.bin'), Buffer.from([0, 1, 2]));
     const h = harness(fixture);
     assert.equal((await h.call('state', {}, {} as any)).ok, false);
-    assert.deepEqual((await h.call('state')).data, { root: null, permission: 'read', modelTools: 'off' });
+    assert.deepEqual((await h.call('state')).data, { root: null, permission: 'write' });
     assert.equal((await h.call('terminal', { command: 'echo no' })).ok, false);
     assert.equal((await h.call('choose')).data.root, fs.realpathSync(fixture));
     assert.equal((await h.call('state', {}, h.second)).data.root, null);
@@ -106,7 +116,7 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     granting = h.call('permission', { permission: 'full' });
     await h.answer(true);
     assert.equal((await granting).data.permission, 'full');
-    assert.match(h.confirms[0].message, /当前用户权限.*工作区外/); assert.match(h.confirms[0].detail, /模型不能执行命令/);
+    assert.match(h.confirms[0].message, /读取和修改工作区外.*执行命令/); assert.match(h.confirms[0].detail, /没有操作系统沙箱/);
     assert.equal((await h.call('read', { relative: 'hello.txt' })).data.content, 'hello');
     const large = (await h.call('read', { relative: 'large.txt' })).data;
     assert.equal(large.content.length, 256 * 1024); assert.equal(large.truncated, true);
@@ -117,18 +127,22 @@ test('IPC verifies sender, isolates state, confirms permissions, bounds file pre
     assert.equal(typeof listing.entries[0].directory, 'boolean');
     for (let i = 0; i < 505; i++) fs.writeFileSync(path.join(fixture, `item-${i}`), '');
     const bounded = (await h.call('files')).data; assert.equal(bounded.entries.length, 500); assert.equal(bounded.truncated, true);
-    assert.equal((await h.call('choose')).data.permission, 'read');
+    assert.equal((await h.call('choose')).data.permission, 'full', 'a directory change inside one session keeps the tier the user chose');
     assert.ok(h.roots.includes(fs.realpathSync(fixture)), 'native picker persists canonical root through host callback');
-    const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
-    assert.equal(h.workspaceApi.adoptRoot(h.win, fixture).permission, 'read');
-    assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'read', modelTools: 'off' });
+    const granted = h.confirms.length;
+    assert.equal((await h.call('permission', { permission: 'full' })).ok, true);
+    assert.equal(h.confirms.length, granted, 're-selecting the tier already in force must not ask for consent again');
+    assert.equal(h.workspaceApi.adoptRoot(h.win, fixture).permission, 'write');
+    assert.equal(h.workspaceApi.adoptRoot(h.win, fixture, 'full').permission, 'full');
+    assert.equal(h.workspaceApi.adoptRoot(h.win, fixture, 'bogus').permission, 'write', 'an unknown stored tier falls back to the default instead of widening');
+    assert.deepEqual(h.workspaceApi.adoptRoot(h.win, null), { root: null, permission: 'write' });
   } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
 });
 
 test('confirmed terminal runs one shell command with bounded output and no inherited provider environment', async () => {
   const h = harness(os.tmpdir());
   await h.call('choose');
-  const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
+  await h.call('permission', { permission: 'write' });
   process.env.WORKSPACE_TEST_SECRET = 'must-not-inherit';
   try {
     const command = process.platform === 'win32' ? 'if ($env:WORKSPACE_TEST_SECRET) { exit 9 }; Write-Output workspace-ok; exit 0' : 'test -z "$WORKSPACE_TEST_SECRET" || exit 9; printf workspace-ok';
@@ -136,32 +150,79 @@ test('confirmed terminal runs one shell command with bounded output and no inher
     const answer = await running;
     assert.equal(answer.ok, true); assert.equal(answer.data.code, 0); assert.match(answer.data.output, /workspace-ok/);
     assert.match(h.confirms.at(-1).detail, /workspace-ok/);
+    const grant = h.call('permission', { permission: 'full' }); await h.answer(true); await grant;
+    const before = h.confirms.length;
+    assert.equal((await h.call('terminal', { command })).ok, true);
+    assert.equal(h.confirms.length, before, 'full permission does not prompt again for manual command');
+    await h.call('permission', { permission: 'write' });
     const largeRunning = h.call('terminal', { command: process.platform === 'win32' ? "Write-Output ('x' * 140000)" : "head -c 140000 /dev/zero | tr '\\0' x" });
     await h.answer(true);
     const large = await largeRunning;
     assert.equal(large.ok, true); assert.equal(large.data.truncated, true);
     assert.ok(Buffer.byteLength(large.data.output) <= 128 * 1024);
+
   } finally { delete process.env.WORKSPACE_TEST_SECRET; }
 });
 
-test('model file permissions are opt-in, root-bound, revoked on navigation and cancellable', async () => {
+test('model file permissions follow workspace tiers, revoke stale generations and cancel approvals', async () => {
   const root = fs.realpathSync(os.tmpdir()), h = harness(root);
-  await h.call('choose');
   assert.equal(h.workspaceApi.modelContext(h.win), undefined);
-  let enabling = h.call('model-tools', {mode:'write'}); await h.answer(false);
-  assert.equal((await enabling).ok, false);
-  enabling = h.call('model-tools', {mode:'write'}); await h.answer(true); await enabling;
+  await h.call('choose');
+  const read = h.workspaceApi.modelContext(h.win);
+  assert.equal(read.permission, 'write');
+  assert.equal((await h.call('model-tools', {mode:'write'})).ok, false);
+  assert.equal((await h.call('permission', {permission:'bogus'})).ok, false);
+  assert.equal((await h.call('permission', {permission:'read'})).ok, true);
+  assert.throws(() => read.check(), /变化/);
   const controller = new AbortController();
   const context = h.workspaceApi.modelContext(h.win, controller.signal);
-  assert.equal(context.workspaceRoot, root); assert.equal(context.writable, true);
+  assert.equal(context.workspaceRoot, root); assert.equal(context.permission, 'read');
   const approval = context.approve('create one.txt', controller.signal);
   const rejected = assert.rejects(approval, /abort/i); controller.abort(); await rejected;
   const fresh = h.workspaceApi.modelContext(h.win);
   const pending = fresh.approve('create two.txt');
   const navigated = assert.rejects(pending, /变化/);
   h.win.webContents.emit('did-start-navigation', {}, 'reload', false, true); await navigated;
-  assert.equal((await h.call('state')).data.modelTools, 'off');
+  assert.equal((await h.call('state')).data.permission, 'write');
+  assert.equal(h.workspaceApi.modelContext(h.win).permission, 'write');
   assert.throws(() => fresh.check(), /变化/);
+});
+
+test('permission changes refuse busy chat, including a request starting during full consent', async () => {
+  const h = harness(fs.realpathSync(os.tmpdir())); await h.call('choose');
+  h.setBusy(true);
+  for (const permission of ['read', 'write', 'full']) assert.equal((await h.call('permission', {permission})).ok, false);
+  assert.equal(h.confirms.length, 0); h.setBusy(false);
+  const grant = h.call('permission', {permission:'full'});
+  h.setBusy(true); await h.answer(true);
+  assert.equal((await grant).ok, false);
+  assert.equal((await h.call('state')).data.permission, 'write'); h.setBusy(false);
+  await h.call('permission', {permission:'write'});
+  const context = h.workspaceApi.modelContext(h.win);
+  h.workspaceApi.revokeModelTools(h.win);
+  assert.throws(() => context.check(), /变化/);
+  assert.equal(h.workspaceApi.modelContext(h.win).permission, 'read');
+});
+
+test('HTML deliverable preview runs only in isolated offline view',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'pa-preview-')),h=harness(root);
+ try{fs.writeFileSync(path.join(root,'demo.html'),'<script>document.title="ran"</script>');await h.call('choose');assert.equal((await h.call('deliverable-preview',{path:'demo.html'})).ok,true);
+ const view=h.views[0],ses=h.sessions[0];assert.equal(view.options.webPreferences.nodeIntegration,false);assert.equal(view.options.webPreferences.preload,undefined);assert.equal(view.options.webPreferences.sandbox,true);
+ for(const url of ['https://example.com/leak','file:///secret','data:text/html,frame'])ses.request({url,resourceType:url.startsWith('data:')?'subFrame':'mainFrame'},(a:any)=>assert.equal(a.cancel,true));
+ ses.request({url:'data:text/html,safe',resourceType:'mainFrame'},(a:any)=>assert.equal(a.cancel,false));assert.deepEqual(view.webContents.open(),{action:'deny'});
+ }finally{h.win.emit('closed');fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('browser tabs retain separate views and close only the selected resource', async()=>{
+  const h=harness(os.tmpdir());
+  assert.equal((await h.call('browser-tab',{id:'one'})).ok,true);
+  await h.call('browser-open',{url:'https://example.com/one'});const one=h.views[0];
+  await h.call('browser-tab',{id:'two'});await h.call('browser-open',{url:'https://example.com/two'});const two=h.views[1];
+  assert.equal(one.webContents.closed,undefined);assert.equal(one.visible,false);
+  await h.call('browser-tab',{id:'one'});await h.call('browser-reload');assert.equal(two.webContents.closed,undefined);
+  await h.call('browser-tab',{id:'two',close:true});assert.equal(two.webContents.closed,true);assert.equal(one.webContents.closed,undefined);
+  assert.equal((await h.call('browser-tab',{id:'../bad'})).ok,false);
+  h.win.emit('closed');assert.equal(one.webContents.closed,true);
 });
 
 test('browser uses ephemeral isolated session, denies unsafe navigation, hides on shell reload and closes', async () => {

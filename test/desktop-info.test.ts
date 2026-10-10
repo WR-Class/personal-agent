@@ -7,11 +7,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const desktop = fileURLToPath(new URL('../desktop/', import.meta.url));
-test('unwired usage is not overwritten by prototype timers', () => {
+test('real composer usage replaces footer placeholder without prototype timers', () => {
   const js = readFileSync(path.join(desktop, 'renderer/app.js'), 'utf8');
   const html = readFileSync(path.join(desktop, 'renderer/index.html'), 'utf8');
+  const chat = readFileSync(path.join(desktop, 'renderer/main-chat.js'), 'utf8');
   assert.doesNotMatch(js, /Math\.random|sbTokens.*textContent\s*=/);
-  assert.match(html, /id="sbTokens"[^>]*>用量未接线/);
+  assert.doesNotMatch(html, /id="sbTokens"|用量未接线/);
+  assert.match(chat, /composer-usage/); assert.match(chat, /renderUsage\(result\.usageSummary\)/);
   assert.doesNotMatch(html, />已连接<|>3 个连接器<|剩余 1,284 积分/);
 });
 test('desktop info and window actions share fail-closed sender validation', async () => {
@@ -42,10 +44,20 @@ test('desktop info and window actions share fail-closed sender validation', asyn
     desktopModelSend: async (...args: unknown[]) => { sends++; sessionIds.push(args[5]); if (broken) throw Error('fixture failure'); return { content: 'ok' }; },
   };
   // Isolate IPC lifecycle from IO; desktop-model.test.ts covers real HTTP/storage.
-  const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8').replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)');
+  const stoppedOwners: string[] = [];
+  const jobsModule = { stopJobs: async (id: string) => { stoppedOwners.push(id); return 0; }, shutdownJobsAsync: async () => 0, listJobs: () => [], isRunning: () => false };
+  const source = readFileSync(path.join(desktop, 'main.cjs'), 'utf8')
+    .replaceAll("import('../src/desktop-model.ts')", 'Promise.resolve(modelModule)')
+    .replaceAll("import('../src/desktop-task-flow.ts')", 'Promise.resolve(taskFlowModule)')
+    .replaceAll("import('../src/background-jobs.ts')", 'Promise.resolve(jobsModule)')
+    .replaceAll("import('../src/desktop-capabilities.ts')", 'Promise.resolve(capabilitiesModule)')
+    .replaceAll("import('../src/skill-packages.ts')", 'Promise.resolve(packagesModule)');
   runInNewContext(source, {
-    modelModule, Buffer, AbortController, Date: { now: () => now },
-    require: (name: string) => name === './chat-index.cjs' ? { find() {}, remember: async () => {}, markFailed: async () => {} } : name === './workspace.cjs' ? { installWorkspace() { return { getRoot: () => null, modelContext: () => undefined }; } } : name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
+    setTimeout,clearTimeout,
+    taskFlowModule:{createDesktopTaskFlow:async()=>({snapshot:()=>({task:null}),tools:[],planning:()=>false,gate(){},guidance:()=>'',async endRound(){return {task:null};},async pause(){}})},
+    packagesModule: { createSkillPackages: () => ({ tools:async()=>[],catalogPrompt:async()=>'',list:async()=>({packages:[]}) }) },
+    modelModule, jobsModule, capabilitiesModule: { createDesktopCapabilities: () => ({ skills:async()=>[],tools:async()=>[],closeOwner:async()=>{} }) }, Buffer, AbortController, Date: { now: () => now },
+    require: (name: string) => name === './chat-index.cjs' ? { find() {}, remember: async () => {}, markFailed: async () => {} } : name === './workspace.cjs' ? { installWorkspace() { return { getRoot: () => null, getPermission: () => 'read', modelContext: () => ({workspaceRoot:'',remoteOnly:true,permission:'read',check(){},async approve(){return false;}}) }; } } : name === 'electron' ? electron : name === 'node:path' ? path : name === 'node:crypto' ? { randomUUID } : { pathToFileURL },
     __dirname: desktop, process: { env: {}, versions: { electron: '44.5.1', chrome: 'test-chrome', node: 'test-node' }, platform: 'win32' }, console,
   });
   await Promise.resolve();
@@ -96,22 +108,28 @@ test('desktop info and window actions share fail-closed sender validation', asyn
   await assert.rejects(chat(valid, 'hi', 0), /重新确认/);
   const a = await settle(preview(valid));
   const inFlight = chat(valid, 'first', a.token, 'renderer-controlled-id');
-  assert.throws(() => reset(valid), /进行中/);
+  await assert.rejects(reset(valid), /进行中/);
   await inFlight;
   await assert.rejects(chat(valid, 'replay', a.token), /重新确认/);
   await chat(valid, 'second', (await settle(preview(valid))).token);
   assert.match(String(sessionIds[2]), /^desktop-chat-/);
   assert.equal(sessionIds[2], sessionIds[3]);
   const changed = preview(valid); await Promise.resolve(); previews.shift()!({ baseUrl: 'https://other.test', model: 'test' });
-  await assert.rejects(chat(valid, 'no transfer', (await changed).token), /新建任务/);
-  reset(valid);
+  await assert.rejects(chat(valid, 'no transfer', (await changed).token), /显式确认模型切换/);
+  await reset(valid);
   broken = true;
   await assert.rejects(chat(valid, 'failure', (await settle(preview(valid))).token), /请求失败/);
   broken = false;
-  await assert.rejects(chat(valid, 'no retry', (await settle(preview(valid))).token), /新建任务/);
-  reset(valid);
+  const failedId = sessionIds.at(-1);
+  await chat(valid, 'explicit continuation', (await settle(preview(valid))).token);
+  assert.equal(sessionIds.at(-1), failedId, 'failure never resets the host conversation');
+  await reset(valid);
   await chat(valid, 'fresh', (await settle(preview(valid))).token);
   assert.notEqual(sessionIds[2], sessionIds.at(-1));
+  assert.ok(stoppedOwners.includes(String(failedId)), 'reset waits for old session job cleanup');
+  const currentId = sessionIds.at(-1);
+  await handlers.get('chat:stop')!(valid);
+  assert.equal(stoppedOwners.at(-1), currentId, 'stop scopes job cleanup to the host-owned session');
 });
 
 test('preload exposes bounded metadata and reports actual renderer isolation', async () => {
@@ -151,6 +169,12 @@ test('preload exposes bounded metadata and reports actual renderer isolation', a
     assert.deepEqual(calls[11], ['desktop:edit', 'copy']);
     await api.desktopCopy('text', 'ignored');
     assert.deepEqual(calls[12], ['desktop:copy', 'text']);
-    assert.deepEqual(Object.keys(api).sort(), ['desktopAction', 'desktopCopy', 'getInfo', 'getProvider', 'listChats', 'listSessions', 'onChatActivity', 'onMaximized', 'onWorkspaceConfirm', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'stopChat', 'windowAction', 'workspace']);
+    await api.switchChatModel(46, 'untrusted-session');
+    assert.deepEqual(calls[13], ['chat:switch-model', 46]);
+    await api.capabilities('list', undefined, 'ignored');
+    assert.deepEqual(calls[14], ['desktop:capabilities', 'list', undefined]);
+    await api.manageChat('pin', {id:'fixture',pinned:true}, 'ignored');
+    assert.deepEqual(calls[15], ['chat:manage', 'pin', {id:'fixture',pinned:true}]);
+    assert.deepEqual(Object.keys(api).sort(), ['capabilities','desktopAction', 'desktopCopy', 'getInfo', 'getProvider', 'listChats', 'listSessions', 'manageChat','memory','onChatActivity','onChatManaged','onChatStream', 'onMaximized', 'onWorkspaceConfirm', 'onWorkspaceInspect', 'openChat', 'platform', 'providerSettings', 'readHistory', 'resetChat', 'sendChat', 'sendEcho', 'sendModel', 'sendTask', 'stopChat', 'switchChatModel', 'task', 'windowAction', 'workspace']);
   }
 });

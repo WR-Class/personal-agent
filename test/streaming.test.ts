@@ -35,6 +35,60 @@ function chunk(delta: Record<string, unknown>, extra: Record<string, unknown> = 
   })}\n\n`;
 }
 
+it('incremental UTF8 preview arrives before completion and never yields tool fragments',async()=>{
+  let finish!:()=>void,first!:()=>void;const ready=new Promise<void>(r=>first=r),gate=new Promise<void>(r=>finish=r);const previews:string[]=[];
+  const adapter=createOpenAIChatAdapter({baseUrl:'https://fixture.invalid',model:'fixture',apiKey:'fixture',stream:true,onText:t=>{previews.push(t);first();},fetchImpl:async()=>new Response(new ReadableStream({async start(c){
+    const bytes=new TextEncoder().encode(chunk({content:'鹈鹕🚲<svg>'}));for(const b of bytes)c.enqueue(Uint8Array.of(b));await gate;
+    c.enqueue(new TextEncoder().encode(chunk({tool_calls:[{index:0,id:'c',type:'function',function:{name:'read_file',arguments:'{}'}}]})+chunk({}, {choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'data: [DONE]\n\n'));c.close();
+  }}))});
+  let completed=false;const run=adapter.chat({messages:[{role:'user',content:'hi'}]}).then(r=>{completed=true;return r;});
+  try{await ready;assert.equal(completed,false);assert.deepEqual(previews,['鹈鹕🚲<svg>']);}finally{finish();}
+  const result=await run;assert.equal(result.toolCalls?.[0]?.arguments,'{}');assert.deepEqual(previews,['鹈鹕🚲<svg>']);
+});
+
+it('long live socket output is previewed before EOF, and upstream error frames reject',async()=>{
+  let release!:()=>void,seen!:()=>void;const gate=new Promise<void>(r=>release=r),preview=new Promise<void>(r=>seen=r);let text='',done=false;
+  const server=await startTestServer(async(req,res)=>{for await(const _ of req){}res.setHeader('Content-Type','text/event-stream');res.write(chunk({content:'<svg>'+ '动画'.repeat(20000)}));await gate;res.end(chunk({}, {choices:[{index:0,delta:{},finish_reason:'stop'}]})+'data: [DONE]\n\n');});servers.push(server);
+  const adapter=createOpenAIChatAdapter({baseUrl:`http://127.0.0.1:${server.port}`,model:'fixture',apiKey:'fixture',stream:true,onText:t=>{text+=t;seen();}});
+  const run=adapter.chat({messages:[{role:'user',content:'svg'}]}).then(r=>{done=true;return r;});
+  try{await preview;assert.equal(done,false);assert.equal(text.length,40005);}finally{release();}
+  assert.equal((await run).content,text);
+  assert.throws(()=>parseSseCompletion(chunk({content:'partial'})+'data: {"error":{"message":"private"}}\n\ndata: [DONE]\n'),/upstream error/);
+});
+
+it('SSE metadata overhead above 1MiB does not truncate a small reasoning response',async()=>{
+  const raw=chunk({reasoning_content:'想'}).repeat(10000)+chunk({content:'答案'})+chunk({}, {choices:[{index:0,delta:{},finish_reason:'stop'}]})+'data: [DONE]\n\n';
+  assert.ok(Buffer.byteLength(raw)>1024*1024);
+  const adapter=createOpenAIChatAdapter({baseUrl:'https://fixture.invalid',model:'fixture',apiKey:'fixture',stream:true,fetchImpl:async()=>new Response(raw)});
+  const result=await adapter.chat({messages:[{role:'user',content:'hi'}]});assert.equal(result.content,'答案');assert.equal(result.reasoning?.length,10000);
+});
+
+it('first-data timeout covers headers and empty body; idle timeout starts after bytes',async()=>{
+  for(const mode of ['headers','empty-body','idle']){
+    const server=await startTestServer(async(req,res)=>{for await(const _ of req){}if(mode!=='headers'){res.writeHead(200,{'Content-Type':'text/event-stream'});res.flushHeaders();}if(mode==='idle')res.write(': heartbeat\n\n');});servers.push(server);
+    const a=createOpenAIChatAdapter({baseUrl:`http://127.0.0.1:${server.port}`,model:'m',apiKey:'fixture',stream:true,timeoutMs:3000,firstDataTimeoutMs:300,idleTimeoutMs:100});
+    await assert.rejects(a.chat({messages:[{role:'user',content:'hi'}]}),{name:mode==='idle'?'StreamIdleTimeoutError':'FirstDataTimeoutError'});
+  }
+});
+it('active stream survives first-data budget, reports safe counters and DONE ends without EOF',async()=>{
+  let closed!:()=>void;const closing=new Promise<void>(r=>closed=r);const counts:any[]=[];
+  const server=await startTestServer(async(req,res)=>{for await(const _ of req){}res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(chunk({reasoning_content:'secret思考'}));let n=0;
+    const timer=setInterval(()=>{res.write(': alive\n\n');if(++n===8){clearInterval(timer);res.write(chunk({content:'OK'})+'data: [DONE]\n\n');}},75);res.on('close',()=>{clearInterval(timer);closed();});});servers.push(server);
+  const a=createOpenAIChatAdapter({baseUrl:`http://127.0.0.1:${server.port}`,model:'m',apiKey:'fixture',stream:true,timeoutMs:3000,firstDataTimeoutMs:400,idleTimeoutMs:400,onProgress:p=>counts.push(p)});
+  const result=await a.chat({messages:[{role:'user',content:'hi'}]});assert.equal(result.content,'OK');assert.equal(counts.at(-1).reasoningChars,8);assert.equal(counts.at(-1).textChars,2);assert.ok(counts.at(-1).bytes>0);assert.ok(!JSON.stringify(counts).includes('secret'));await closing;
+});
+it('total timeout still bounds a stream of heartbeats',async()=>{
+  const server=await startTestServer(async(req,res)=>{for await(const _ of req){}res.write(': first\n\n');const timer=setInterval(()=>res.write(': alive\n\n'),40);res.on('close',()=>clearInterval(timer));});servers.push(server);
+  const a=createOpenAIChatAdapter({baseUrl:`http://127.0.0.1:${server.port}`,model:'m',apiKey:'fixture',stream:true,timeoutMs:450,firstDataTimeoutMs:300,idleTimeoutMs:300});
+  await assert.rejects(a.chat({messages:[{role:'user',content:'hi'}]}),{name:'TimeoutError'});
+});
+
+it('process previews expose provider reasoning and tool metadata, never raw arguments',async()=>{
+  const events:any[]=[];const raw=chunk({reasoning_content:'<svg>provider thought</svg>',tool_calls:[{index:0,id:'a',function:{name:'read_',arguments:'{"private":'}}]})+chunk({tool_calls:[{index:0,function:{name:'file',arguments:'"secret"}'}}]})+'data: [DONE]\n\n';
+  const a=createOpenAIChatAdapter({baseUrl:'https://fixture.invalid',model:'m',apiKey:'test',stream:true,onProcess:e=>events.push(e),fetchImpl:async()=>new Response(raw)});
+  const r=await a.chat({messages:[{role:'user',content:'hi'}]});assert.equal(events[0].reasoning,'<svg>provider thought</svg>');assert.equal(events.at(-1).tool.name,'read_file');assert.equal(events.at(-1).tool.argumentChars,20);assert.ok(!JSON.stringify(events).includes('secret'));assert.equal(r.toolCalls?.[0]?.arguments,'{"private":"secret"}');
+});
+
 const USAGE = { prompt_tokens: 18, completion_tokens: 205, total_tokens: 223,
   completion_tokens_details: { reasoning_tokens: 200 } };
 
@@ -144,7 +198,9 @@ describe("SSE over a real socket", () => {
     assert.equal(response.content, "答案");
     assert.equal(response.reasoning, "thinking harder");
     // Token accounting survives streaming: the share is a subset of the output count.
-    assert.deepEqual(response.usage, { inputTokens: 18, outputTokens: 205, reasoningTokens: 200 });
+    const { durationMs, ...usage } = response.usage;
+    assert.ok(durationMs! > 0 && Number.isFinite(durationMs));
+    assert.deepEqual(usage, { inputTokens: 18, outputTokens: 205, reasoningTokens: 200, reported: true });
 
     const body = JSON.parse(sent) as Record<string, unknown>;
     assert.equal(body.stream, true);
@@ -170,13 +226,13 @@ describe("SSE over a real socket", () => {
     const { baseUrl } = await serveSse(() => {
       const big = "x".repeat(2000);
       let out = "";
-      for (let i = 0; i < 2_000; i += 1) out += chunk({ content: big });
+      for (let i = 0; i < 17_000; i += 1) out += chunk({ content: big });
       return out;
     });
     const adapter = createOpenAIChatAdapter({ baseUrl, apiKey: "k", model: "m", stream: true });
     await assert.rejects(
       () => adapter.chat({ messages: [{ role: "user", content: "hi" }] }),
-      /exceeds the 1048576-byte limit/,
+      /exceeds the 33554432-byte limit/,
     );
   });
 
@@ -267,8 +323,8 @@ describe("CLI streaming flag", () => {
     // runs for a reason that had nothing to do with streaming, so the one field that is
     // *defined* to vary is normalized, and its presence is asserted separately so the
     // normalization cannot hide its removal.
-    const withoutElapsed = (text: string) => text.replace(/用时 [\d.]+s\/[\d.]+s/g, "用时 <计时>/<上限>");
-    assert.match(plainOutput, /用时 [\d.]+s\/[\d.]+s/, "the elapsed field exists and is only excluded from the comparison");
+    const withoutElapsed = (text: string) => text.replace(/用时 [\d.]+s\/(?:[\d.]+s|不限)/g, "用时 <计时>/<上限>");
+    assert.match(plainOutput, /用时 [\d.]+s\/(?:[\d.]+s|不限)/, "the elapsed field exists and is only excluded from the comparison");
     assert.equal(withoutElapsed(plainOutput), withoutElapsed(streamedOutput),
       "streaming changes the transport, not the rendered result");
     assert.notEqual(plainOutput, "", "and the comparison compared something");

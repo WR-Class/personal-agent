@@ -7,6 +7,15 @@ export function tokenCount(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("invalid model response: token count");
   return value;
 }
+export function validateUsageMetadata(usage: Record<string, unknown>): void {
+  if (usage.reported !== undefined && typeof usage.reported !== "boolean") throw new Error("invalid model response: usage.reported");
+  if (usage.cachedInputTokens !== undefined && tokenCount(usage.cachedInputTokens) > tokenCount(usage.inputTokens)) {
+    throw new Error("invalid model response: cached tokens exceed input");
+  }
+  if (usage.durationMs !== undefined && (typeof usage.durationMs !== "number" || !Number.isFinite(usage.durationMs) || usage.durationMs < 0)) {
+    throw new Error("invalid model response: usage.durationMs");
+  }
+}
 export function validateResponse(value: unknown): asserts value is ChatResponse {
   const r = record(value, "object");
   if (typeof r.content !== "string" || typeof r.model !== "string" || !r.model.trim() || !Array.isArray(r.toolCalls)) {
@@ -27,4 +36,5 @@ export function validateResponse(value: unknown): asserts value is ChatResponse 
   // its output count is not something this project can verify, so it is reported
   // as provider-reported rather than second-guessed here.
   if (usage.reasoningTokens !== undefined) tokenCount(usage.reasoningTokens);
+  validateUsageMetadata(usage);
 }

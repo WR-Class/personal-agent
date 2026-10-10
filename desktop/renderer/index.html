@@ -6,10 +6,14 @@
 <title>Personal Agent — Agent 客户端</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; connect-src 'none'">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="agent-states.css">
+<link rel="stylesheet" href="palette.css">
 </head>
 <body data-page-node-id="jdaXKclWZ6fD72CmmuKHEy">
 <!-- ============================ 图标精灵 ============================ -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" data-page-node-id="8VC5fdhuqZ8M1qvvxvAmmI"><defs data-page-node-id="7Ir5OFmY6DRbF5elJAJdYH">
+<!-- 吾荣 App 图标（主）· 源自 吾荣品牌资产/02-App图标/svg/wurong-app-icon.svg，勿手改 -->
+<symbol id="i-wurong" viewBox="0 0 200 200"><linearGradient id="wi-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFB324"/><stop offset="0.5" stop-color="#F5502E"/><stop offset="1" stop-color="#EC1B4F"/></linearGradient><rect x="0" y="0" width="200" height="200" rx="45" fill="url(#wi-bg)"/><g fill="none" stroke="#FFFFFF" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"><path d="M34,72 V64 A30,30 0 0 1 64,34 H136 A30,30 0 0 1 166,64 V72"/><path d="M166,128 V136 A30,30 0 0 1 136,166 H64 A30,30 0 0 1 34,136 V128"/></g><g transform="translate(100,100) scale(0.70) translate(-100,-100)" fill="none" stroke="#FFFFFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"><path d="M36,64 L55,136"/><path d="M55,136 L74,98"/><path d="M74,98 L93,136"/><path d="M93,136 L112,64"/><path d="M132,64 V136"/><path d="M132,70 H146"/><path d="M146,70 A14,14 0 0 1 146,98"/><path d="M146,98 L164,136"/></g></symbol>
 <symbol id="i-plus" viewBox="0 0 16 16" data-page-node-id="Q2Ibv0CyGZ31iuTQ7IHNWd"><path d="M8 3.2v9.6M3.2 8h9.6" data-page-node-id="QvM5MebtdD38bUrEAyefJr"/></symbol>
 <symbol id="i-sparkle" viewBox="0 0 16 16" data-page-node-id="QQ2tzS0EmT9xAuf2s2rWw0"><path d="M8 2l1.5 4.2L13.8 7.7 9.5 9.2 8 13.4 6.5 9.2 2.2 7.7 6.5 6.2z" data-page-node-id="SEO5ojTd8U4eSnr1VuRIAg"/></symbol>
 <symbol id="i-people" viewBox="0 0 16 16" data-page-node-id="Wx4AlMuwDl7JSw7Bdr71v9"><circle cx="6" cy="5.4" r="2.3" data-page-node-id="vPvaVThrxLyy6f34sPpBoN"/><path d="M1.8 13.2c0-2.3 1.9-3.9 4.2-3.9s4.2 1.6 4.2 3.9" data-page-node-id="ojGCSiYD8lOmaf40KBTVno"/><path d="M10.8 4.1a2 2 0 010 3.9M11.6 9.6c1.6.4 2.7 1.6 2.7 3.3" data-page-node-id="6YJxwDBHJidg3l8TMBF1Wk"/></symbol>
@@ -116,7 +120,7 @@
   <!-- ======================= 标题栏 38px ======================= -->
   <header class="titlebar">
     <div class="tb-brand">
-      <div class="tb-mark">PA</div>
+      <div class="tb-mark" aria-hidden="true"><svg viewBox="0 0 200 200" width="18" height="18"><use href="#i-wurong"/></svg></div>
       <div class="tb-name">Personal Agent</div>
     </div>
     <div class="tb-sep"></div>
@@ -189,21 +193,7 @@
         <div class="home" data-page-node-id="rouWGgPLt00HhzzGIrR17g">
           <div class="home-inner" data-page-node-id="YpnEfIQx1PjUupmOHeEOjA">
             <div class="home-hero" data-page-node-id="765BtZPk6ZH34SrNZAstDT">
-              <svg viewBox="0 0 120 120" fill="none" data-page-node-id="ce1PAQJJWKkqA5kCP1x8C2">
-                <defs data-page-node-id="wKSL43bCvRrmgwpEtJhdej">
-                  <linearGradient id="gA" x1="20" y1="14" x2="100" y2="108" gradientUnits="userSpaceOnUse" data-page-node-id="qM5NWu9x6wgNnDxzLgV8Xv">
-                    <stop stop-color="#3dd9b6" data-page-node-id="gPq7amyJr3BLpB7jwEXJS1"/><stop offset="1" stop-color="#00A37F" data-page-node-id="H4UWhq8FHUsQuvg9kcEggz"/>
-                  </linearGradient>
-                  <linearGradient id="gB" x1="36" y1="40" x2="88" y2="92" gradientUnits="userSpaceOnUse" data-page-node-id="Brl0A8BUZizpEhSTDUjamp">
-                    <stop stop-color="#0052d9" data-page-node-id="gvFEzAhQgLDj25ebGfTKpt"/><stop offset="1" stop-color="#4c8bff" data-page-node-id="eeuBU8sodEmCipNgXh2ejU"/>
-                  </linearGradient>
-                </defs>
-                <rect x="14" y="14" width="92" height="92" rx="28" fill="url(#gA)" data-page-node-id="2bASiRf3YWnuwacdrj5MyV"/>
-                <rect x="30" y="30" width="60" height="60" rx="18" fill="#fff" fill-opacity=".92" data-page-node-id="uuUcVg7VGO3CmlChDQQwMB"/>
-                <path d="M44 76c0-11 7-19 16-19s16 8 16 19" stroke="url(#gB)" stroke-width="6" stroke-linecap="round" data-page-node-id="kA7JncPtTnOQ7RP0LHChFC"/>
-                <circle cx="60" cy="46" r="9" fill="url(#gB)" data-page-node-id="ccOO5cwfbUmkpOsyEPF7dw"/>
-                <circle cx="92" cy="30" r="9" fill="#FFC53D" stroke="#fff" stroke-width="3" data-page-node-id="OorEYUmjtfbpE7lVuqRsqP"/>
-              </svg>
+              <svg viewBox="0 0 200 200" aria-hidden="true" data-page-node-id="ce1PAQJJWKkqA5kCP1x8C2"><use href="#i-wurong"/></svg>
             </div>
             <h1 class="home-title" data-page-node-id="b2BR7NNYK3ZK2EIwHbrC9G">
               Personal Agent<span class="wave" data-page-node-id="5HS32lwmxYtcaBjFyYPVpo">，</span>我帮你
@@ -262,7 +252,7 @@
             <svg class="ico" style="width:15px;height:15px" data-page-node-id="bi9UpTeM2lV3WalqtNEddj"><use href="#i-arrow-l" data-page-node-id="3n8EcE32kAZGeRseFqdraX"/></svg>
           </button>
           <div class="ch-title" id="chatTitle" data-page-node-id="zGWFefWpKcxh5KYd9B5ze5">新对话</div>
-          <span class="ch-meta" data-page-node-id="wYJROfMarfQprJe87CpRne">文字问答 · 无工具</span>
+          <span class="ch-meta" data-page-node-id="wYJROfMarfQprJe87CpRne">工具随工作区权限启用</span>
           <span class="grow" data-page-node-id="AHwDFi3DM1S3CJuiq2OKSE"></span>
           <button class="icon-btn" title="分享" data-page-node-id="v4xZhBUlE4MkZeu0JkfFU6"><svg class="ico" style="width:15px;height:15px" data-page-node-id="sCPsoDIE4cFLbcIHSLj2EF"><use href="#i-share" data-page-node-id="EBEb3DSNLZlH2HKbwvCDMv"/></svg></button>
           <button class="icon-btn" title="历史" data-page-node-id="TEYQmeUJyeLOewe5NJNYVC"><svg class="ico" style="width:15px;height:15px" data-page-node-id="d2rpQVp6n5hM3oXwKS28Ax"><use href="#i-history" data-page-node-id="VkS02Gj79q03PV9Gwi29jd"/></svg></button>
@@ -286,9 +276,6 @@
                   <button class="chip-btn" title="技能" data-page-node-id="BOEaX7gMoA6tTF4LLvaGa5"><svg class="ico" data-page-node-id="WWJ0qRJ3wyoDNP1gt0q3Ym"><use href="#i-slash" data-page-node-id="bXGwrCaKHYjSrNeaycd57z"/></svg></button>
                   <button class="chip-btn is-on" data-mode="plan" data-page-node-id="E4EvMnqaSMrvvIX3XqHpBK"><svg class="ico" data-page-node-id="03rGnBO7Ygye87F24EJ6K7"><use href="#i-check" data-page-node-id="8XLh5E1MOYpXazZ9Mi13i7"/></svg>计划</button>
                   <span class="grow" data-page-node-id="LBLDDT9I2hKA8Go2rYEQoC"></span>
-                  <button class="chip-btn" id="btnStop" data-page-node-id="vn1ExarZBCHNVnHVLjforG">
-                    <svg class="ico" data-page-node-id="pyRsI5a4wlSpTH0WKb7JEz"><use href="#i-stop" data-page-node-id="LT252pb32RvoRSTDedFUXw"/></svg>停止
-                  </button>
                   <button class="send is-ready" id="sendChat" title="发送" data-page-node-id="yDTssIxyPSd8xOWOfGsi4c">
                     <svg class="ico" data-page-node-id="OSeTjYCQH9YUzyNj9Bfa6C"><use href="#i-arrow-up" data-page-node-id="N7hyHSqlLHYgiiCAUVRJsa"/></svg>
                   </button>
@@ -305,13 +292,10 @@
   <!-- ======================= 状态栏 22px ======================= -->
   <footer class="statusbar" data-page-node-id="RphFCY52pTeKZd6C4y7Cbw">
     <div class="sb-item" data-page-node-id="mbH5jp8SiujvLqxeiYUVxH"><svg class="ico" data-page-node-id="siAPH9sx33VW3YNbHdgoWh"><use href="#i-branch" data-page-node-id="zAtiMNighC7Omx9ZM8B6ry"/></svg><span class="mono" data-page-node-id="UaYSesuGflfMdN0UqOMEQk">分支未接线</span></div>
-    <div class="sb-item" data-page-node-id="axa5yi449BScGkAeVRYtUD"><svg class="ico" data-page-node-id="FoDax9Nben4Gbpc1XbeNio"><use href="#i-folder" data-page-node-id="b2rb73lCZFyQonds8OCpcP"/></svg><span class="mono" data-page-node-id="dtpWXy7ydxycP68SuwRv9M">文字问答 · 无工具</span></div>
     <div class="sb-item" data-page-node-id="ephcYtajFShnosT6iHDIUy"><svg class="ico" data-page-node-id="PIsGqit1woI1cR3WBfdVMP"><use href="#i-shield" data-page-node-id="HxDJZoLbCb426swysYgq3V"/></svg><span id="sbIsolation" data-page-node-id="P2MeQMVwzJBICslrfABm54">隔离状态待读取 · 工具权限未接线</span></div>
     <span class="sb-grow" data-page-node-id="iSRbKg868qIp9A3BgTBmJG"></span>
     <div class="sb-item" data-page-node-id="zmaLhtWRKFIBz0TXDDCYr7"><span class="sb-dot" data-page-node-id="TFjPjAbHAvhguXcibp0OSf"></span><span id="sbConnection" data-page-node-id="eizVamvkwaQUHZvK7ZvM0j">Agent 未接线</span></div>
-    <div class="sb-item" data-page-node-id="gEkwqk5FLqAqNPN20OU6IA"><svg class="ico" data-page-node-id="TVf8vrP3E4jff4xibW5b2J"><use href="#i-plug" data-page-node-id="ilMVrQUEkVBt3oEy4nSsEx"/></svg><span data-page-node-id="CW9T35H9zbgS1orHJtE2JV">连接器未接线</span></div>
-    <div class="sb-item" data-page-node-id="MFRltGCBLm7CxoIujRqaez"><span class="mono" data-page-node-id="jZLc9pXDcO5DTqHIasE4FE">模型见输入框</span></div>
-    <div class="sb-item" data-page-node-id="H2eATi5rEFKKvECtmbpOBv"><span class="mono" id="sbTokens" data-page-node-id="MhrNeESUJwD33PSpYeHcaj">用量未接线</span></div>
+    <div class="sb-item" data-page-node-id="gEkwqk5FLqAqNPN20OU6IA"><svg class="ico" data-page-node-id="TVf8vrP3E4jff4xibW5b2J"><use href="#i-plug" data-page-node-id="ilMVrQUEkVBt3oEy4nSsEx"/></svg><button type="button" id="btnMcpSettings" title="管理本地 MCP 连接器">MCP 连接器</button></div>
   </footer>
 </div>
 
@@ -368,9 +352,14 @@
 <div class="toast" id="toast"></div>
 
 <script src="providers.js"></script>
+<script src="capabilities.js"></script>
+<script src="picker.js"></script>
+<script src="composer-actions.js"></script>
+<script src="agent-states.js"></script>
 <script src="main-chat.js"></script>
 <script src="app.js"></script>
 <script src="workspace.js"></script>
+<script src="visual-inspector.js"></script>
 
 
 </body>

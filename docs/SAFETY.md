@@ -354,6 +354,20 @@
 
 事故属于外层Agent的测试清理，不能归因于当前personal-agent的内置read_file拥有shell能力。[恢复材料](../../restore/restore-dsh.ps1)仅作证据索引，不自动执行。
 
+## `obs_recall` 的边界（D52/D128）
+
+`obs_recall` 走了一条**没有路径参数**的形状 —— 工具只收 `callId` + 可选 `offset`，按 id 在**本会话自己的日志**里**精确匹配**。
+
+**这条边界的论证（D52 落定）：**
+
+1. **没有路径 ⇒ 没有路径可被收敛**。它不绕过 `assertReadablePath`/`protectedRoots`/`workspaceRoot`，**不绕过是因为它压根没路径**。这是论证，不是绕过。  
+2. **id 是查找键而不是路径分量**。SoL-Pi 的 `obs_recall` 必须验证 `/^obs_[a-f0-9]{24}$/`，因为它**从 id 构路径**来读归档文件；本实现**不构路径**，所以那条正则**不复制** —— 复制过来就是"读起来像安全但啥都没保护"。
+3. **id 的来源是会话日志**，由运行时写、由运行时读；模型对**自己请求里写的 id**没有"换个 id 就能越权"的可达范围扩展 —— 最坏情况是把任意一段它看得到的内容再读一遍，**而那段内容本来就是它看得到的**。
+4. **不存副本**。完整工具结果**本来就逐字落盘**（`runtime.ts` 把 `result.content` 原样 `appendMessage`，ADR-0001 是为这个才立）。不另开归档 ⇒ 不引入"两份真相可能不一致"的失真。
+5. **占位符必须带 id**。`omittedResultPlaceholder(callId?, content)` 没有 callId 时**明说**"no call id was recorded, so it cannot be read back"，**缺席不是邀请猜测**。占位符说"用 obs_recall 读回"时必须**真的能读回** —— 之前那条 `[tool result omitted; N chars remain in the session log]` 是一个**死指针**（说"还在日志里"但没有工具能取），D128 把它换成活指针。
+
+**`job_output` 的先例**：`job_output` 已经存在这条边界上 —— 读后台作业的输出**不**改任何东西；`obs_recall` 同理，**只**读会话自己日志里**已存的**工具结果。
+
 ## 开放新能力前
 
 完整参数校验和审批、授权与执行分离、持久化故障恢复、真实平台隔离和资源预算是后续门槛。当前安全方案只针对受信只读内核，不适合作为开放任意插件/终端的许可。

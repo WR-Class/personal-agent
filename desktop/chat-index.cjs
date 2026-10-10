@@ -5,7 +5,8 @@ const path = require('node:path');
 
 const MAX_SESSIONS = 500;
 const MAX_WORKSPACES = 50;
-const ID = /^desktop-chat-[0-9a-f-]{36}$/;
+const ID = /^desktop-chat-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PERMISSIONS = new Set(['read', 'write', 'full']);
 
 function indexPath(home) { return path.join(home, 'desktop-chat-index.json'); }
 
@@ -28,6 +29,9 @@ function sanitize(raw) {
     updatedAt: s.updatedAt.slice(0, 40),
     workspaceRoot: typeof s.workspaceRoot === 'string' && path.isAbsolute(s.workspaceRoot) ? s.workspaceRoot : null,
     failed: s.failed === true,
+    // Session-scoped tool tier; absent means the default applies, so legacy indexes stay valid.
+    ...(PERMISSIONS.has(s.permission) ? { permission: s.permission } : {}),
+    ...(s.pinned === true ? { pinned: true } : {}),
   })).slice(0, MAX_SESSIONS);
   return { version: 1, workspaces, sessions };
 }
@@ -72,23 +76,48 @@ function writeIndex(home, index) {
 
 /** Serialize windows; reuse the session lease to reject competing desktop processes. */
 let chain = Promise.resolve();
-function update(home, mutate) {
+function withIndexLease(home, action) {
   const next = chain.then(async () => {
     checkDirectory(home);
     const { withSessionLease } = await import('../src/session-lease.ts');
     return withSessionLease(indexPath(home), async () => {
       const index = readIndex(home);
-      const result = mutate(index);
-      writeIndex(home, index);
-      return result;
+      return action(index, () => writeIndex(home, index));
     });
   });
   chain = next.catch(() => {});
   return next;
 }
 
-function remember(home, entry) {
+function update(home, mutate) {
+  return withIndexLease(home, (index, commit) => { const result = mutate(index); commit(); return result; });
+}
+
+function managedEntry(index, id) {
+  if (typeof id !== 'string' || !ID.test(id)) throw Error('invalid desktop session id');
+  const entry = index.sessions.find(s => s.id === id);
+  if (!entry) throw Error('session is not indexed');
+  return entry;
+}
+function cleanTitle(title) {
+  if (typeof title !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(title) || !title.trim() || title.trim().length > 80) throw Error('title must be 1–80 characters without controls');
+  return title.trim();
+}
+async function rename(home, id, title) {
+  const cleaned = cleanTitle(title);
+  return update(home, index => { const entry = managedEntry(index, id); entry.title = cleaned; return entry; });
+}
+function pin(home, id, pinned) {
+  if (typeof pinned !== 'boolean') return Promise.reject(Error('pinned must be boolean'));
+  return update(home, index => { const entry = managedEntry(index, id); if (pinned) entry.pinned = true; else delete entry.pinned; return entry; });
+}
+function deleteMetadata(home, id) {
+  return update(home, index => { const entry = managedEntry(index, id); index.sessions = index.sessions.filter(s => s.id !== id); return entry; });
+}
+
+function remember(home, entry, check = () => {}) {
   return update(home, index => {
+    check(index.sessions.find(s => s.id === entry.id));
     if (entry.workspaceRoot && !index.workspaces.includes(entry.workspaceRoot)) {
       index.workspaces.unshift(entry.workspaceRoot);
       index.workspaces = index.workspaces.slice(0, MAX_WORKSPACES);
@@ -108,6 +137,17 @@ function markFailed(home, id, failed) {
   });
 }
 
+/** Records the tier the user picked for one session; an unknown or unindexed session is a no-op, not an error. */
+function setPermission(home, id, permission) {
+  if (!ID.test(id ?? '') || !PERMISSIONS.has(permission)) return Promise.reject(Error('invalid session permission'));
+  return update(home, index => {
+    const entry = index.sessions.find(s => s.id === id);
+    if (!entry) return null;
+    entry.permission = permission;
+    return entry;
+  });
+}
+
 function rememberWorkspace(home, root) {
   return update(home, index => {
     if (!path.isAbsolute(root)) throw new Error('workspace root must be absolute');
@@ -120,7 +160,7 @@ function list(home) {
   const index = readIndex(home);
   return {
     workspaces: index.workspaces,
-    sessions: index.sessions.map(s => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, workspaceRoot: s.workspaceRoot, failed: s.failed })),
+    sessions: [...index.sessions].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true)).map(s => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, workspaceRoot: s.workspaceRoot, failed: s.failed, ...(s.pinned === true ? { pinned: true } : {}) })),
   };
 }
 
@@ -128,4 +168,4 @@ function find(home, id) {
   return readIndex(home).sessions.find(s => s.id === id) ?? null;
 }
 
-module.exports = { readIndex, writeIndex, sanitize, remember, markFailed, rememberWorkspace, list, find, indexPath, MAX_SESSIONS };
+module.exports = { readIndex, writeIndex, sanitize, remember, markFailed, rememberWorkspace, setPermission, list, find, indexPath, MAX_SESSIONS, rename, pin, deleteMetadata, withIndexLease, managedEntry, cleanTitle };

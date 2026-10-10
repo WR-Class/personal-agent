@@ -71,7 +71,7 @@ it("interactive reports the per-model window and tokenizer env it was given",asy
   const env={PERSONAL_AGENT_CONTEXT_WINDOWS:'{"m":4096}',PERSONAL_AGENT_MAX_CONTEXT_TOKENS:"131072"};
   assert.equal(await main(["--home",f.home,"--workspace",f.workspaceRoot,"--session","s1","--echo"],env,ui.io),0);
   const text=ui.output.join("");
-  assert.match(text,/上限: 步骤 10/);
+  assert.match(text,/上限: 步骤 不限/);
   assert.match(text,/prompt 524288 字节/);
   assert.match(text,/按模型窗口 m=4096/);
 });
@@ -96,9 +96,9 @@ it("run budgets parse from flags and environment and reject non-positive values"
   assert.equal(fromEnv.maxContextBytes,8192);
   assert.equal(fromEnv.maxContextTokens,1024);
   const defaults=parseArgs(["hi"],{});
-  assert.equal(defaults.maxToolCallsPerRun,32);
+  assert.equal(defaults.maxToolCallsPerRun,Infinity);
   assert.equal(defaults.maxToolCallsPerStep,8);
-  assert.equal(defaults.deadlineMs,300_000);
+  assert.equal(defaults.deadlineMs,Infinity);
   assert.equal(defaults.maxContextBytes,524_288);
   assert.equal(defaults.maxContextTokens,131_072);
   for (const flag of ["--max-tools","--max-tools-per-step","--max-send-ms","--max-context-bytes","--max-context-tokens","--max-steps"]) {

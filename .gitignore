@@ -17,3 +17,5 @@ node_modules/
 .spill-fixture-*/
 .verify-*/
 .wt-*/
+.mcp-fixture-*/
+.mcp-plugin-fixture-*/

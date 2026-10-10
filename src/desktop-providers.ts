@@ -13,9 +13,18 @@ export const presets = [
 export interface SecretStorage { isEncryptionAvailable(): boolean; encryptString(v: string): Buffer; decryptString(v: Buffer): string; getSelectedStorageBackend?(): string; }
 export class ProviderError extends Error {}
 const fail = (s: string): never => { throw new ProviderError(s); };
-interface Profile { id: string; name: string; kind: string; baseUrl: string; protocol: string; models: string[]; secret: string; }
+interface Profile { id: string; name: string; kind: string; baseUrl: string; protocol: string; models: string[]; outputLimits?: Record<string,number>; thinkingOff?: string[]; secret: string; }
 interface State { v: number; revision: string; providers: Profile[]; }
 const MAX = 256 * 1024;
+// Measured on this project's own gateways: reasoning is counted against the caller's ceiling, so a
+// ceiling that only fits a long thought leaves no room for a body. 64000 keeps both; models with a
+// smaller provider cap still get their per-model override in Settings → 模型提供商.
+export const DEFAULT_DESKTOP_OUTPUT_TOKENS = 64000;
+export function desktopOutputTokens(value: unknown): number {
+  if (value === undefined) return DEFAULT_DESKTOP_OUTPUT_TOKENS;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 1048576) fail('单次输出上限须为 1–1048576 的整数（tokens），且不能超过服务商限制');
+  return value as number;
+}
 function text(v: unknown, label: string, max = 256): string {
   if (typeof v !== 'string' || !v.trim() || v.length > max || /[\x00-\x1f\x7f]/.test(v)) fail(label + '无效');
   return (v as string).trim();
@@ -35,7 +44,15 @@ function fields(v: unknown) {
   catch { return fail('API 地址须为 HTTPS；HTTP 仅限 localhost/127.0.0.1，不允许账号或查询参数'); }
   if (!Array.isArray(p.models) || p.models.length > 500) fail('模型目录最多 500 项');
   const models: string[] = [...new Set<string>(p.models.map((m: unknown) => text(m, '模型 ID')))];
-  return { id, name: text(p.name, '显示名称', 80), kind: p.kind as string, baseUrl: valid.baseUrl, protocol: 'openai-chat', models };
+  const entries = p.outputLimits === undefined ? [] : Object.entries(object(p.outputLimits));
+  if (entries.length > 500) fail('输出上限配置最多 500 项');
+  const outputLimits = Object.fromEntries(entries.map(([model,value]) => {
+    if (!models.includes(model) || value === undefined) fail('输出上限必须对应已添加的模型');
+    return [model,desktopOutputTokens(value)];
+  }));
+  const thinkingOff=p.thinkingOff??[];
+  if(!Array.isArray(thinkingOff)||thinkingOff.length>500||thinkingOff.some((m:unknown)=>typeof m!=='string'||!models.includes(m)))fail('关闭思考必须对应已添加的模型');
+  return { ...(thinkingOff.length?{thinkingOff:[...new Set<string>(thinkingOff)]}:{}), id, name: text(p.name, '显示名称', 80), kind: p.kind as string, baseUrl: valid.baseUrl, protocol: 'openai-chat', models, ...(entries.length ? {outputLimits} : {}) };
 }
 export class DesktopProviders {
   private home: string;
@@ -144,6 +161,6 @@ export class DesktopProviders {
     const p = state.providers.find(x => x.id === id);
     if (!p || typeof model !== 'string' || !p.models.includes(model)) throw new ProviderError('请选择已保存的提供商与模型');
     this.secure();
-    return { baseUrl: p.baseUrl, model, apiKey: p.secret ? this.crypto.decryptString(Buffer.from(p.secret, 'base64')) : '', revision: state.revision };
+    return { ...(p.thinkingOff?.includes(model)?{thinkingDisabled:true}:{}), baseUrl: p.baseUrl, model, maxTokens: desktopOutputTokens(p.outputLimits && Object.hasOwn(p.outputLimits,model) ? p.outputLimits[model] : undefined), apiKey: p.secret ? this.crypto.decryptString(Buffer.from(p.secret, 'base64')) : '', revision: state.revision };
   }
 }
