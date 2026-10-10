@@ -160,9 +160,13 @@ describe("the ledger", () => {
     });
   });
 
-  it("takes the gene's constraints as the budget when there is a gene", () => {
-    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }, { maxFiles: 3, maxLines: 200, forbiddenPaths: [] }), { maxFiles: 1, maxLines: 20, forbiddenPaths: [] });
-    assert.deepEqual(budgetFor(null, { maxFiles: 3, maxLines: 200, forbiddenPaths: [] }), { maxFiles: 3, maxLines: 200, forbiddenPaths: [] });
+  it("takes a gene's constraints when they widen the default, and the default when they would narrow it", () => {
+    const fallback = { maxFiles: 3, maxLines: 200, forbiddenPaths: [] };
+    assert.deepEqual(budgetFor({ maxFiles: 9, maxLines: 900, forbiddenPaths: [] }, fallback), { maxFiles: 9, maxLines: 900, forbiddenPaths: [] });
+    // COLD_START_BUDGET is what `measuredBudget` returns before anything of this
+    // request kind has been observed: a guess, and a guess must not cut the round.
+    assert.deepEqual(budgetFor({ maxFiles: 1, maxLines: 20, forbiddenPaths: [] }, fallback), fallback);
+    assert.deepEqual(budgetFor(null, fallback), fallback);
   });
 });
 
@@ -297,7 +301,7 @@ describe("enforcement in the runtime", () => {
     assert.equal(result.budget.filesWrittenLimit, 3);
   });
 
-  it("lets a gene's own constraints bound the round", async () => {
+  it("lets a gene widen a round's budget but never narrow it below the default", async () => {
     const target = join(fixture.workspaceRoot, "gene-bounded.txt");
     await writeFile(target, "keep\n", "utf8");
 
@@ -320,7 +324,7 @@ describe("enforcement in the runtime", () => {
       }),
       store, sessionId: "gene-bounded", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
       geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-gene-bounded.jsonl")),
-      // The runtime default would allow 200 lines; the gene allows 1.
+      // The runtime default allows 200 lines; the gene asks for 1.
       maxWriteLines: 200,
       tools: new ToolRegistry([createEditFileTool()]),
       approve: async () => true,
@@ -328,8 +332,11 @@ describe("enforcement in the runtime", () => {
 
     const result = await runtime.send("改一下文件");
     assert.equal(result.appliedGene?.address, minted.address);
-    assert.equal(result.budget.linesWrittenLimit, 1);
-    assert.equal(await readFile(target, "utf8"), "keep\n");
+    // The gene carries COLD_START_BUDGET — a guess, not a measurement. The round
+    // keeps the 200-line default instead of being cut to one line, so it does not
+    // earn the gene a failure the gene was never responsible for.
+    assert.equal(result.budget.linesWrittenLimit, 200);
+    assert.equal(await readFile(target, "utf8"), "a\nb\nc\n");
   });
 
   it("classifies an exhausted write budget as a budget failure", () => {

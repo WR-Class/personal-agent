@@ -202,7 +202,22 @@ export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: nu
 }
 
 /**
- * The budget a round runs under: the applied gene's constraints, else the default.
+ * The budget a round runs under: the applied gene's constraints widened against
+ * the default, or the default alone when no gene applies.
+ *
+ * ⚠️ The two budget axes only ever **widen**. `distill.ts` and `induct.ts` size a
+ * new gene with `measuredBudget`, whose cold start is `COLD_START_BUDGET` =
+ * `{1, 20}` — a guess, and the tightest number in this file. Enforced as a
+ * ceiling it cuts a normal multi-file round to one file; that round then fails on
+ * `WriteBudgetError` with `steps > 0`, so `cycle.ts` charges the failure to the
+ * gene rather than calling it a blocked start, and the library records "this
+ * strategy failed" for what was really "nobody measured this". That is D127's
+ * defect one level up: there the guess was a constant in the minter, here it is
+ * the minter's cold-start return value. `measuredBudget` already says as much of
+ * its own fallback ("a floor, never a ceiling"); this applies it a layer up.
+ *
+ * `forbiddenPaths` is **not** floored: a ban is policy, not a measurement, and
+ * widening it would silently lift a restriction.
  *
  * The parameter type names all three members of `GeneConstraints` rather than
  * accepting the interface itself, so a caller holding something else cannot pass
@@ -216,8 +231,8 @@ export function budgetFor(
 ): WriteBudget {
   if (constraints === null) return fallback;
   return {
-    maxFiles: constraints.maxFiles,
-    maxLines: constraints.maxLines,
+    maxFiles: Math.max(constraints.maxFiles, fallback.maxFiles),
+    maxLines: Math.max(constraints.maxLines, fallback.maxLines),
     forbiddenPaths: constraints.forbiddenPaths ?? [],
   };
 }

@@ -96,12 +96,12 @@ export interface AgentRuntimeOptions {
   maxToolCallsPerRun?: number;
   /**
    * Distinct files one cycle may write when no gene constrains the round.
-   * Defaults to {@link DEFAULT_WRITE_MAX_FILES}. A gene's own `maxFiles` wins.
+   * Defaults to {@link DEFAULT_WRITE_MAX_FILES}. A gene may raise this, never lower it.
    */
   maxWriteFiles?: number;
   /**
    * Lines one cycle may add or change when no gene constrains the round.
-   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene's own `maxLines` wins.
+   * Defaults to {@link DEFAULT_WRITE_MAX_LINES}. A gene may raise this, never lower it.
    */
   maxWriteLines?: number;
   /**
