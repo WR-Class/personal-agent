@@ -1,0 +1,172 @@
+{"text":"修复这个 bug","gold":"fix","probs":{"fix":0.98,"verify":0.5,"research":0.14,"operate":0.17,"build":0.06}}
+{"text":"fix this","gold":"fix","probs":{"fix":0.93,"verify":0.57,"research":0.19,"operate":0.36,"build":0.12}}
+{"text":"改一下有 bug 的代码","gold":"fix","probs":{"fix":0.97,"verify":0.6,"research":0.13,"operate":0.08,"build":0.08}}
+{"text":"修正报错","gold":"fix","probs":{"fix":0.97,"verify":0.56,"research":0.16,"operate":0.33,"build":0.07}}
+{"text":"帮我修一下","gold":"fix","probs":{"fix":0.84,"verify":0.63,"research":0.17,"operate":0.34,"build":0.16}}
+{"text":"代码有 bug","gold":"fix","probs":{"fix":0.96,"verify":0.79,"research":0.39,"operate":0.2,"build":0.08}}
+{"text":"运行时出错","gold":"fix","probs":{"fix":0.85,"verify":0.52,"research":0.33,"operate":0.42,"build":0.08}}
+{"text":"这个函数坏了","gold":"fix","probs":{"fix":0.92,"verify":0.66,"research":0.3,"operate":0.29,"build":0.13}}
+{"text":"patch the bug","gold":"fix","probs":{"fix":0.98,"verify":0.49,"research":0.12,"operate":0.35,"build":0.06}}
+{"text":"改 bug","gold":"fix","probs":{"fix":0.97,"verify":0.51,"research":0.14,"operate":0.2,"build":0.06}}
+{"text":"问题出在哪","gold":"fix","probs":{"fix":0.68,"verify":0.55,"research":0.77,"operate":0.27,"build":0.1}}
+{"text":"the script crashes","gold":"fix","probs":{"fix":0.92,"verify":0.64,"research":0.39,"operate":0.37,"build":0.13}}
+{"text":"runtime error","gold":"fix","probs":{"fix":0.83,"verify":0.51,"research":0.32,"operate":0.27,"build":0.1}}
+{"text":"fix the crash","gold":"fix","probs":{"fix":0.98,"verify":0.48,"research":0.13,"operate":0.25,"build":0.06}}
+{"text":"bug 排查","gold":"fix","probs":{"fix":0.95,"verify":0.78,"research":0.82,"operate":0.32,"build":0.06}}
+{"text":"stack trace","gold":"fix","probs":{"fix":0.59,"verify":0.33,"research":0.51,"operate":0.17,"build":0.12}}
+{"text":"出错日志","gold":"fix","probs":{"fix":0.68,"verify":0.44,"research":0.51,"operate":0.54,"build":0.12}}
+{"text":"crash 了","gold":"fix","probs":{"fix":0.79,"verify":0.36,"research":0.19,"operate":0.38,"build":0.1}}
+{"text":"这个 throw 了","gold":"fix","probs":{"fix":0.43,"verify":0.42,"research":0.28,"operate":0.23,"build":0.18}}
+{"text":"为什么不工作","gold":"fix","probs":{"fix":0.22,"verify":0.32,"research":0.45,"operate":0.21,"build":0.14}}
+{"text":"break 了","gold":"fix","probs":{"fix":0.63,"verify":0.35,"research":0.25,"operate":0.3,"build":0.19}}
+{"text":"has a regression","gold":"fix","probs":{"fix":0.89,"verify":0.6,"research":0.47,"operate":0.43,"build":0.1}}
+{"text":"坏掉了","gold":"fix","probs":{"fix":0.81,"verify":0.38,"research":0.23,"operate":0.32,"build":0.13}}
+{"text":"regress","gold":"fix","probs":{"fix":0.63,"verify":0.36,"research":0.53,"operate":0.18,"build":0.12}}
+{"text":"错误处理","gold":"fix","probs":{"fix":0.63,"verify":0.38,"research":0.45,"operate":0.26,"build":0.28}}
+{"text":"sanity check failed","gold":"fix","probs":{"fix":0.65,"verify":0.87,"research":0.3,"operate":0.32,"build":0.12}}
+{"text":"改一下报错的地方","gold":"fix","probs":{"fix":0.95,"verify":0.35,"research":0.13,"operate":0.15,"build":0.08}}
+{"text":"改这里","gold":"fix","probs":{"fix":0.46,"verify":0.27,"research":0.19,"operate":0.21,"build":0.2}}
+{"text":"改这个 error","gold":"fix","probs":{"fix":0.95,"verify":0.51,"research":0.2,"operate":0.2,"build":0.08}}
+{"text":"验证这个改动","gold":"verify","probs":{"fix":0.44,"verify":0.96,"research":0.63,"operate":0.21,"build":0.09}}
+{"text":"测试一下","gold":"verify","probs":{"fix":0.11,"verify":0.86,"research":0.36,"operate":0.16,"build":0.12}}
+{"text":"run tests","gold":"verify","probs":{"fix":0.21,"verify":0.96,"research":0.22,"operate":0.12,"build":0.05}}
+{"text":"verify this","gold":"verify","probs":{"fix":0.21,"verify":0.95,"research":0.75,"operate":0.16,"build":0.07}}
+{"text":"确认能跑","gold":"verify","probs":{"fix":0.45,"verify":0.89,"research":0.2,"operate":0.52,"build":0.11}}
+{"text":"测试通过了吗","gold":"verify","probs":{"fix":0.22,"verify":0.93,"research":0.51,"operate":0.19,"build":0.08}}
+{"text":"verify the fix","gold":"verify","probs":{"fix":0.91,"verify":0.97,"research":0.5,"operate":0.25,"build":0.05}}
+{"text":"加个测试","gold":"verify","probs":{"fix":0.17,"verify":0.88,"research":0.42,"operate":0.16,"build":0.78}}
+{"text":"回归测试","gold":"verify","probs":{"fix":0.49,"verify":0.92,"research":0.59,"operate":0.2,"build":0.07}}
+{"text":"smoke test","gold":"verify","probs":{"fix":0.25,"verify":0.85,"research":0.61,"operate":0.32,"build":0.12}}
+{"text":"确认结果","gold":"verify","probs":{"fix":0.23,"verify":0.9,"research":0.31,"operate":0.33,"build":0.14}}
+{"text":"跑一下测试","gold":"verify","probs":{"fix":0.18,"verify":0.95,"research":0.38,"operate":0.28,"build":0.08}}
+{"text":"regression test","gold":"verify","probs":{"fix":0.38,"verify":0.9,"research":0.56,"operate":0.19,"build":0.09}}
+{"text":"check it works","gold":"verify","probs":{"fix":0.52,"verify":0.97,"research":0.32,"operate":0.52,"build":0.14}}
+{"text":"test suite","gold":"verify","probs":{"fix":0.25,"verify":0.85,"research":0.49,"operate":0.15,"build":0.22}}
+{"text":"测试覆盖","gold":"verify","probs":{"fix":0.19,"verify":0.86,"research":0.67,"operate":0.16,"build":0.17}}
+{"text":"unit test","gold":"verify","probs":{"fix":0.24,"verify":0.87,"research":0.47,"operate":0.08,"build":0.22}}
+{"text":"integration test","gold":"verify","probs":{"fix":0.26,"verify":0.86,"research":0.52,"operate":0.22,"build":0.21}}
+{"text":"端到端测试","gold":"verify","probs":{"fix":0.21,"verify":0.83,"research":0.7,"operate":0.23,"build":0.21}}
+{"text":"e2e test","gold":"verify","probs":{"fix":0.28,"verify":0.84,"research":0.54,"operate":0.21,"build":0.33}}
+{"text":"add a test","gold":"verify","probs":{"fix":0.14,"verify":0.77,"research":0.2,"operate":0.1,"build":0.6}}
+{"text":"check the output","gold":"verify","probs":{"fix":0.47,"verify":0.95,"research":0.53,"operate":0.22,"build":0.11}}
+{"text":"确认通过","gold":"verify","probs":{"fix":0.14,"verify":0.72,"research":0.17,"operate":0.36,"build":0.12}}
+{"text":"validate","gold":"verify","probs":{"fix":0.26,"verify":0.94,"research":0.39,"operate":0.18,"build":0.18}}
+{"text":"测试一下这个函数","gold":"verify","probs":{"fix":0.2,"verify":0.96,"research":0.5,"operate":0.1,"build":0.12}}
+{"text":"jest","gold":"verify","probs":{"fix":0.15,"verify":0.48,"research":0.35,"operate":0.11,"build":0.22}}
+{"text":"pytest","gold":"verify","probs":{"fix":0.27,"verify":0.77,"research":0.56,"operate":0.12,"build":0.22}}
+{"text":"调研一下这个","gold":"research","probs":{"fix":0.1,"verify":0.32,"research":0.93,"operate":0.15,"build":0.13}}
+{"text":"看看 github 上怎么做的","gold":"research","probs":{"fix":0.2,"verify":0.31,"research":0.85,"operate":0.23,"build":0.25}}
+{"text":"research this","gold":"research","probs":{"fix":0.1,"verify":0.31,"research":0.92,"operate":0.12,"build":0.12}}
+{"text":"对比这几种方案","gold":"research","probs":{"fix":0.12,"verify":0.35,"research":0.92,"operate":0.25,"build":0.11}}
+{"text":"评估一下","gold":"research","probs":{"fix":0.21,"verify":0.77,"research":0.78,"operate":0.22,"build":0.12}}
+{"text":"分析","gold":"research","probs":{"fix":0.23,"verify":0.42,"research":0.81,"operate":0.21,"build":0.19}}
+{"text":"了解一下","gold":"research","probs":{"fix":0.08,"verify":0.18,"research":0.82,"operate":0.14,"build":0.1}}
+{"text":"找一下文档","gold":"research","probs":{"fix":0.06,"verify":0.18,"research":0.64,"operate":0.07,"build":0.07}}
+{"text":"看看有没有现成的库","gold":"research","probs":{"fix":0.09,"verify":0.32,"research":0.8,"operate":0.14,"build":0.22}}
+{"text":"比较几种实现","gold":"research","probs":{"fix":0.12,"verify":0.42,"research":0.91,"operate":0.14,"build":0.15}}
+{"text":"可行性研究","gold":"research","probs":{"fix":0.08,"verify":0.39,"research":0.85,"operate":0.1,"build":0.18}}
+{"text":"做个调研","gold":"research","probs":{"fix":0.05,"verify":0.22,"research":0.95,"operate":0.09,"build":0.12}}
+{"text":"看看怎么实现","gold":"research","probs":{"fix":0.17,"verify":0.32,"research":0.76,"operate":0.24,"build":0.7}}
+{"text":"survey","gold":"research","probs":{"fix":0.11,"verify":0.36,"research":0.86,"operate":0.14,"build":0.19}}
+{"text":"investigate","gold":"research","probs":{"fix":0.21,"verify":0.67,"research":0.93,"operate":0.17,"build":0.21}}
+{"text":"explore the options","gold":"research","probs":{"fix":0.12,"verify":0.15,"research":0.91,"operate":0.18,"build":0.19}}
+{"text":"看一下类似的库","gold":"research","probs":{"fix":0.1,"verify":0.21,"research":0.83,"operate":0.11,"build":0.17}}
+{"text":"对比工具","gold":"research","probs":{"fix":0.17,"verify":0.63,"research":0.84,"operate":0.18,"build":0.4}}
+{"text":"benchmark","gold":"research","probs":{"fix":0.13,"verify":0.63,"research":0.62,"operate":0.21,"build":0.2}}
+{"text":"哪种方案最好","gold":"research","probs":{"fix":0.17,"verify":0.31,"research":0.84,"operate":0.29,"build":0.16}}
+{"text":"可行性分析","gold":"research","probs":{"fix":0.11,"verify":0.52,"research":0.83,"operate":0.16,"build":0.2}}
+{"text":"研究一下","gold":"research","probs":{"fix":0.14,"verify":0.31,"research":0.93,"operate":0.14,"build":0.2}}
+{"text":"docs","gold":"research","probs":{"fix":0.14,"verify":0.27,"research":0.5,"operate":0.16,"build":0.14}}
+{"text":"specification","gold":"research","probs":{"fix":0.2,"verify":0.43,"research":0.53,"operate":0.22,"build":0.31}}
+{"text":"RFC","gold":"research","probs":{"fix":0.2,"verify":0.4,"research":0.52,"operate":0.22,"build":0.33}}
+{"text":"看文档","gold":"research","probs":{"fix":0.07,"verify":0.26,"research":0.56,"operate":0.09,"build":0.08}}
+{"text":"看一下最佳实践","gold":"research","probs":{"fix":0.13,"verify":0.44,"research":0.79,"operate":0.29,"build":0.13}}
+{"text":"compare libraries","gold":"research","probs":{"fix":0.07,"verify":0.22,"research":0.9,"operate":0.1,"build":0.12}}
+{"text":"选型","gold":"research","probs":{"fix":0.14,"verify":0.3,"research":0.74,"operate":0.23,"build":0.18}}
+{"text":"帮我做服务器运维","gold":"operate","probs":{"fix":0.3,"verify":0.26,"research":0.36,"operate":0.95,"build":0.18}}
+{"text":"服务器重启","gold":"operate","probs":{"fix":0.24,"verify":0.26,"research":0.22,"operate":0.66,"build":0.04}}
+{"text":"system maintenance","gold":"operate","probs":{"fix":0.4,"verify":0.45,"research":0.38,"operate":0.86,"build":0.1}}
+{"text":"deploy now","gold":"operate","probs":{"fix":0.1,"verify":0.23,"research":0.08,"operate":0.89,"build":0.13}}
+{"text":"operate cluster","gold":"operate","probs":{"fix":0.23,"verify":0.27,"research":0.29,"operate":0.92,"build":0.13}}
+{"text":"维护这个服务","gold":"operate","probs":{"fix":0.52,"verify":0.53,"research":0.19,"operate":0.93,"build":0.08}}
+{"text":"线上检查","gold":"operate","probs":{"fix":0.23,"verify":0.87,"research":0.66,"operate":0.62,"build":0.18}}
+{"text":"系统升级","gold":"operate","probs":{"fix":0.2,"verify":0.31,"research":0.35,"operate":0.63,"build":0.38}}
+{"text":"重启服务","gold":"operate","probs":{"fix":0.48,"verify":0.31,"research":0.11,"operate":0.79,"build":0.04}}
+{"text":"检查日志","gold":"operate","probs":{"fix":0.18,"verify":0.67,"research":0.77,"operate":0.73,"build":0.08}}
+{"text":"系统监控","gold":"operate","probs":{"fix":0.19,"verify":0.48,"research":0.63,"operate":0.89,"build":0.24}}
+{"text":"deploy","gold":"operate","probs":{"fix":0.15,"verify":0.34,"research":0.18,"operate":0.8,"build":0.18}}
+{"text":"重启 pod","gold":"operate","probs":{"fix":0.63,"verify":0.31,"research":0.15,"operate":0.81,"build":0.04}}
+{"text":"服务器探活","gold":"operate","probs":{"fix":0.29,"verify":0.9,"research":0.7,"operate":0.91,"build":0.4}}
+{"text":"服务挂了","gold":"operate","probs":{"fix":0.89,"verify":0.51,"research":0.28,"operate":0.79,"build":0.06}}
+{"text":"线上事故","gold":"operate","probs":{"fix":0.65,"verify":0.47,"research":0.56,"operate":0.66,"build":0.14}}
+{"text":"发版","gold":"operate","probs":{"fix":0.17,"verify":0.48,"research":0.25,"operate":0.77,"build":0.28}}
+{"text":"回滚","gold":"operate","probs":{"fix":0.63,"verify":0.24,"research":0.28,"operate":0.42,"build":0.05}}
+{"text":"rollback","gold":"operate","probs":{"fix":0.58,"verify":0.29,"research":0.27,"operate":0.45,"build":0.08}}
+{"text":"运维","gold":"operate","probs":{"fix":0.47,"verify":0.37,"research":0.5,"operate":0.91,"build":0.16}}
+{"text":"线上告警","gold":"operate","probs":{"fix":0.5,"verify":0.56,"research":0.54,"operate":0.86,"build":0.34}}
+{"text":"CPU 飙高","gold":"operate","probs":{"fix":0.58,"verify":0.23,"research":0.55,"operate":0.65,"build":0.11}}
+{"text":"扩容","gold":"operate","probs":{"fix":0.11,"verify":0.18,"research":0.41,"operate":0.54,"build":0.45}}
+{"text":"缩容","gold":"operate","probs":{"fix":0.16,"verify":0.2,"research":0.42,"operate":0.51,"build":0.1}}
+{"text":"scale up","gold":"operate","probs":{"fix":0.11,"verify":0.2,"research":0.46,"operate":0.54,"build":0.26}}
+{"text":"k8s deploy","gold":"operate","probs":{"fix":0.19,"verify":0.36,"research":0.48,"operate":0.87,"build":0.28}}
+{"text":"docker restart","gold":"operate","probs":{"fix":0.39,"verify":0.21,"research":0.23,"operate":0.81,"build":0.06}}
+{"text":"服务器负载","gold":"operate","probs":{"fix":0.22,"verify":0.37,"research":0.61,"operate":0.72,"build":0.13}}
+{"text":"生产环境","gold":"operate","probs":{"fix":0.39,"verify":0.5,"research":0.49,"operate":0.86,"build":0.17}}
+{"text":"staging","gold":"operate","probs":{"fix":0.16,"verify":0.43,"research":0.52,"operate":0.46,"build":0.25}}
+{"text":"prod hotfix","gold":"operate","probs":{"fix":0.91,"verify":0.68,"research":0.29,"operate":0.83,"build":0.1}}
+{"text":"生产事故","gold":"operate","probs":{"fix":0.61,"verify":0.35,"research":0.57,"operate":0.54,"build":0.12}}
+{"text":"写一个新功能","gold":"build","probs":{"fix":0.06,"verify":0.21,"research":0.26,"operate":0.21,"build":0.98}}
+{"text":"实现一下","gold":"build","probs":{"fix":0.21,"verify":0.29,"research":0.26,"operate":0.29,"build":0.89}}
+{"text":"add feature","gold":"build","probs":{"fix":0.08,"verify":0.24,"research":0.24,"operate":0.18,"build":0.96}}
+{"text":"写个新方法","gold":"build","probs":{"fix":0.09,"verify":0.18,"research":0.31,"operate":0.1,"build":0.95}}
+{"text":"重构这个函数","gold":"build","probs":{"fix":0.19,"verify":0.3,"research":0.25,"operate":0.06,"build":0.12}}
+{"text":"重构代码","gold":"build","probs":{"fix":0.21,"verify":0.36,"research":0.21,"operate":0.1,"build":0.09}}
+{"text":"重构一下模块","gold":"build","probs":{"fix":0.2,"verify":0.26,"research":0.28,"operate":0.13,"build":0.17}}
+{"text":"重构","gold":"build","probs":{"fix":0.33,"verify":0.36,"research":0.43,"operate":0.16,"build":0.11}}
+{"text":"refactor this module","gold":"build","probs":{"fix":0.17,"verify":0.28,"research":0.21,"operate":0.08,"build":0.11}}
+{"text":"clean up the code","gold":"build","probs":{"fix":0.19,"verify":0.29,"research":0.09,"operate":0.09,"build":0.06}}
+{"text":"用 snippet 方式改一处","gold":"build","probs":{"fix":0.44,"verify":0.22,"research":0.23,"operate":0.11,"build":0.27}}
+{"text":"用 snippet 改一处","gold":"build","probs":{"fix":0.51,"verify":0.24,"research":0.2,"operate":0.11,"build":0.19}}
+{"text":"snippet 改一处","gold":"build","probs":{"fix":0.76,"verify":0.35,"research":0.19,"operate":0.12,"build":0.14}}
+{"text":"code snippet 改一下","gold":"build","probs":{"fix":0.43,"verify":0.26,"research":0.15,"operate":0.09,"build":0.32}}
+{"text":"snippet 修复","gold":"build","probs":{"fix":0.93,"verify":0.61,"research":0.27,"operate":0.15,"build":0.15}}
+{"text":"加一段新代码","gold":"build","probs":{"fix":0.1,"verify":0.23,"research":0.12,"operate":0.15,"build":0.95}}
+{"text":"添加字段","gold":"build","probs":{"fix":0.1,"verify":0.19,"research":0.28,"operate":0.14,"build":0.82}}
+{"text":"新建项目","gold":"build","probs":{"fix":0.06,"verify":0.18,"research":0.37,"operate":0.21,"build":0.77}}
+{"text":"实现需求","gold":"build","probs":{"fix":0.18,"verify":0.4,"research":0.33,"operate":0.37,"build":0.87}}
+{"text":"写个新模块","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.25,"operate":0.22,"build":0.96}}
+{"text":"实现这个 API","gold":"build","probs":{"fix":0.13,"verify":0.25,"research":0.2,"operate":0.22,"build":0.94}}
+{"text":"build the form","gold":"build","probs":{"fix":0.11,"verify":0.2,"research":0.68,"operate":0.14,"build":0.89}}
+{"text":"写代码","gold":"build","probs":{"fix":0.22,"verify":0.25,"research":0.19,"operate":0.21,"build":0.89}}
+{"text":"implement","gold":"build","probs":{"fix":0.21,"verify":0.29,"research":0.24,"operate":0.59,"build":0.85}}
+{"text":"write a function","gold":"build","probs":{"fix":0.11,"verify":0.19,"research":0.15,"operate":0.06,"build":0.95}}
+{"text":"add a method","gold":"build","probs":{"fix":0.11,"verify":0.18,"research":0.17,"operate":0.09,"build":0.96}}
+{"text":"create a new endpoint","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.16,"operate":0.33,"build":0.97}}
+{"text":"写个 API","gold":"build","probs":{"fix":0.08,"verify":0.18,"research":0.23,"operate":0.22,"build":0.95}}
+{"text":"添加路由","gold":"build","probs":{"fix":0.13,"verify":0.25,"research":0.26,"operate":0.48,"build":0.91}}
+{"text":"新增菜单","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.34,"operate":0.14,"build":0.88}}
+{"text":"加按钮","gold":"build","probs":{"fix":0.11,"verify":0.19,"research":0.17,"operate":0.14,"build":0.92}}
+{"text":"feature flag","gold":"build","probs":{"fix":0.18,"verify":0.3,"research":0.57,"operate":0.33,"build":0.35}}
+{"text":"新增","gold":"build","probs":{"fix":0.1,"verify":0.22,"research":0.38,"operate":0.25,"build":0.84}}
+{"text":"做这个 feature","gold":"build","probs":{"fix":0.13,"verify":0.26,"research":0.21,"operate":0.29,"build":0.95}}
+{"text":"tweak","gold":"build","probs":{"fix":0.46,"verify":0.34,"research":0.29,"operate":0.36,"build":0.21}}
+{"text":"调整一下","gold":"build","probs":{"fix":0.4,"verify":0.3,"research":0.21,"operate":0.33,"build":0.18}}
+{"text":"重写","gold":"build","probs":{"fix":0.24,"verify":0.23,"research":0.25,"operate":0.17,"build":0.19}}
+{"text":"rewrite","gold":"build","probs":{"fix":0.25,"verify":0.24,"research":0.24,"operate":0.17,"build":0.16}}
+{"text":"migrate","gold":"build","probs":{"fix":0.14,"verify":0.22,"research":0.43,"operate":0.39,"build":0.26}}
+{"text":"迁移","gold":"build","probs":{"fix":0.13,"verify":0.24,"research":0.51,"operate":0.4,"build":0.24}}
+{"text":"写个新页面","gold":"build","probs":{"fix":0.06,"verify":0.14,"research":0.21,"operate":0.13,"build":0.88}}
+{"text":"前端组件","gold":"build","probs":{"fix":0.23,"verify":0.31,"research":0.52,"operate":0.21,"build":0.5}}
+{"text":"优化一下","gold":"build","probs":{"fix":0.25,"verify":0.34,"research":0.31,"operate":0.18,"build":0.18}}
+{"text":"improve","gold":"build","probs":{"fix":0.4,"verify":0.31,"research":0.34,"operate":0.18,"build":0.31}}
+{"text":"clean up","gold":"build","probs":{"fix":0.23,"verify":0.21,"research":0.13,"operate":0.16,"build":0.12}}
+{"text":"代码清理","gold":"build","probs":{"fix":0.22,"verify":0.43,"research":0.32,"operate":0.1,"build":0.07}}
+{"text":"改一下样式","gold":"build","probs":{"fix":0.13,"verify":0.14,"research":0.11,"operate":0.07,"build":0.1}}
+{"text":"调整 UI","gold":"build","probs":{"fix":0.21,"verify":0.24,"research":0.19,"operate":0.15,"build":0.13}}
+{"text":"加个 loading","gold":"build","probs":{"fix":0.17,"verify":0.21,"research":0.22,"operate":0.14,"build":0.85}}
+{"text":"添加分页","gold":"build","probs":{"fix":0.13,"verify":0.24,"research":0.24,"operate":0.12,"build":0.94}}
+{"text":"实现分页逻辑","gold":"build","probs":{"fix":0.14,"verify":0.27,"research":0.31,"operate":0.09,"build":0.93}}
+{"text":"form validation","gold":"build","probs":{"fix":0.29,"verify":0.59,"research":0.65,"operate":0.14,"build":0.54}}
+{"text":"表单校验","gold":"build","probs":{"fix":0.25,"verify":0.73,"research":0.62,"operate":0.14,"build":0.55}}
+{"text":"写个 cron job","gold":"build","probs":{"fix":0.08,"verify":0.2,"research":0.2,"operate":0.74,"build":0.94}}
+{"text":"新接口","gold":"build","probs":{"fix":0.2,"verify":0.41,"research":0.52,"operate":0.29,"build":0.76}}

@@ -1,0 +1,383 @@
+{"text":"修复这个 bug","gold":"fix","probs":{"fix":0.98,"verify":0.5,"research":0.14,"operate":0.17,"build":0.06}}
+{"text":"fix this","gold":"fix","probs":{"fix":0.93,"verify":0.57,"research":0.19,"operate":0.36,"build":0.12}}
+{"text":"改一下有 bug 的代码","gold":"fix","probs":{"fix":0.97,"verify":0.6,"research":0.13,"operate":0.08,"build":0.08}}
+{"text":"修正报错","gold":"fix","probs":{"fix":0.97,"verify":0.56,"research":0.16,"operate":0.33,"build":0.07}}
+{"text":"帮我修一下","gold":"fix","probs":{"fix":0.84,"verify":0.63,"research":0.17,"operate":0.34,"build":0.16}}
+{"text":"代码有 bug","gold":"fix","probs":{"fix":0.96,"verify":0.79,"research":0.39,"operate":0.2,"build":0.08}}
+{"text":"运行时出错","gold":"fix","probs":{"fix":0.85,"verify":0.52,"research":0.33,"operate":0.42,"build":0.08}}
+{"text":"这个函数坏了","gold":"fix","probs":{"fix":0.92,"verify":0.66,"research":0.3,"operate":0.29,"build":0.13}}
+{"text":"patch the bug","gold":"fix","probs":{"fix":0.98,"verify":0.49,"research":0.12,"operate":0.35,"build":0.06}}
+{"text":"改 bug","gold":"fix","probs":{"fix":0.97,"verify":0.51,"research":0.14,"operate":0.2,"build":0.06}}
+{"text":"问题出在哪","gold":"fix","probs":{"fix":0.68,"verify":0.55,"research":0.77,"operate":0.27,"build":0.1}}
+{"text":"the script crashes","gold":"fix","probs":{"fix":0.92,"verify":0.64,"research":0.39,"operate":0.37,"build":0.13}}
+{"text":"runtime error","gold":"fix","probs":{"fix":0.83,"verify":0.51,"research":0.32,"operate":0.27,"build":0.1}}
+{"text":"fix the crash","gold":"fix","probs":{"fix":0.98,"verify":0.48,"research":0.13,"operate":0.25,"build":0.06}}
+{"text":"bug 排查","gold":"fix","probs":{"fix":0.95,"verify":0.78,"research":0.82,"operate":0.32,"build":0.06}}
+{"text":"stack trace","gold":"fix","probs":{"fix":0.59,"verify":0.33,"research":0.51,"operate":0.17,"build":0.12}}
+{"text":"出错日志","gold":"fix","probs":{"fix":0.68,"verify":0.44,"research":0.51,"operate":0.54,"build":0.12}}
+{"text":"crash 了","gold":"fix","probs":{"fix":0.79,"verify":0.36,"research":0.19,"operate":0.38,"build":0.1}}
+{"text":"这个 throw 了","gold":"fix","probs":{"fix":0.43,"verify":0.42,"research":0.28,"operate":0.23,"build":0.18}}
+{"text":"为什么不工作","gold":"fix","probs":{"fix":0.22,"verify":0.32,"research":0.45,"operate":0.21,"build":0.14}}
+{"text":"break 了","gold":"fix","probs":{"fix":0.63,"verify":0.35,"research":0.25,"operate":0.3,"build":0.19}}
+{"text":"has a regression","gold":"fix","probs":{"fix":0.89,"verify":0.6,"research":0.47,"operate":0.43,"build":0.1}}
+{"text":"坏掉了","gold":"fix","probs":{"fix":0.81,"verify":0.38,"research":0.23,"operate":0.32,"build":0.13}}
+{"text":"regress","gold":"fix","probs":{"fix":0.63,"verify":0.36,"research":0.53,"operate":0.18,"build":0.12}}
+{"text":"错误处理","gold":"fix","probs":{"fix":0.63,"verify":0.38,"research":0.45,"operate":0.26,"build":0.28}}
+{"text":"sanity check failed","gold":"fix","probs":{"fix":0.65,"verify":0.87,"research":0.3,"operate":0.32,"build":0.12}}
+{"text":"改一下报错的地方","gold":"fix","probs":{"fix":0.95,"verify":0.35,"research":0.13,"operate":0.15,"build":0.08}}
+{"text":"改这里","gold":"fix","probs":{"fix":0.46,"verify":0.27,"research":0.19,"operate":0.21,"build":0.2}}
+{"text":"改这个 error","gold":"fix","probs":{"fix":0.95,"verify":0.51,"research":0.2,"operate":0.2,"build":0.08}}
+{"text":"验证这个改动","gold":"verify","probs":{"fix":0.44,"verify":0.96,"research":0.63,"operate":0.21,"build":0.09}}
+{"text":"测试一下","gold":"verify","probs":{"fix":0.11,"verify":0.86,"research":0.36,"operate":0.16,"build":0.12}}
+{"text":"run tests","gold":"verify","probs":{"fix":0.21,"verify":0.96,"research":0.22,"operate":0.12,"build":0.05}}
+{"text":"verify this","gold":"verify","probs":{"fix":0.21,"verify":0.95,"research":0.75,"operate":0.16,"build":0.07}}
+{"text":"确认能跑","gold":"verify","probs":{"fix":0.45,"verify":0.89,"research":0.2,"operate":0.52,"build":0.11}}
+{"text":"测试通过了吗","gold":"verify","probs":{"fix":0.22,"verify":0.93,"research":0.51,"operate":0.19,"build":0.08}}
+{"text":"verify the fix","gold":"verify","probs":{"fix":0.91,"verify":0.97,"research":0.5,"operate":0.25,"build":0.05}}
+{"text":"加个测试","gold":"verify","probs":{"fix":0.17,"verify":0.88,"research":0.42,"operate":0.16,"build":0.78}}
+{"text":"回归测试","gold":"verify","probs":{"fix":0.49,"verify":0.92,"research":0.59,"operate":0.2,"build":0.07}}
+{"text":"smoke test","gold":"verify","probs":{"fix":0.25,"verify":0.85,"research":0.61,"operate":0.32,"build":0.12}}
+{"text":"确认结果","gold":"verify","probs":{"fix":0.23,"verify":0.9,"research":0.31,"operate":0.33,"build":0.14}}
+{"text":"跑一下测试","gold":"verify","probs":{"fix":0.18,"verify":0.95,"research":0.38,"operate":0.28,"build":0.08}}
+{"text":"regression test","gold":"verify","probs":{"fix":0.38,"verify":0.9,"research":0.56,"operate":0.19,"build":0.09}}
+{"text":"check it works","gold":"verify","probs":{"fix":0.52,"verify":0.97,"research":0.32,"operate":0.52,"build":0.14}}
+{"text":"test suite","gold":"verify","probs":{"fix":0.25,"verify":0.85,"research":0.49,"operate":0.15,"build":0.22}}
+{"text":"测试覆盖","gold":"verify","probs":{"fix":0.19,"verify":0.86,"research":0.67,"operate":0.16,"build":0.17}}
+{"text":"unit test","gold":"verify","probs":{"fix":0.24,"verify":0.87,"research":0.47,"operate":0.08,"build":0.22}}
+{"text":"integration test","gold":"verify","probs":{"fix":0.26,"verify":0.86,"research":0.52,"operate":0.22,"build":0.21}}
+{"text":"端到端测试","gold":"verify","probs":{"fix":0.21,"verify":0.83,"research":0.7,"operate":0.23,"build":0.21}}
+{"text":"e2e test","gold":"verify","probs":{"fix":0.28,"verify":0.84,"research":0.54,"operate":0.21,"build":0.33}}
+{"text":"add a test","gold":"verify","probs":{"fix":0.14,"verify":0.77,"research":0.2,"operate":0.1,"build":0.6}}
+{"text":"check the output","gold":"verify","probs":{"fix":0.47,"verify":0.95,"research":0.53,"operate":0.22,"build":0.11}}
+{"text":"确认通过","gold":"verify","probs":{"fix":0.14,"verify":0.72,"research":0.17,"operate":0.36,"build":0.12}}
+{"text":"validate","gold":"verify","probs":{"fix":0.26,"verify":0.94,"research":0.39,"operate":0.18,"build":0.18}}
+{"text":"测试一下这个函数","gold":"verify","probs":{"fix":0.2,"verify":0.96,"research":0.5,"operate":0.1,"build":0.12}}
+{"text":"jest","gold":"verify","probs":{"fix":0.15,"verify":0.48,"research":0.35,"operate":0.11,"build":0.22}}
+{"text":"pytest","gold":"verify","probs":{"fix":0.27,"verify":0.77,"research":0.56,"operate":0.12,"build":0.22}}
+{"text":"调研一下这个","gold":"research","probs":{"fix":0.1,"verify":0.32,"research":0.93,"operate":0.15,"build":0.13}}
+{"text":"看看 github 上怎么做的","gold":"research","probs":{"fix":0.2,"verify":0.31,"research":0.85,"operate":0.23,"build":0.25}}
+{"text":"research this","gold":"research","probs":{"fix":0.1,"verify":0.31,"research":0.92,"operate":0.12,"build":0.12}}
+{"text":"对比这几种方案","gold":"research","probs":{"fix":0.12,"verify":0.35,"research":0.92,"operate":0.25,"build":0.11}}
+{"text":"评估一下","gold":"research","probs":{"fix":0.21,"verify":0.77,"research":0.78,"operate":0.22,"build":0.12}}
+{"text":"分析","gold":"research","probs":{"fix":0.23,"verify":0.42,"research":0.81,"operate":0.21,"build":0.19}}
+{"text":"了解一下","gold":"research","probs":{"fix":0.08,"verify":0.18,"research":0.82,"operate":0.14,"build":0.1}}
+{"text":"找一下文档","gold":"research","probs":{"fix":0.06,"verify":0.18,"research":0.64,"operate":0.07,"build":0.07}}
+{"text":"看看有没有现成的库","gold":"research","probs":{"fix":0.09,"verify":0.32,"research":0.8,"operate":0.14,"build":0.22}}
+{"text":"比较几种实现","gold":"research","probs":{"fix":0.12,"verify":0.42,"research":0.91,"operate":0.14,"build":0.15}}
+{"text":"可行性研究","gold":"research","probs":{"fix":0.08,"verify":0.39,"research":0.85,"operate":0.1,"build":0.18}}
+{"text":"做个调研","gold":"research","probs":{"fix":0.05,"verify":0.22,"research":0.95,"operate":0.09,"build":0.12}}
+{"text":"看看怎么实现","gold":"research","probs":{"fix":0.17,"verify":0.32,"research":0.76,"operate":0.24,"build":0.7}}
+{"text":"survey","gold":"research","probs":{"fix":0.11,"verify":0.36,"research":0.86,"operate":0.14,"build":0.19}}
+{"text":"investigate","gold":"research","probs":{"fix":0.21,"verify":0.67,"research":0.93,"operate":0.17,"build":0.21}}
+{"text":"explore the options","gold":"research","probs":{"fix":0.12,"verify":0.15,"research":0.91,"operate":0.18,"build":0.19}}
+{"text":"看一下类似的库","gold":"research","probs":{"fix":0.1,"verify":0.21,"research":0.83,"operate":0.11,"build":0.17}}
+{"text":"对比工具","gold":"research","probs":{"fix":0.17,"verify":0.63,"research":0.84,"operate":0.18,"build":0.4}}
+{"text":"benchmark","gold":"research","probs":{"fix":0.13,"verify":0.63,"research":0.62,"operate":0.21,"build":0.2}}
+{"text":"哪种方案最好","gold":"research","probs":{"fix":0.17,"verify":0.31,"research":0.84,"operate":0.29,"build":0.16}}
+{"text":"可行性分析","gold":"research","probs":{"fix":0.11,"verify":0.52,"research":0.83,"operate":0.16,"build":0.2}}
+{"text":"研究一下","gold":"research","probs":{"fix":0.14,"verify":0.31,"research":0.93,"operate":0.14,"build":0.2}}
+{"text":"docs","gold":"research","probs":{"fix":0.14,"verify":0.27,"research":0.5,"operate":0.16,"build":0.14}}
+{"text":"specification","gold":"research","probs":{"fix":0.2,"verify":0.43,"research":0.53,"operate":0.22,"build":0.31}}
+{"text":"RFC","gold":"research","probs":{"fix":0.2,"verify":0.4,"research":0.52,"operate":0.22,"build":0.33}}
+{"text":"看文档","gold":"research","probs":{"fix":0.07,"verify":0.26,"research":0.56,"operate":0.09,"build":0.08}}
+{"text":"看一下最佳实践","gold":"research","probs":{"fix":0.13,"verify":0.44,"research":0.79,"operate":0.29,"build":0.13}}
+{"text":"compare libraries","gold":"research","probs":{"fix":0.07,"verify":0.22,"research":0.9,"operate":0.1,"build":0.12}}
+{"text":"选型","gold":"research","probs":{"fix":0.14,"verify":0.3,"research":0.74,"operate":0.23,"build":0.18}}
+{"text":"帮我做服务器运维","gold":"operate","probs":{"fix":0.3,"verify":0.26,"research":0.36,"operate":0.95,"build":0.18}}
+{"text":"服务器重启","gold":"operate","probs":{"fix":0.24,"verify":0.26,"research":0.22,"operate":0.66,"build":0.04}}
+{"text":"system maintenance","gold":"operate","probs":{"fix":0.4,"verify":0.45,"research":0.38,"operate":0.86,"build":0.1}}
+{"text":"deploy now","gold":"operate","probs":{"fix":0.1,"verify":0.23,"research":0.08,"operate":0.89,"build":0.13}}
+{"text":"operate cluster","gold":"operate","probs":{"fix":0.23,"verify":0.27,"research":0.29,"operate":0.92,"build":0.13}}
+{"text":"维护这个服务","gold":"operate","probs":{"fix":0.52,"verify":0.53,"research":0.19,"operate":0.93,"build":0.08}}
+{"text":"线上检查","gold":"operate","probs":{"fix":0.23,"verify":0.87,"research":0.66,"operate":0.62,"build":0.18}}
+{"text":"系统升级","gold":"operate","probs":{"fix":0.2,"verify":0.31,"research":0.35,"operate":0.63,"build":0.38}}
+{"text":"重启服务","gold":"operate","probs":{"fix":0.48,"verify":0.31,"research":0.11,"operate":0.79,"build":0.04}}
+{"text":"检查日志","gold":"operate","probs":{"fix":0.18,"verify":0.67,"research":0.77,"operate":0.73,"build":0.08}}
+{"text":"系统监控","gold":"operate","probs":{"fix":0.19,"verify":0.48,"research":0.63,"operate":0.89,"build":0.24}}
+{"text":"deploy","gold":"operate","probs":{"fix":0.15,"verify":0.34,"research":0.18,"operate":0.8,"build":0.18}}
+{"text":"重启 pod","gold":"operate","probs":{"fix":0.63,"verify":0.31,"research":0.15,"operate":0.81,"build":0.04}}
+{"text":"服务器探活","gold":"operate","probs":{"fix":0.29,"verify":0.9,"research":0.7,"operate":0.91,"build":0.4}}
+{"text":"服务挂了","gold":"operate","probs":{"fix":0.89,"verify":0.51,"research":0.28,"operate":0.79,"build":0.06}}
+{"text":"线上事故","gold":"operate","probs":{"fix":0.65,"verify":0.47,"research":0.56,"operate":0.66,"build":0.14}}
+{"text":"发版","gold":"operate","probs":{"fix":0.17,"verify":0.48,"research":0.25,"operate":0.77,"build":0.28}}
+{"text":"回滚","gold":"operate","probs":{"fix":0.63,"verify":0.24,"research":0.28,"operate":0.42,"build":0.05}}
+{"text":"rollback","gold":"operate","probs":{"fix":0.58,"verify":0.29,"research":0.27,"operate":0.45,"build":0.08}}
+{"text":"运维","gold":"operate","probs":{"fix":0.47,"verify":0.37,"research":0.5,"operate":0.91,"build":0.16}}
+{"text":"线上告警","gold":"operate","probs":{"fix":0.5,"verify":0.56,"research":0.54,"operate":0.86,"build":0.34}}
+{"text":"CPU 飙高","gold":"operate","probs":{"fix":0.58,"verify":0.23,"research":0.55,"operate":0.65,"build":0.11}}
+{"text":"扩容","gold":"operate","probs":{"fix":0.11,"verify":0.18,"research":0.41,"operate":0.54,"build":0.45}}
+{"text":"缩容","gold":"operate","probs":{"fix":0.16,"verify":0.2,"research":0.42,"operate":0.51,"build":0.1}}
+{"text":"scale up","gold":"operate","probs":{"fix":0.11,"verify":0.2,"research":0.46,"operate":0.54,"build":0.26}}
+{"text":"k8s deploy","gold":"operate","probs":{"fix":0.19,"verify":0.36,"research":0.48,"operate":0.87,"build":0.28}}
+{"text":"docker restart","gold":"operate","probs":{"fix":0.39,"verify":0.21,"research":0.23,"operate":0.81,"build":0.06}}
+{"text":"服务器负载","gold":"operate","probs":{"fix":0.22,"verify":0.37,"research":0.61,"operate":0.72,"build":0.13}}
+{"text":"生产环境","gold":"operate","probs":{"fix":0.39,"verify":0.5,"research":0.49,"operate":0.86,"build":0.17}}
+{"text":"staging","gold":"operate","probs":{"fix":0.16,"verify":0.43,"research":0.52,"operate":0.46,"build":0.25}}
+{"text":"prod hotfix","gold":"operate","probs":{"fix":0.91,"verify":0.68,"research":0.29,"operate":0.83,"build":0.1}}
+{"text":"生产事故","gold":"operate","probs":{"fix":0.61,"verify":0.35,"research":0.57,"operate":0.54,"build":0.12}}
+{"text":"写一个新功能","gold":"build","probs":{"fix":0.06,"verify":0.21,"research":0.26,"operate":0.21,"build":0.98}}
+{"text":"实现一下","gold":"build","probs":{"fix":0.21,"verify":0.29,"research":0.26,"operate":0.29,"build":0.89}}
+{"text":"add feature","gold":"build","probs":{"fix":0.08,"verify":0.24,"research":0.24,"operate":0.18,"build":0.96}}
+{"text":"写个新方法","gold":"build","probs":{"fix":0.09,"verify":0.18,"research":0.31,"operate":0.1,"build":0.95}}
+{"text":"重构这个函数","gold":"build","probs":{"fix":0.19,"verify":0.3,"research":0.25,"operate":0.06,"build":0.12}}
+{"text":"重构代码","gold":"build","probs":{"fix":0.21,"verify":0.36,"research":0.21,"operate":0.1,"build":0.09}}
+{"text":"重构一下模块","gold":"build","probs":{"fix":0.2,"verify":0.26,"research":0.28,"operate":0.13,"build":0.17}}
+{"text":"重构","gold":"build","probs":{"fix":0.33,"verify":0.36,"research":0.43,"operate":0.16,"build":0.11}}
+{"text":"refactor this module","gold":"build","probs":{"fix":0.17,"verify":0.28,"research":0.21,"operate":0.08,"build":0.11}}
+{"text":"clean up the code","gold":"build","probs":{"fix":0.19,"verify":0.29,"research":0.09,"operate":0.09,"build":0.06}}
+{"text":"用 snippet 方式改一处","gold":"build","probs":{"fix":0.44,"verify":0.22,"research":0.23,"operate":0.11,"build":0.27}}
+{"text":"用 snippet 改一处","gold":"build","probs":{"fix":0.51,"verify":0.24,"research":0.2,"operate":0.11,"build":0.19}}
+{"text":"snippet 改一处","gold":"build","probs":{"fix":0.76,"verify":0.35,"research":0.19,"operate":0.12,"build":0.14}}
+{"text":"code snippet 改一下","gold":"build","probs":{"fix":0.43,"verify":0.26,"research":0.15,"operate":0.09,"build":0.32}}
+{"text":"snippet 修复","gold":"build","probs":{"fix":0.93,"verify":0.61,"research":0.27,"operate":0.15,"build":0.15}}
+{"text":"加一段新代码","gold":"build","probs":{"fix":0.1,"verify":0.23,"research":0.12,"operate":0.15,"build":0.95}}
+{"text":"添加字段","gold":"build","probs":{"fix":0.1,"verify":0.19,"research":0.28,"operate":0.14,"build":0.82}}
+{"text":"新建项目","gold":"build","probs":{"fix":0.06,"verify":0.18,"research":0.37,"operate":0.21,"build":0.77}}
+{"text":"实现需求","gold":"build","probs":{"fix":0.18,"verify":0.4,"research":0.33,"operate":0.37,"build":0.87}}
+{"text":"写个新模块","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.25,"operate":0.22,"build":0.96}}
+{"text":"实现这个 API","gold":"build","probs":{"fix":0.13,"verify":0.25,"research":0.2,"operate":0.22,"build":0.94}}
+{"text":"build the form","gold":"build","probs":{"fix":0.11,"verify":0.2,"research":0.68,"operate":0.14,"build":0.89}}
+{"text":"写代码","gold":"build","probs":{"fix":0.22,"verify":0.25,"research":0.19,"operate":0.21,"build":0.89}}
+{"text":"implement","gold":"build","probs":{"fix":0.21,"verify":0.29,"research":0.24,"operate":0.59,"build":0.85}}
+{"text":"write a function","gold":"build","probs":{"fix":0.11,"verify":0.19,"research":0.15,"operate":0.06,"build":0.95}}
+{"text":"add a method","gold":"build","probs":{"fix":0.11,"verify":0.18,"research":0.17,"operate":0.09,"build":0.96}}
+{"text":"create a new endpoint","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.16,"operate":0.33,"build":0.97}}
+{"text":"写个 API","gold":"build","probs":{"fix":0.08,"verify":0.18,"research":0.23,"operate":0.22,"build":0.95}}
+{"text":"添加路由","gold":"build","probs":{"fix":0.13,"verify":0.25,"research":0.26,"operate":0.48,"build":0.91}}
+{"text":"新增菜单","gold":"build","probs":{"fix":0.07,"verify":0.2,"research":0.34,"operate":0.14,"build":0.88}}
+{"text":"加按钮","gold":"build","probs":{"fix":0.11,"verify":0.19,"research":0.17,"operate":0.14,"build":0.92}}
+{"text":"feature flag","gold":"build","probs":{"fix":0.18,"verify":0.3,"research":0.57,"operate":0.33,"build":0.35}}
+{"text":"新增","gold":"build","probs":{"fix":0.1,"verify":0.22,"research":0.38,"operate":0.25,"build":0.84}}
+{"text":"做这个 feature","gold":"build","probs":{"fix":0.13,"verify":0.26,"research":0.21,"operate":0.29,"build":0.95}}
+{"text":"tweak","gold":"build","probs":{"fix":0.46,"verify":0.34,"research":0.29,"operate":0.36,"build":0.21}}
+{"text":"调整一下","gold":"build","probs":{"fix":0.4,"verify":0.3,"research":0.21,"operate":0.33,"build":0.18}}
+{"text":"重写","gold":"build","probs":{"fix":0.24,"verify":0.23,"research":0.25,"operate":0.17,"build":0.19}}
+{"text":"rewrite","gold":"build","probs":{"fix":0.25,"verify":0.24,"research":0.24,"operate":0.17,"build":0.16}}
+{"text":"migrate","gold":"build","probs":{"fix":0.14,"verify":0.22,"research":0.43,"operate":0.39,"build":0.26}}
+{"text":"迁移","gold":"build","probs":{"fix":0.13,"verify":0.24,"research":0.51,"operate":0.4,"build":0.24}}
+{"text":"写个新页面","gold":"build","probs":{"fix":0.06,"verify":0.14,"research":0.21,"operate":0.13,"build":0.88}}
+{"text":"前端组件","gold":"build","probs":{"fix":0.23,"verify":0.31,"research":0.52,"operate":0.21,"build":0.5}}
+{"text":"优化一下","gold":"build","probs":{"fix":0.25,"verify":0.34,"research":0.31,"operate":0.18,"build":0.18}}
+{"text":"improve","gold":"build","probs":{"fix":0.4,"verify":0.31,"research":0.34,"operate":0.18,"build":0.31}}
+{"text":"clean up","gold":"build","probs":{"fix":0.23,"verify":0.21,"research":0.13,"operate":0.16,"build":0.12}}
+{"text":"代码清理","gold":"build","probs":{"fix":0.22,"verify":0.43,"research":0.32,"operate":0.1,"build":0.07}}
+{"text":"改一下样式","gold":"build","probs":{"fix":0.13,"verify":0.14,"research":0.11,"operate":0.07,"build":0.1}}
+{"text":"调整 UI","gold":"build","probs":{"fix":0.21,"verify":0.24,"research":0.19,"operate":0.15,"build":0.13}}
+{"text":"加个 loading","gold":"build","probs":{"fix":0.17,"verify":0.21,"research":0.22,"operate":0.14,"build":0.85}}
+{"text":"添加分页","gold":"build","probs":{"fix":0.13,"verify":0.24,"research":0.24,"operate":0.12,"build":0.94}}
+{"text":"实现分页逻辑","gold":"build","probs":{"fix":0.14,"verify":0.27,"research":0.31,"operate":0.09,"build":0.93}}
+{"text":"form validation","gold":"build","probs":{"fix":0.29,"verify":0.59,"research":0.65,"operate":0.14,"build":0.54}}
+{"text":"表单校验","gold":"build","probs":{"fix":0.25,"verify":0.73,"research":0.62,"operate":0.14,"build":0.55}}
+{"text":"写个 cron job","gold":"build","probs":{"fix":0.08,"verify":0.2,"research":0.2,"operate":0.74,"build":0.94}}
+{"text":"新接口","gold":"build","probs":{"fix":0.2,"verify":0.41,"research":0.52,"operate":0.29,"build":0.76}}
+{"text":"怎么使用","gold":"?","probs":{"fix":0.12,"verify":0.17,"research":0.71,"operate":0.31,"build":0.1}}
+{"text":"那就开始吧","gold":"?","probs":{"fix":0.15,"verify":0.23,"research":0.56,"operate":0.29,"build":0.47}}
+{"text":"中文告诉我","gold":"?","probs":{"fix":0.09,"verify":0.15,"research":0.45,"operate":0.12,"build":0.11}}
+{"text":"中转聚合站","gold":"?","probs":{"fix":0.1,"verify":0.24,"research":0.5,"operate":0.41,"build":0.39}}
+{"text":"帮我查清楚啊","gold":"?","probs":{"fix":0.17,"verify":0.82,"research":0.93,"operate":0.15,"build":0.09}}
+{"text":"还没做完吧？","gold":"?","probs":{"fix":0.25,"verify":0.6,"research":0.41,"operate":0.29,"build":0.35}}
+{"text":"渗透安全测试","gold":"?","probs":{"fix":0.21,"verify":0.81,"research":0.72,"operate":0.16,"build":0.12}}
+{"text":"个人Agent","gold":"?","probs":{"fix":0.16,"verify":0.29,"research":0.48,"operate":0.36,"build":0.42}}
+{"text":"现在确实可用了","gold":"?","probs":{"fix":0.2,"verify":0.49,"research":0.19,"operate":0.29,"build":0.11}}
+{"text":"能给个中文面板吗","gold":"?","probs":{"fix":0.11,"verify":0.14,"research":0.29,"operate":0.28,"build":0.55}}
+{"text":"已经重启了，试试","gold":"?","probs":{"fix":0.78,"verify":0.78,"research":0.15,"operate":0.47,"build":0.06}}
+{"text":"中转站每日签到功能","gold":"?","probs":{"fix":0.15,"verify":0.42,"research":0.45,"operate":0.46,"build":0.77}}
+{"text":"已经重启并恢复了会话","gold":"?","probs":{"fix":0.38,"verify":0.26,"research":0.29,"operate":0.27,"build":0.12}}
+{"text":"个人Agent (1)","gold":"?","probs":{"fix":0.19,"verify":0.31,"research":0.47,"operate":0.35,"build":0.35}}
+{"text":"恢复Dsh项目历史记录","gold":"?","probs":{"fix":0.72,"verify":0.28,"research":0.37,"operate":0.24,"build":0.08}}
+{"text":"运行项目目录下的项目文件","gold":"?","probs":{"fix":0.11,"verify":0.51,"research":0.15,"operate":0.42,"build":0.08}}
+{"text":"静默启动，我刚刚把窗口关了","gold":"?","probs":{"fix":0.14,"verify":0.2,"research":0.2,"operate":0.27,"build":0.11}}
+{"text":"看下项目目录里面的东西，知","gold":"?","probs":{"fix":0.16,"verify":0.52,"research":0.73,"operate":0.19,"build":0.18}}
+{"text":"看项目目录，了解这个项目是","gold":"?","probs":{"fix":0.1,"verify":0.24,"research":0.79,"operate":0.15,"build":0.13}}
+{"text":"你是技术调研员。请调研开源","gold":"?","probs":{"fix":0.07,"verify":0.23,"research":0.94,"operate":0.15,"build":0.12}}
+{"text":"你是技术调研员。请调研两个","gold":"?","probs":{"fix":0.07,"verify":0.19,"research":0.93,"operate":0.14,"build":0.13}}
+{"text":"你是技术调研员。任务：把用","gold":"?","probs":{"fix":0.2,"verify":0.29,"research":0.84,"operate":0.3,"build":0.37}}
+{"text":"为什么之前的聊天全部没有了","gold":"?","probs":{"fix":0.6,"verify":0.1,"research":0.38,"operate":0.06,"build":0.08}}
+{"text":"只回复两个字：收到。不要调","gold":"?","probs":{"fix":0.11,"verify":0.28,"research":0.05,"operate":0.11,"build":0.05}}
+{"text":"**窄任务，只读不改，中文报","gold":"?","probs":{"fix":0.08,"verify":0.38,"research":0.52,"operate":0.08,"build":0.04}}
+{"text":"你是只读取证代理,只读源码/","gold":"?","probs":{"fix":0.13,"verify":0.28,"research":0.44,"operate":0.07,"build":0.08}}
+{"text":"你是只读取证代理。**绝对不","gold":"?","probs":{"fix":0.17,"verify":0.35,"research":0.47,"operate":0.17,"build":0.18}}
+{"text":"是我客户端什么文件有问题吗？","gold":"?","probs":{"fix":0.84,"verify":0.82,"research":0.74,"operate":0.33,"build":0.07}}
+{"text":"但是现在就是个界面不能用是吧？","gold":"?","probs":{"fix":0.84,"verify":0.74,"research":0.3,"operate":0.69,"build":0.35}}
+{"text":"确认是否具备蜂群规划与循环工具","gold":"?","probs":{"fix":0.12,"verify":0.9,"research":0.75,"operate":0.35,"build":0.26}}
+{"text":"打造专属插件化聊天Agent方案","gold":"?","probs":{"fix":0.06,"verify":0.18,"research":0.75,"operate":0.33,"build":0.91}}
+{"text":"先说说如何避免此类事情再次发生吧","gold":"?","probs":{"fix":0.55,"verify":0.25,"research":0.62,"operate":0.16,"build":0.11}}
+{"text":"就普通的 没有付费的Apple账号","gold":"?","probs":{"fix":0.11,"verify":0.17,"research":0.36,"operate":0.08,"build":0.08}}
+{"text":"看项目目录，了解这个项目是做什么的","gold":"?","probs":{"fix":0.06,"verify":0.16,"research":0.84,"operate":0.09,"build":0.07}}
+{"text":"你在为一个自研的个人 Agent 产","gold":"?","probs":{"fix":0.21,"verify":0.34,"research":0.57,"operate":0.46,"build":0.69}}
+{"text":"为什么集成应建立在DSH原生接口上？","gold":"?","probs":{"fix":0.11,"verify":0.18,"research":0.74,"operate":0.26,"build":0.24}}
+{"text":"读取项目目录内日志文件，了解我想做什么","gold":"?","probs":{"fix":0.15,"verify":0.23,"research":0.85,"operate":0.21,"build":0.18}}
+{"text":"那是先恢复会话还是先实现1 2两点呢？","gold":"?","probs":{"fix":0.46,"verify":0.27,"research":0.71,"operate":0.33,"build":0.75}}
+{"text":"你的任务：把本机 zzcsapi 的渠","gold":"?","probs":{"fix":0.26,"verify":0.26,"research":0.57,"operate":0.59,"build":0.48}}
+{"text":"这个项目不能帮忙注册iCloud账号？","gold":"?","probs":{"fix":0.12,"verify":0.39,"research":0.47,"operate":0.16,"build":0.56}}
+{"text":"背景：用户本地安装了 workbuddy","gold":"?","probs":{"fix":0.26,"verify":0.43,"research":0.41,"operate":0.51,"build":0.25}}
+{"text":"你的工具列表里有没有 swarm_pla","gold":"?","probs":{"fix":0.11,"verify":0.24,"research":0.56,"operate":0.27,"build":0.22}}
+{"text":"一个Apple账号可以弄多少个api邮箱","gold":"?","probs":{"fix":0.06,"verify":0.13,"research":0.73,"operate":0.09,"build":0.07}}
+{"text":"有没有办法批量注册iCloud的免费账号","gold":"?","probs":{"fix":0.05,"verify":0.15,"research":0.72,"operate":0.11,"build":0.23}}
+{"text":"那就先做A和C ，B也需要做，看看能不能找会","gold":"?","probs":{"fix":0.27,"verify":0.25,"research":0.36,"operate":0.23,"build":0.46}}
+{"text":"你在 Windows 上工作，仓库是 D:\\","gold":"?","probs":{"fix":0.14,"verify":0.22,"research":0.33,"operate":0.22,"build":0.2}}
+{"text":"OK，我测试了两个会话都能切换并继续执行任务了","gold":"?","probs":{"fix":0.27,"verify":0.77,"research":0.14,"operate":0.18,"build":0.08}}
+{"text":"你在 Windows 上工作，仓库 D:\\DSH","gold":"?","probs":{"fix":0.14,"verify":0.23,"research":0.3,"operate":0.23,"build":0.18}}
+{"text":"你这些会话索引都是lab的，不是客户端丢失的数据","gold":"?","probs":{"fix":0.33,"verify":0.4,"research":0.26,"operate":0.23,"build":0.14}}
+{"text":"好的，但是其他的老会话也是同样的问题，需要一块修复","gold":"?","probs":{"fix":0.96,"verify":0.54,"research":0.24,"operate":0.23,"build":0.1}}
+{"text":"两个github项目都拉取到本地启动，我看看什么样","gold":"?","probs":{"fix":0.08,"verify":0.75,"research":0.9,"operate":0.53,"build":0.06}}
+{"text":"Microsoft Rewards 自动脚本项目分析","gold":"?","probs":{"fix":0.26,"verify":0.44,"research":0.83,"operate":0.48,"build":0.4}}
+{"text":"Use the read_image tool to","gold":"?","probs":{"fix":0.13,"verify":0.23,"research":0.66,"operate":0.11,"build":0.18}}
+{"text":"为什么之前的聊天全部没有了？我的工作区现在是空白的了？","gold":"?","probs":{"fix":0.74,"verify":0.14,"research":0.3,"operate":0.07,"build":0.08}}
+{"text":"You are reading real source","gold":"?","probs":{"fix":0.17,"verify":0.4,"research":0.51,"operate":0.19,"build":0.15}}
+{"text":"背景：我们在 D:\\DSHXM\\AgentKHD\\per","gold":"?","probs":{"fix":0.2,"verify":0.28,"research":0.37,"operate":0.32,"build":0.25}}
+{"text":"但是咱们做自己的agent不是吗？和dsh有什么关系呢？","gold":"?","probs":{"fix":0.14,"verify":0.21,"research":0.43,"operate":0.22,"build":0.37}}
+{"text":"那如果想创建临时gmail邮箱呢？我有自己的gmail邮箱","gold":"?","probs":{"fix":0.04,"verify":0.13,"research":0.7,"operate":0.05,"build":0.52}}
+{"text":"说实话没看懂，我现在打开dsh还是没有历史项目和历史记录啊","gold":"?","probs":{"fix":0.68,"verify":0.26,"research":0.66,"operate":0.33,"build":0.16}}
+{"text":"请只读分析 D:\\WorkBuddyXM\\JM\\wb-cli","gold":"?","probs":{"fix":0.12,"verify":0.34,"research":0.79,"operate":0.08,"build":0.06}}
+{"text":"实现 Personal Agent Electron 工作区","gold":"?","probs":{"fix":0.13,"verify":0.34,"research":0.41,"operate":0.53,"build":0.88}}
+{"text":"只读盘点 D:\\DSHXM\\AgentKHD\\personal-","gold":"?","probs":{"fix":0.08,"verify":0.39,"research":0.73,"operate":0.14,"build":0.09}}
+{"text":"只读审查 D:\\DSHXM\\AgentKHD\\personal-","gold":"?","probs":{"fix":0.14,"verify":0.8,"research":0.53,"operate":0.14,"build":0.07}}
+{"text":"只读研究 D:\\DSHXM\\AgentKHD\\personal-","gold":"?","probs":{"fix":0.11,"verify":0.22,"research":0.71,"operate":0.12,"build":0.11}}
+{"text":"项目 D:\\DSHXM\\AgentKHD\\personal-agent","gold":"?","probs":{"fix":0.19,"verify":0.28,"research":0.34,"operate":0.34,"build":0.27}}
+{"text":"Read-only review current changes in","gold":"?","probs":{"fix":0.1,"verify":0.67,"research":0.67,"operate":0.23,"build":0.06}}
+{"text":"You are researching, read-only, how","gold":"?","probs":{"fix":0.11,"verify":0.22,"research":0.9,"operate":0.1,"build":0.09}}
+{"text":"你的工具列表里有没有 swarm_plan 和 swarm_cycle？","gold":"?","probs":{"fix":0.08,"verify":0.36,"research":0.54,"operate":0.22,"build":0.27}}
+{"text":"完整位置dsh-lab\\plugins\\dsh-orchestrator","gold":"?","probs":{"fix":0.23,"verify":0.24,"research":0.34,"operate":0.36,"build":0.2}}
+{"text":"在 D:\\DSHXM\\AgentKHD\\personal-agent 实","gold":"?","probs":{"fix":0.22,"verify":0.31,"research":0.4,"operate":0.49,"build":0.28}}
+{"text":"在 D:\\DSHXM\\AgentKHD\\personal-agent 中","gold":"?","probs":{"fix":0.14,"verify":0.22,"research":0.31,"operate":0.3,"build":0.2}}
+{"text":"Read-only research official TRAE and","gold":"?","probs":{"fix":0.15,"verify":0.31,"research":0.78,"operate":0.14,"build":0.15}}
+{"text":"你说的令牌是什么？能不能给我个界面？显示签到情况，余额，跑成功后可以定时签到。","gold":"?","probs":{"fix":0.13,"verify":0.29,"research":0.47,"operate":0.52,"build":0.91}}
+{"text":"Read-only investigation: Personal Agent","gold":"?","probs":{"fix":0.1,"verify":0.26,"research":0.95,"operate":0.13,"build":0.09}}
+{"text":"Read-only research. User requires exact","gold":"?","probs":{"fix":0.11,"verify":0.52,"research":0.81,"operate":0.07,"build":0.06}}
+{"text":"Research, read-only, how two production","gold":"?","probs":{"fix":0.14,"verify":0.29,"research":0.9,"operate":0.16,"build":0.08}}
+{"text":"Implement backend ONLY new src/desktop-t","gold":"?","probs":{"fix":0.13,"verify":0.25,"research":0.2,"operate":0.18,"build":0.95}}
+{"text":"Implement bounded MCP upgrade D:\\DSHXM\\A","gold":"?","probs":{"fix":0.31,"verify":0.43,"research":0.24,"operate":0.6,"build":0.61}}
+{"text":"Implement composer-actions.js ONLY in D:","gold":"?","probs":{"fix":0.16,"verify":0.25,"research":0.15,"operate":0.17,"build":0.89}}
+{"text":"Implement in D:\\DSHXM\\AgentKHD\\personal-","gold":"?","probs":{"fix":0.18,"verify":0.24,"research":0.21,"operate":0.51,"build":0.81}}
+{"text":"Implement ONLY desktop/renderer/app.js i","gold":"?","probs":{"fix":0.24,"verify":0.24,"research":0.13,"operate":0.12,"build":0.82}}
+{"text":"Implement PersonalAgent desktop memory b","gold":"?","probs":{"fix":0.45,"verify":0.28,"research":0.54,"operate":0.58,"build":0.84}}
+{"text":"Implement scoped fix in D:\\DSHXM\\ZZCSAPI","gold":"?","probs":{"fix":0.85,"verify":0.43,"research":0.16,"operate":0.21,"build":0.16}}
+{"text":"Read-only audit D:\\DSHXM\\AgentKHD\\person","gold":"?","probs":{"fix":0.08,"verify":0.27,"research":0.6,"operate":0.21,"build":0.07}}
+{"text":"Read-only audit D:\\DSHXM\\ZZCSAPI gateway","gold":"?","probs":{"fix":0.09,"verify":0.41,"research":0.74,"operate":0.65,"build":0.07}}
+{"text":"Read-only audit user-named TRAE installe","gold":"?","probs":{"fix":0.19,"verify":0.33,"research":0.53,"operate":0.55,"build":0.16}}
+{"text":"Read-only inspect DSH implementation che","gold":"?","probs":{"fix":0.12,"verify":0.72,"research":0.84,"operate":0.17,"build":0.06}}
+{"text":"Read-only local references D:\\DSHXM\\Agen","gold":"?","probs":{"fix":0.21,"verify":0.24,"research":0.32,"operate":0.22,"build":0.13}}
+{"text":"Read-only research for standalone Electr","gold":"?","probs":{"fix":0.1,"verify":0.21,"research":0.89,"operate":0.08,"build":0.09}}
+{"text":"Read-only research in D:\\DSHXM\\AgentKHD\\","gold":"?","probs":{"fix":0.08,"verify":0.17,"research":0.83,"operate":0.08,"build":0.08}}
+{"text":"Read-only research local D:\\DSHXM\\AgentK","gold":"?","probs":{"fix":0.08,"verify":0.18,"research":0.82,"operate":0.08,"build":0.07}}
+{"text":"Read-only research official openai/codex","gold":"?","probs":{"fix":0.1,"verify":0.24,"research":0.73,"operate":0.08,"build":0.09}}
+{"text":"Read-only review D:/DSHXM/ZZCSAPI/server","gold":"?","probs":{"fix":0.11,"verify":0.74,"research":0.61,"operate":0.14,"build":0.05}}
+{"text":"Research, read-only, the **local** refer","gold":"?","probs":{"fix":0.12,"verify":0.3,"research":0.85,"operate":0.08,"build":0.07}}
+{"text":"Task: find several **open-source persona","gold":"?","probs":{"fix":0.06,"verify":0.15,"research":0.78,"operate":0.12,"build":0.21}}
+{"text":"Workroot D:\\DSHXM\\AgentKHD\\personal-agen","gold":"?","probs":{"fix":0.15,"verify":0.23,"research":0.26,"operate":0.29,"build":0.21}}
+{"text":"重新查一下你的工具列表里有没有 swarm_plan 和 swarm_cycle？","gold":"?","probs":{"fix":0.14,"verify":0.9,"research":0.8,"operate":0.21,"build":0.13}}
+{"text":"可以，我想要我的蜂群系统D:\\DSHXM\\ZYZNT应该是这个项目，之前搞的dsh插件","gold":"?","probs":{"fix":0.25,"verify":0.49,"research":0.3,"operate":0.67,"build":0.34}}
+{"text":"把文件放到桌面新建一个文件夹。把交付物放进去。你本地的那份还要留着，就相当于做了一个备份。","gold":"?","probs":{"fix":0.04,"verify":0.18,"research":0.07,"operate":0.05,"build":0.06}}
+{"text":"哦哦哦，里面还有tiktok的，tiktok的不用管，就是微软邮箱的，看看有没有重复的邮箱","gold":"?","probs":{"fix":0.11,"verify":0.78,"research":0.74,"operate":0.04,"build":0.22}}
+{"text":"在D:\\DSHXM是我存的dsh中的项目，刚刚开发其他功能的时候给我清空了历史记录，如何恢复？","gold":"?","probs":{"fix":0.72,"verify":0.13,"research":0.58,"operate":0.07,"build":0.05}}
+{"text":"不需要你直接该代码。我需要知道如何改，给我一个成熟的文档，并且文档有详细的错误和详细的修改方案。","gold":"?","probs":{"fix":0.8,"verify":0.27,"research":0.69,"operate":0.12,"build":0.16}}
+{"text":"背景：我们在 D:\\DSHXM\\AgentKHD\\personal-agent 开发一个独立个人…","gold":"?","probs":{"fix":0.22,"verify":0.28,"research":0.44,"operate":0.42,"build":0.61}}
+{"text":"你在 Windows 上工作，仓库 D:\\DSHXM\\ZZCSAPI（零依赖 Node 项目 +…","gold":"?","probs":{"fix":0.31,"verify":0.37,"research":0.48,"operate":0.46,"build":0.32}}
+{"text":"生成一份会话 ID 与活动时间线报告（从 30 天日志中提取，帮你确认哪些会话内容丢失） 写一个…","gold":"?","probs":{"fix":0.19,"verify":0.52,"research":0.78,"operate":0.15,"build":0.86}}
+{"text":"只读审查 D:\\DSHXM\\AgentKHD\\personal-agent 本轮未提交修改，重点…","gold":"?","probs":{"fix":0.19,"verify":0.81,"research":0.42,"operate":0.19,"build":0.09}}
+{"text":"Read-only audit D:\\DSHXM\\AgentKHD\\personal-agent…","gold":"?","probs":{"fix":0.14,"verify":0.33,"research":0.5,"operate":0.45,"build":0.12}}
+{"text":"Read-only audit D:\\DSHXM\\ZZCSAPI gateway source.…","gold":"?","probs":{"fix":0.15,"verify":0.34,"research":0.66,"operate":0.21,"build":0.09}}
+{"text":"You are reading real source in a local clone. Do…","gold":"?","probs":{"fix":0.32,"verify":0.45,"research":0.52,"operate":0.21,"build":0.24}}
+{"text":"{\"name\":\"microsoft-rewards-script\",\"version\":\"4.3…","gold":"?","probs":{"fix":0.32,"verify":0.33,"research":0.41,"operate":0.47,"build":0.34}}
+{"text":"**窄任务，只读不改，中文报告，篇幅要短。** 对 `D:\\DSHXM\\AgentKHD\\_res…","gold":"?","probs":{"fix":0.09,"verify":0.31,"research":0.7,"operate":0.07,"build":0.05}}
+{"text":"背景：用户本地安装了 workbuddy——一个 agent 桌面应用，带\"便签\"功能：点击便签会…","gold":"?","probs":{"fix":0.35,"verify":0.27,"research":0.43,"operate":0.2,"build":0.42}}
+{"text":"别的agent使用蜂群插件 和我说：swarm_plan 工具是坏的（返回内部错误 missing…","gold":"?","probs":{"fix":0.75,"verify":0.37,"research":0.55,"operate":0.26,"build":0.17}}
+{"text":"查看项目目录，也就是你现在使用的蜂群操作员插件的目录。了解这个项目。我想知道为什么没有工具。在ds…","gold":"?","probs":{"fix":0.37,"verify":0.24,"research":0.84,"operate":0.15,"build":0.63}}
+{"text":"查找一下具体是什么原因，这导致我很多任务无法往下进行总是提示我：当前没有可用的 swarm_* 工…","gold":"?","probs":{"fix":0.85,"verify":0.24,"research":0.9,"operate":0.51,"build":0.07}}
+{"text":"对了，还有一个需要集成的，D:\\DSHXM\\SoL-Pi 这个是英伟达开源的一个pi的插件。我觉得…","gold":"?","probs":{"fix":0.12,"verify":0.27,"research":0.63,"operate":0.57,"build":0.76}}
+{"text":"看下项目目录里面的东西，知道是做什么的，现在这个项目在运行，之前的聊天内容全部丢失了，你需要详细了…","gold":"?","probs":{"fix":0.23,"verify":0.4,"research":0.82,"operate":0.64,"build":0.27}}
+{"text":"看下项目目录里面的东西，知道是做什么的，现在这个项目在运行，之前的聊天内容全部丢失了，你需要详细了解","gold":"?","probs":{"fix":0.18,"verify":0.36,"research":0.85,"operate":0.62,"build":0.16}}
+{"text":"可以弄一个可执行的脚本吗？双击运行的。现在D:\\DSHXM\\LLL\\dsh-recovery这里面…","gold":"?","probs":{"fix":0.4,"verify":0.27,"research":0.2,"operate":0.37,"build":0.93}}
+{"text":"老窗口报错了：resume failed for session\"session-8b2c48d2…","gold":"?","probs":{"fix":0.87,"verify":0.21,"research":0.37,"operate":0.37,"build":0.08}}
+{"text":"历史记录回来了，但是我在其中一个让它继续任务，它：开始下一项吧 11:19 已停止 已停止 已完成…","gold":"?","probs":{"fix":0.56,"verify":0.45,"research":0.29,"operate":0.37,"build":0.17}}
+{"text":"模型操作失败:gateway/internal: resume failed for sessio…","gold":"?","probs":{"fix":0.81,"verify":0.22,"research":0.33,"operate":0.56,"build":0.09}}
+{"text":"那就不能用这个key了。看看这个项目吧https://github.com/xinxinshuha…","gold":"?","probs":{"fix":0.46,"verify":0.35,"research":0.63,"operate":0.26,"build":0.22}}
+{"text":"你的工具列表里有没有 swarm_plan 和 swarm_cycle？ 23:06 已完成 已完…","gold":"?","probs":{"fix":0.11,"verify":0.46,"research":0.54,"operate":0.26,"build":0.22}}
+{"text":"你的任务：把本机 zzcsapi 的渠道接进本机已经跑起来的 sub2api，然后用**同一份请求…","gold":"?","probs":{"fix":0.18,"verify":0.42,"research":0.21,"operate":0.88,"build":0.88}}
+{"text":"你调用有问题，之前的那个会话也是有问题我才让你操作的，说明不是会话的问题。但是我自己创建文件夹没问…","gold":"?","probs":{"fix":0.78,"verify":0.57,"research":0.28,"operate":0.23,"build":0.22}}
+{"text":"你确定没改坏其他的东西？我点击重启提示我暂时无法重启，请稍后再试，但是升级完后这个功能是正常的，我…","gold":"?","probs":{"fix":0.56,"verify":0.89,"research":0.42,"operate":0.74,"build":0.06}}
+{"text":"你是技术调研员。请调研开源 AI 网关项目 **new-api**（GitHub: Calcium…","gold":"?","probs":{"fix":0.07,"verify":0.2,"research":0.95,"operate":0.19,"build":0.13}}
+{"text":"你是技术调研员。请调研两个开源 AI 网关项目的**内部机制、性能、功能全面性**，产出高密度事实…","gold":"?","probs":{"fix":0.03,"verify":0.16,"research":0.97,"operate":0.08,"build":0.08}}
+{"text":"你是技术调研员。任务：把用户口中的 **\"cliproxy\"（也可能写作 cliporxy / c…","gold":"?","probs":{"fix":0.22,"verify":0.24,"research":0.87,"operate":0.33,"build":0.22}}
+{"text":"你是只读取证代理,只读源码/文档报告,每条结论带 `file:line` 证据。**不要修改任何文…","gold":"?","probs":{"fix":0.11,"verify":0.74,"research":0.73,"operate":0.05,"build":0.05}}
+{"text":"你是只读取证代理。**绝对不要修改任何文件**,只读源码并报告,每条结论必须带 `file:lin…","gold":"?","probs":{"fix":0.11,"verify":0.5,"research":0.78,"operate":0.05,"build":0.03}}
+{"text":"你在 Windows 上工作，仓库 D:\\DSHXM\\ZZCSAPI。任务**纯机械、只改两份文档…","gold":"?","probs":{"fix":0.21,"verify":0.27,"research":0.13,"operate":0.08,"build":0.05}}
+{"text":"你在 Windows 上工作，仓库 D:\\DSHXM\\ZZCSAPI（零依赖 Node 项目，中文…","gold":"?","probs":{"fix":0.29,"verify":0.35,"research":0.49,"operate":0.43,"build":0.28}}
+{"text":"你在 Windows 上工作，仓库 D:\\DSHXM\\ZZCSAPI（Node.js，零依赖测试，…","gold":"?","probs":{"fix":0.31,"verify":0.54,"research":0.47,"operate":0.31,"build":0.29}}
+{"text":"你在 Windows 上工作，仓库是 D:\\DSHXM\\ZZCSAPI（Node.js 项目，零依…","gold":"?","probs":{"fix":0.31,"verify":0.35,"research":0.47,"operate":0.5,"build":0.28}}
+{"text":"你在为一个自研的个人 Agent 产品做**外部取证**。只读、只报告，**不要修改任何文件**。…","gold":"?","probs":{"fix":0.12,"verify":0.71,"research":0.91,"operate":0.13,"build":0.07}}
+{"text":"跑了5 和 1 ，但是你这都是乱码： ==============================…","gold":"?","probs":{"fix":0.65,"verify":0.64,"research":0.39,"operate":0.31,"build":0.22}}
+{"text":"请只读分析 D:\\WorkBuddyXM\\JM\\wb-client.html。目标是在 D:\\DS…","gold":"?","probs":{"fix":0.27,"verify":0.42,"research":0.76,"operate":0.16,"build":0.24}}
+{"text":"深色卡片式控制台改成深色和亮色可切换，.bat打开的是PowerShell 执行吧，改成静默的不弹…","gold":"?","probs":{"fix":0.25,"verify":0.34,"research":0.21,"operate":0.21,"build":0.91}}
+{"text":"实现 Personal Agent Electron 工作区工具后端。目录 D:\\DSHXM\\Ag…","gold":"?","probs":{"fix":0.2,"verify":0.32,"research":0.32,"operate":0.55,"build":0.89}}
+{"text":"我现在的dsh客户端 执行写入权限的时候报错为什么？写入 Error: invalid justi…","gold":"?","probs":{"fix":0.84,"verify":0.23,"research":0.79,"operate":0.45,"build":0.07}}
+{"text":"我想做一个专属于自己的聊天agent，像DSH、Trae、Codex、claude code、Zc…","gold":"?","probs":{"fix":0.04,"verify":0.12,"research":0.68,"operate":0.63,"build":0.91}}
+{"text":"我需要一个中转站点的每日签到功能，帮助我每天签到。 https://gemai.huchan.cn…","gold":"?","probs":{"fix":0.1,"verify":0.2,"research":0.33,"operate":0.54,"build":0.9}}
+{"text":"我在你项目目录里面放了好多邮箱，需要你测试还能用的，并去重。都是我以前注册的邮箱也不知道好不好用了…","gold":"?","probs":{"fix":0.13,"verify":0.95,"research":0.75,"operate":0.08,"build":0.44}}
+{"text":"我知道代码文件没丢，但是历史对话记录和上下文丢了不是吗？再让agent读取是不是会很困难不知道聊到…","gold":"?","probs":{"fix":0.26,"verify":0.29,"research":0.46,"operate":0.15,"build":0.2}}
+{"text":"现在只是研究还没说进行，然后还要加入提示词工程还是skill工程的一个项目。D:\\DSHXM\\Sk…","gold":"?","probs":{"fix":0.09,"verify":0.23,"research":0.82,"operate":0.1,"build":0.68}}
+{"text":"项目 D:\\DSHXM\\AgentKHD\\personal-agent。实现真实持久工作区/会话侧…","gold":"?","probs":{"fix":0.28,"verify":0.4,"research":0.45,"operate":0.6,"build":0.82}}
+{"text":"因为是本地项目所以默认密钥这个忽略就好了，别人无法访问我本机，我本机没暴露在公网中，等他修改完我会…","gold":"?","probs":{"fix":0.3,"verify":0.45,"research":0.15,"operate":0.36,"build":0.11}}
+{"text":"因为D:\\AgentKHD 权限问题，现在不在这个目录下做了，在你的项目目录下做独立的agent，…","gold":"?","probs":{"fix":0.31,"verify":0.22,"research":0.23,"operate":0.52,"build":0.58}}
+{"text":"在 D:\\DSHXM\\AgentKHD\\personal-agent 实现renderer UI，…","gold":"?","probs":{"fix":0.19,"verify":0.31,"research":0.34,"operate":0.29,"build":0.89}}
+{"text":"在 D:\\DSHXM\\AgentKHD\\personal-agent 中仅修改 desktop/c…","gold":"?","probs":{"fix":0.25,"verify":0.33,"research":0.24,"operate":0.2,"build":0.22}}
+{"text":"在本地http://127.0.0.1:8787/console 进行渗透测试，找出安全方面的漏洞…","gold":"?","probs":{"fix":0.14,"verify":0.58,"research":0.82,"operate":0.17,"build":0.07}}
+{"text":"这不是主要问题，主要问题是为什么会重装dsh客户端，导致之前的聊天记录全部清楚，变成了一个全新的客…","gold":"?","probs":{"fix":0.67,"verify":0.12,"research":0.74,"operate":0.19,"build":0.08}}
+{"text":"这还不是主要的根因，根因在于 为什么你只删除dsh的，我电脑里还有workbuddy和trae 为…","gold":"?","probs":{"fix":0.67,"verify":0.35,"research":0.78,"operate":0.23,"build":0.21}}
+{"text":"这也是我纠结的地方，如果自己做一个agent的话，更新验证是一个大麻烦，插件市场也不会很完整，毕竟…","gold":"?","probs":{"fix":0.1,"verify":0.67,"research":0.72,"operate":0.61,"build":0.39}}
+{"text":"之前反代workbuddy的渠道用的是本地的key，路径是C:(Users\\Administrat…","gold":"?","probs":{"fix":0.39,"verify":0.22,"research":0.49,"operate":0.69,"build":0.2}}
+{"text":"只读盘点 D:\\DSHXM\\AgentKHD\\personal-agent 的现有能力，重点 sr…","gold":"?","probs":{"fix":0.09,"verify":0.42,"research":0.84,"operate":0.16,"build":0.1}}
+{"text":"只读审查 D:\\DSHXM\\AgentKHD\\personal-agent 当前未提交的桌面提供商…","gold":"?","probs":{"fix":0.18,"verify":0.79,"research":0.55,"operate":0.22,"build":0.13}}
+{"text":"只读研究 D:\\DSHXM\\AgentKHD\\personal-agent。任务：桌面 deskt…","gold":"?","probs":{"fix":0.21,"verify":0.33,"research":0.69,"operate":0.23,"build":0.28}}
+{"text":"只回复两个字：收到。不要调用任何工具，不要做任何其他事情。 Your parent agent i…","gold":"?","probs":{"fix":0.08,"verify":0.29,"research":0.06,"operate":0.09,"build":0.04}}
+{"text":"D:\\DSHXM\\ZZCSAPI\\keys.local.txt key在这里面。你可以开始了，不过…","gold":"?","probs":{"fix":0.12,"verify":0.26,"research":0.43,"operate":0.39,"build":0.15}}
+{"text":"https://github.com/chiihero/Microsoft-Rewards-Scr…","gold":"?","probs":{"fix":0.28,"verify":0.33,"research":0.57,"operate":0.34,"build":0.34}}
+{"text":"Implement backend ONLY new src/desktop-tasks.ts n…","gold":"?","probs":{"fix":0.14,"verify":0.3,"research":0.19,"operate":0.15,"build":0.96}}
+{"text":"Implement bounded MCP upgrade D:\\DSHXM\\AgentKHD\\p…","gold":"?","probs":{"fix":0.39,"verify":0.45,"research":0.31,"operate":0.63,"build":0.52}}
+{"text":"Implement composer-actions.js ONLY in D:\\DSHXM\\Ag…","gold":"?","probs":{"fix":0.2,"verify":0.25,"research":0.13,"operate":0.24,"build":0.85}}
+{"text":"Implement in D:\\DSHXM\\AgentKHD\\personal-agent own…","gold":"?","probs":{"fix":0.21,"verify":0.29,"research":0.3,"operate":0.63,"build":0.84}}
+{"text":"Implement ONLY desktop/renderer/app.js in D:\\DSHX…","gold":"?","probs":{"fix":0.25,"verify":0.24,"research":0.12,"operate":0.15,"build":0.64}}
+{"text":"Implement PersonalAgent desktop memory backend ON…","gold":"?","probs":{"fix":0.2,"verify":0.33,"research":0.51,"operate":0.64,"build":0.89}}
+{"text":"Implement scoped fix in D:\\DSHXM\\ZZCSAPI, writabl…","gold":"?","probs":{"fix":0.83,"verify":0.48,"research":0.21,"operate":0.25,"build":0.23}}
+{"text":"key那里我希望加一个按钮，可以显示之前输入的key，明文显示，然后还需要加一个json的Gens…","gold":"?","probs":{"fix":0.11,"verify":0.2,"research":0.2,"operate":0.1,"build":0.96}}
+{"text":"Read-only audit user-named TRAE installed plugins…","gold":"?","probs":{"fix":0.14,"verify":0.33,"research":0.73,"operate":0.43,"build":0.09}}
+{"text":"Read-only inspect DSH implementation checkout D:\\…","gold":"?","probs":{"fix":0.11,"verify":0.58,"research":0.85,"operate":0.13,"build":0.06}}
+{"text":"Read-only investigation: Personal Agent D:/DSHXM/…","gold":"?","probs":{"fix":0.13,"verify":0.31,"research":0.9,"operate":0.12,"build":0.11}}
+{"text":"Read-only local references D:\\DSHXM\\AgentKHD\\_res…","gold":"?","probs":{"fix":0.2,"verify":0.24,"research":0.33,"operate":0.25,"build":0.15}}
+{"text":"Read-only research for standalone Electron Person…","gold":"?","probs":{"fix":0.11,"verify":0.21,"research":0.9,"operate":0.09,"build":0.12}}
+{"text":"Read-only research in D:\\DSHXM\\AgentKHD\\personal-…","gold":"?","probs":{"fix":0.1,"verify":0.19,"research":0.78,"operate":0.13,"build":0.12}}
+{"text":"Read-only research local D:\\DSHXM\\AgentKHD\\_resea…","gold":"?","probs":{"fix":0.14,"verify":0.26,"research":0.84,"operate":0.15,"build":0.18}}
+{"text":"Read-only research official openai/codex public s…","gold":"?","probs":{"fix":0.14,"verify":0.28,"research":0.7,"operate":0.12,"build":0.16}}
+{"text":"Read-only research official TRAE and Tencent Work…","gold":"?","probs":{"fix":0.13,"verify":0.31,"research":0.68,"operate":0.16,"build":0.17}}
+{"text":"Read-only research. User requires exact sourced c…","gold":"?","probs":{"fix":0.09,"verify":0.69,"research":0.8,"operate":0.04,"build":0.06}}
+{"text":"Read-only review current changes in D:/DSHXM/Agen…","gold":"?","probs":{"fix":0.15,"verify":0.76,"research":0.6,"operate":0.15,"build":0.09}}
+{"text":"Read-only review D:/DSHXM/ZZCSAPI/server.js. Need…","gold":"?","probs":{"fix":0.34,"verify":0.71,"research":0.73,"operate":0.23,"build":0.25}}
+{"text":"Research, read-only, how two production agent CLI…","gold":"?","probs":{"fix":0.11,"verify":0.21,"research":0.91,"operate":0.11,"build":0.09}}
+{"text":"Research, read-only, the **local** reference repo…","gold":"?","probs":{"fix":0.1,"verify":0.25,"research":0.89,"operate":0.07,"build":0.07}}
+{"text":"resume failed for session\"session-de686f96-5139-4…","gold":"?","probs":{"fix":0.77,"verify":0.32,"research":0.32,"operate":0.37,"build":0.14}}
+{"text":"Task: find several **open-source personal-agent p…","gold":"?","probs":{"fix":0.06,"verify":0.15,"research":0.81,"operate":0.24,"build":0.12}}
+{"text":"Use the read_image tool to look at this PNG scree…","gold":"?","probs":{"fix":0.14,"verify":0.25,"research":0.72,"operate":0.08,"build":0.1}}
+{"text":"Workroot D:\\DSHXM\\AgentKHD\\personal-agent impleme…","gold":"?","probs":{"fix":0.24,"verify":0.32,"research":0.35,"operate":0.39,"build":0.43}}
+{"text":"Workroot D:\\DSHXM\\AgentKHD\\personal-agent. Implem…","gold":"?","probs":{"fix":0.23,"verify":0.29,"research":0.32,"operate":0.34,"build":0.36}}
+{"text":"You are reading real source in a local clone (Rus…","gold":"?","probs":{"fix":0.27,"verify":0.33,"research":0.54,"operate":0.18,"build":0.19}}
+{"text":"You are researching, read-only, how the OpenAI Co…","gold":"?","probs":{"fix":0.1,"verify":0.21,"research":0.88,"operate":0.07,"build":0.08}}
+{"text":"统一Personal Agent三档权限与默认文件工具能力，移除模型工具/检测工具/独立停止控件，实现发送停止合一并验证网络和待审批真正取消。","gold":"?","probs":{"fix":0.51,"verify":0.85,"research":0.2,"operate":0.33,"build":0.36}}
+{"text":"修复Personal Agent真实文件工具失败通用报错及聊天左右布局/无角色标签，验证功能；核查并按真实能力修正DSH当前模型图片输入声明，保护凭据和用户项目，不绕过写入边界。","gold":"?","probs":{"fix":0.96,"verify":0.95,"research":0.44,"operate":0.34,"build":0.35}}
+{"text":"统一Personal Agent桌面输入区及模型/工作区/权限选择控件的设计语言，替换割裂的原生下拉展示，保留宿主权限和模型切换语义，支持键盘深浅主题并通过真实Electron交互与截图验证。","gold":"?","probs":{"fix":0.27,"verify":0.87,"research":0.25,"operate":0.18,"build":0.82}}
+{"text":"我想做一个专属于自己的聊天agent，像DSH、Trae、Codex、claude code、Zcode等等这些Agent工具一样，也是像DSH 的一样理论，一切皆插件。有没有什么可行性方案？","gold":"?","probs":{"fix":0.04,"verify":0.21,"research":0.86,"operate":0.56,"build":0.89}}
+{"text":"按用户截图修正Personal Agent对话输入区：对话中移除文件夹选择/分隔底栏，将权限放入加号旁同一工具栏，加号提供真实文件添加和已有指令入口，保留权限/模型/会话安全逻辑，通过真实Electron截图与交互回归。","gold":"?","probs":{"fix":0.62,"verify":0.87,"research":0.12,"operate":0.16,"build":0.6}}
+{"text":"将Personal Agent桌面工具与已有核心统一，修正只读/工作区/完全访问的范围和审批语义，接入模型命令及会话后台任务并验证停止清理，保持模型切换权限且跨服务历史确认，更新桌面验收与说明；不把无OS沙箱的命令冒充工作区隔离。","gold":"?","probs":{"fix":0.83,"verify":0.93,"research":0.21,"operate":0.67,"build":0.56}}
+{"text":"定位 personal-agent 默认 Electron 运行时启动失败的根因，实施有证据支持的最小修复，使用隔离数据目录和本地模拟服务复验默认运行时的启动及停止、重启、手动恢复链路，记录结果与仍未覆盖的发行风险，不调用付费模型。","gold":"?","probs":{"fix":0.95,"verify":0.91,"research":0.9,"operate":0.62,"build":0.14}}
+{"text":"修复Personal Agent远程HTTP MCP连接被工作区/本地写权限绑定：无需工作区即可连接，多个远程服务同时连接，切换工作区保留并复用已有授权/连接，保持工具执行安全审批与本地stdio隔离；真实隔离桌面和跨工作区回归验证。","gold":"?","probs":{"fix":0.91,"verify":0.81,"research":0.28,"operate":0.49,"build":0.82}}
+{"text":"将Personal Agent对话输入框下方改为居中真实模型用量栏，移除右下角用量未接线，复用会话记录统计轮次/调用/tokens等有证据指标，未知速率缓存上下文不伪造，保留错误与运行提示但不占用量栏；验证持久恢复与真实Electron布局。","gold":"?","probs":{"fix":0.73,"verify":0.87,"research":0.17,"operate":0.38,"build":0.65}}
+{"text":"为Personal Agent桌面补齐本地技能查看/启用及实际模型加载、MCP本地stdio配置连接发现实际调用与安全生命周期、会话重命名置顶确认删除导出；复用现有CLI组件，保留权限/取消/数据安全，完成单元与真实Electron回环验收、更新接线清单，明确不含市场云同步。","gold":"?","probs":{"fix":0.16,"verify":0.92,"research":0.18,"operate":0.71,"build":0.94}}
+{"text":"在本地http://127.0.0.1:8787/console 进行渗透测试，找出安全方面的漏洞。并给出解决方案，不可直接读取源码，必须是渗透测试，渗透使用这个项目进行：https://github.com/lingbol088-spec/reverse-flow-skill","gold":"?","probs":{"fix":0.19,"verify":0.32,"research":0.85,"operate":0.18,"build":0.06}}
+{"text":"查明并修复 Personal Agent 经本机8787网关使用claude-opus-4-8时声明文件工具却收到read_tabular/system_todo_write描述且不返回工具调用的问题；追踪客户端到网关/上游的工具协议，用合成数据验证，保护凭据和用户文件，按实测结果修复并报告。","gold":"?","probs":{"fix":0.97,"verify":0.92,"research":0.82,"operate":0.44,"build":0.1}}
+{"text":"https://github.com/chiihero/Microsoft-Rewards-Script\nhttps://github.com/User0332/rewards-farmer\nhttps://github.com/User0332/rewards-farmer\n研究这是三个项目","gold":"?","probs":{"fix":0.13,"verify":0.24,"research":0.91,"operate":0.21,"build":0.15}}
+{"text":"修正Personal Agent将TRAE插件与Skill混在一起且缺乏插件连接入口的问题：核对导入清单和实际连接声明，分开展示插件及Skill，插件关联支持的MCP配置/连接/断开与真实状态，明确未支持认证和TRAE专有依赖；沿用独立加密凭据和显式授权，不继承TRAE登录或自动连接；隔离测试与文档验收。","gold":"?","probs":{"fix":0.93,"verify":0.89,"research":0.28,"operate":0.33,"build":0.61}}
+{"text":"完成签到大全第一阶段跨平台改造：(1) 补 --no-sandbox 容器支持；(2) 浏览器路径可配置化（ZZQD_BROWSER 支持 Linux 路径与自动探测）；(3) browser.js 支持持久化 profileDir（记住登录态，不再每次清空临时目录）。要求：现有 167 项测试全绿，新增测试覆盖这三项，真实站点签到仍然成功，Windows 本机行为不退化。","gold":"?","probs":{"fix":0.28,"verify":0.82,"research":0.13,"operate":0.52,"build":0.8}}
+{"text":"核对并安全同步用户指定的TRAE frontend-design/cloudflare/github/web-app-development/rapid-prototype-craft插件与完整技能资源到Personal Agent适当存储位置；修正技能用户级管理与目录/ZIP导入体验，补齐MCP JSON配置和远程连接支持，保留授权及凭据安全，完成实际测试并清晰报告存储位置与兼容边界。","gold":"?","probs":{"fix":0.7,"verify":0.96,"research":0.29,"operate":0.68,"build":0.87}}
+{"text":"我需要一个中转站点的每日签到功能，帮助我每天签到。\nhttps://gemai.huchan.cn/  \nhttps://seekai.cc/\nhttps://freeapi.site/\nhttps://sunapi.5201201314.top/\nhttps://api.justwoker.icu/\nhttps://aiapi.mjiutang.top/\n目前就这几个，后面有新的站点我再添加。","gold":"?","probs":{"fix":0.05,"verify":0.2,"research":0.21,"operate":0.71,"build":0.95}}
+{"text":"以 D:\\WorkBuddyXM\\JM\\wb-client.html 为完整视觉与交互基座，在 D:\\DSHXM\\AgentKHD\\personal-agent 中构建独立 Electron 客户端面板；保留原型现有功能入口和标签，即使后端能力尚未实现也不删除，先以明确的未接线状态保留，随后逐步接入 personal-agent 的真实运行时能力；完成构建、测试、预览验证并分阶段提交到 Git。","gold":"?","probs":{"fix":0.08,"verify":0.85,"research":0.12,"operate":0.53,"build":0.92}}
+{"text":"在 D:\\AgentKHD 下创建独立于 DSH 的个人 Agent 新项目，第一阶段完成可运行的 API 聊天 + 会话持久化 CLI 原型，加入基础模型适配接口、版本化会话事件存储和离线 mock 测试；不修改 D:\\DSHXM\\ZYZNT、D:\\DSHXM\\SkillCJ、D:\\DSHXM\\dsh-lab、D:\\DSHXM\\SoL-Pi 等原项目。之后基于验证结果逐步加入受控工具、权限、Skill、插件 API 与蜂群能力。","gold":"?","probs":{"fix":0.04,"verify":0.69,"research":0.14,"operate":0.66,"build":0.98}}
