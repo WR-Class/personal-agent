@@ -92,6 +92,23 @@ export type GeneStoreRecord =
      */
     readonly writeCeiling?: { readonly files: number };
     /**
+     * How far past its declared number this round went (D151), and what that cost
+     * it (D152).
+     *
+     * `blastTier` is the label the operator reads; `outcomeWeight` is the only
+     * thing the fold uses, and it is absent when it is 1. Written only when the
+     * round went past its number at all, so a round inside its number keeps the
+     * exact bytes it always had and "did not overrun" stays distinguishable from
+     * "the field did not exist yet".
+     *
+     * ⚠️ `outcomeWeight` replaced a binary rule that zeroed a truncated round's
+     * success outright. The two together double-charged one overrun; the graded
+     * weight is what the operator asked for, so the binary rule now covers only
+     * refusals the ladder did not cause.
+     */
+    readonly blastTier?: BlastTier;
+    readonly outcomeWeight?: number;
+    /**
      * Whether drift, not the score, chose the gene this outcome belongs to (D108).
      *
      * Optional, and it stays optional rather than becoming required: every outcome
@@ -340,6 +357,12 @@ export class GeneStore {
        * the same reason `evidence` is here.
        */
       blastTier?: BlastTier;
+      /**
+       * What this round contributes to the success count it lands in (D152):
+       * 1 normally, 0.7 for an overrun, 0.4 for one that reached the hard stop.
+       * Absent means 1, so an ordinary round keeps the exact bytes it always had.
+       */
+      outcomeWeight?: number;
       graded?: boolean;
     },
     at: number = Date.now(),
@@ -505,6 +528,12 @@ export class GeneStore {
       // reason. A gene-less round has no declared number that could be wrong, so
       // its truncation measures the runtime default — and deflating the control
       // group's success rate would flatter every gene's relative score.
+      // The baseline is still left whole, and for the reason D127 gave: a gene-less
+      // round has no declared number that could be wrong — its ceiling is the
+      // runtime default, a guess — so charging it for exceeding a guess would
+      // deflate the control group and flatter every gene against it. The weight is
+      // recorded on these rows all the same; it is the *fold* that declines to use
+      // it here, and that is a decision, not an omission.
       if (record.graded === false) continue;
       const truncated = (record.budgetRefusals ?? 0) > 0;
       if (record.address === null) {
@@ -525,8 +554,20 @@ export class GeneStore {
         budgetRefusals: record.budgetRefusals ?? 0,
         ceilingFiles: record.writeCeiling?.files,
       });
-      if (record.succeeded && !truncated) {
-        entry.expression.successes += 1;
+      // ⚠️ D152: `truncated` no longer zeroes the success on its own. The ladder
+      // grades how much room a round cost, and keeping the binary rule beside the
+      // graded one charged the same overrun twice. What the rule still covers is a
+      // refusal the ladder did NOT cause: a round whose tier is `within` and which
+      // was nonetheless refused was writing under a forbidden path — its own gene
+      // said not to, and no weight expresses that.
+      //
+      // The weight is what the round contributes instead of 1. A gene that is
+      // stopped at the hard stop every time therefore settles at 0.4 rather than a
+      // spotless record, which is the property this branch existed to protect.
+      const weight = record.outcomeWeight ?? 1;
+      const ladderStopped = record.blastTier !== undefined;
+      if (record.succeeded && (ladderStopped || !truncated)) {
+        entry.expression.successes += weight;
         entry.expression.lastSuccessAt = record.at;
         entry.expression.streak = 0;
       }

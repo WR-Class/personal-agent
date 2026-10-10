@@ -246,10 +246,17 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
   if (facts.budgetRefusals) evidence.push(`budgetRefusals=${facts.budgetRefusals}`);
   // D151: the blast-radius ladder. Recorded whenever the round went past its
   // declared number — the reference implementation's own split, where an overrun
-  // is labelled and only a larger one costs anything. `hard_stop` cannot normally
-  // appear here (the write that would reach it is refused before it lands), but
-  // it is accepted so a hand-built fact can state what the ladder would have said.
-  const overran = facts.blastTier === "overrun" || facts.blastTier === "hard_stop";
+  // is labelled and only a larger one costs anything. `hard_stop` cannot be
+  // reached by a round declaring 4 or more (the write that would reach it is
+  // refused first), but it is a real tier at small declared values where the
+  // absolute floor is what sets the stop.
+  //
+  // ⚠️ D152: the tier is recorded and **not** allowed to move the verdict. It used
+  // to downgrade `success` to `partial`, which double-charged the same overrun —
+  // the fold then counted it once as a lost success and again as a weighted one.
+  // The cost belongs on the weight (`blastWeight`), which is a graded statement
+  // about how much room the round spent; the verdict is a statement about whether
+  // the round worked, and it did.
   if (facts.blastTier !== undefined && facts.blastTier !== "within") evidence.push(`blastRadius=${facts.blastTier}`);
   if (facts.failureClass !== null) {
     // A model that never produced anything usable means the round could not
@@ -261,13 +268,8 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
     return { status, failureClass: facts.failureClass, evidence, reviewer: "mechanical" };
   }
   const veto = roundVeto(facts);
-  // ⚠️ D151 adds a third way to lose a clean success, and it is the same kind of
-  // thing as the other two: not evidence to be weighed, but a shape that
-  // disqualifies. `overran` is stated separately from the veto because the reason
-  // it is not a veto is that the round may still be a success in every other
-  // respect — it simply cost more room than the strategy said it would.
   return {
-    status: facts.toolErrors === 0 && veto === null && !overran ? "success" : "partial",
+    status: facts.toolErrors === 0 && veto === null ? "success" : "partial",
     failureClass: null,
     evidence: veto === null ? evidence : [...evidence, `veto=${veto}`],
     reviewer: "mechanical",

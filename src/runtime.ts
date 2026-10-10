@@ -18,7 +18,7 @@ import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
-import { blastTier, budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type BlastTier, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { blastTier, blastWeight, budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type BlastTier, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import type { GeneStore } from "./gene-store.ts";
@@ -803,6 +803,7 @@ export class AgentRuntime {
     // function of the ledger and the number the round declared, both still in
     // hand, and the budget can no longer change mid-round (D151).
     const tier = blastTier(this.writeLedger.files.length, this.writeBudget.maxFiles);
+    const weight = blastWeight(tier);
     await this.geneStore.appendOutcome({
       address,
       succeeded: evaluation.status === "success",
@@ -846,6 +847,11 @@ export class AgentRuntime {
           // bytes it always had, and "did not overrun" stays distinguishable from
           // "the field did not exist yet".
           ...(tier === "within" ? {} : { blastTier: tier }),
+          // ⚠️ D152: the cost, and it is the *only* cost. Written only when it is
+          // below one, so an `exceeded` round — labelled but deliberately not
+          // charged for — adds no field rather than adding a 1 that a reader would
+          // have to know meant "no charge".
+          ...(weight < 1 ? { outcomeWeight: weight } : {}),
         }
         : {}),
       evidence: evaluation.evidence,

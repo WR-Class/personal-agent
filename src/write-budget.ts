@@ -237,6 +237,38 @@ export function isJournalPath(path: string): boolean {
 export const OVERRUN_RATIO = 1.3;
 export const HARD_STOP_RATIO = 1.5;
 
+/**
+ * The least absolute headroom the stop must leave, whatever the ratio says.
+ *
+ * ⚠️ Without this the ladder collapses exactly where the declared numbers are
+ * smallest, which is where it matters most. A ratio alone has no whole unit to
+ * stand on down there: 1.3x and 1.5x of 1 are 1.3 and 1.5, so both bands between
+ * the thresholds are empty and the ladder degenerates into "one file, then stop"
+ * — the wall it replaced, wearing a new name. Two files of headroom guarantee at
+ * least one rung at every declared value.
+ *
+ * What it costs: at declared values below 4 the stop is no longer exactly 1.5x.
+ * That is the trade, stated rather than hidden — and it is why `hard_stop` is a
+ * tier that large declared values can never reach: 1.5N - 1 is always under 1.5N,
+ * so a round declaring 20 tops out at 29 files and 1.45x. The 0.4 weight below is
+ * therefore a small-number tier, which is coherent: the floor gives those rounds
+ * absolute room and charges them more, relatively, for using it.
+ */
+export const ABSOLUTE_HEADROOM = 2;
+
+/**
+ * What an overrunning round contributes to the record it lands in.
+ *
+ * The operator's own numbers, and deliberately not zero. Zero would say "this
+ * strategy did not work" about a strategy that did work — it simply spent more
+ * room than it declared — and the hard stop has already cost the round its
+ * completeness, so zero would charge the same overrun twice. The progression
+ * 1.0 / 0.7 / 0.4 is monotone for the same reason: a cliff at the end tells a
+ * reader "never do this", which is not what an oversized round means.
+ */
+export const OVERRUN_WEIGHT = 0.7;
+export const HARD_STOP_WEIGHT = 0.4;
+
 /** How far a round's blast radius got, relative to the number it declared. */
 export type BlastTier = "within" | "exceeded" | "overrun" | "hard_stop";
 
@@ -257,9 +289,23 @@ export function blastTier(filesReached: number, maxFiles: number): BlastTier {
   return ratio > 1 ? "exceeded" : "within";
 }
 
-/** The file count at which the ladder stops: 1.5x the declared number. */
+/** The file count at which the ladder stops: 1.5x the declared number, floored. */
 export function hardStopAt(maxFiles: number): number {
-  return maxFiles * HARD_STOP_RATIO;
+  return Math.max(maxFiles * HARD_STOP_RATIO, maxFiles + ABSOLUTE_HEADROOM);
+}
+
+/**
+ * What this round's tier costs it in the folded record.
+ *
+ * Kept here beside the tiers rather than in the fold, so the ladder is the one
+ * place that says what an overrun is worth. `within` and `exceeded` are both 1:
+ * an overrun the operator chose to label but not charge for stays free, which is
+ * the reference implementation's own split.
+ */
+export function blastWeight(tier: BlastTier): number {
+  if (tier === "overrun") return OVERRUN_WEIGHT;
+  if (tier === "hard_stop") return HARD_STOP_WEIGHT;
+  return 1;
 }
 
 /**
@@ -308,10 +354,10 @@ export function checkWrite(
     // budget: it is charged as its own anonymous slot rather than waved through.
     const anonymous = state.files.filter((entry) => entry.startsWith("\u0000")).length;
     if (anonymous + 1 >= stop) {
-      return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is 1.5x the declared ${budget.maxFiles}; a write with no readable path was refused`);
+      return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is the limit for a declared ${budget.maxFiles} (1.5x, never less than +${ABSOLUTE_HEADROOM}); a write with no readable path was refused`);
     }
   } else if (!state.files.includes(attempt.path) && state.files.length + 1 >= stop) {
-    return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is 1.5x the declared ${budget.maxFiles}, ${attempt.path} would be number ${state.files.length + 1}`);
+    return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is the limit for a declared ${budget.maxFiles} (1.5x, never less than +${ABSOLUTE_HEADROOM}), ${attempt.path} would be number ${state.files.length + 1}`);
   }
   const lines = attempt.lines ?? 0;
   // The only line check left, and it is global. A round's own line budget is gone

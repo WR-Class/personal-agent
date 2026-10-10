@@ -90,20 +90,27 @@ describe("gate coverage: offered and allowed must agree", () => {
     // Null line argument, like run_command and job_kill: it writes no file, so
     // there are no lines of code to count, and charging lines would misreport what
     // the budget measures. The slot is the honest charge — one write happened.
+    //
+    // ⚠️ D152: the declared number refuses nothing, so this pins the *floored stop*
+    // instead of the old wall. A declared 2 stops at 4 (1.5x2 is 3, and the floor
+    // asks for 2+2), so the fourth slot is the first refusal. The line axis is gone
+    // entirely (D150), which is why "charges no lines" is now read off the ledger
+    // rather than off a refusal.
     const attempt = readWriteAttempt("update_task_state", JSON.stringify({ state: MARKER, steps: [] }));
     assert.notEqual(attempt, null);
     assert.equal(attempt!.path, null, "it names no file path");
     assert.equal(attempt!.lines, null, "so there are no lines to charge");
-    const budget = { maxFiles: 2, maxLines: 10, forbiddenPaths: [] };
+    const budget = { maxFiles: 2, forbiddenPaths: [] };
     assert.equal(checkWrite({ files: [], lines: 0 }, attempt!, budget).allowed, true);
     const charged = chargeWrite({ files: [], lines: 0 }, attempt!, 0);
     assert.equal(charged.files.length, 1, "it occupies an anonymous slot");
     assert.equal(charged.lines, 0, "and charges no lines");
-    // A second one is a second slot, not a free repeat.
-    assert.equal(checkWrite(charged, attempt!, budget).allowed, true);
+    // Each one is its own slot, not a free repeat.
     const twice = chargeWrite(charged, attempt!, 1);
     assert.equal(twice.files.length, 2);
-    assert.equal(checkWrite(twice, attempt!, budget).allowed, false, "until the file budget is exhausted");
+    const thrice = chargeWrite(twice, attempt!, 2);
+    assert.equal(thrice.files.length, 3, "the declared two does not stop the third");
+    assert.equal(checkWrite(thrice, attempt!, budget).allowed, false, "the floored stop does");
   });
 
   it("treats unparseable arguments as a write of unknown extent, not as a free one", () => {
