@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { budgetFor, chargeWrite, checkWrite, measuredBudget, raiseFor, COLD_START_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, raiseFor, COLD_START_BUDGET, MIN_MEASURED_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -273,6 +273,47 @@ describe("enforcement in the runtime", () => {
     );
   });
 
+  it("journals the ceiling the round ended under, so the estimate can fall later", async () => {
+    // The wiring half. `measuredBudget` can only weigh the ceiling against the
+    // demand if the round records the ceiling at all — without it the estimator
+    // has demands alone, which can rise but has nothing pulling them back down.
+    // That is the one-way ratchet, one layer below the one just removed.
+    const geneStore = new GeneStore(join(fixture.root, "ceiling-genes.jsonl"));
+    for (const name of ["ceil-a.txt", "ceil-b.txt"]) {
+      await writeFile(join(fixture.workspaceRoot, name), "keep\n", "utf8");
+    }
+    const runtime = new AgentRuntime({
+      adapter: createScriptedAdapter({
+        steps: [
+          {
+            content: "",
+            toolCalls: [
+              call("edit_file", { path: "ceil-a.txt", content: "a\n" }, "ceil_a"),
+              call("edit_file", { path: "ceil-b.txt", content: "b\n" }, "ceil_b"),
+            ],
+          },
+          { content: "done" },
+        ],
+      }),
+      store: new SessionStore({ root: fixture.storeRoot }),
+      sessionId: "ceiling-journal", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
+      maxWriteFiles: 1, maxWriteLines: 100, geneStore,
+      tools: new ToolRegistry([createEditFileTool()]),
+      approve: async () => true,
+    });
+
+    const result = await runtime.send("改两个文件");
+    assert.equal(result.budget.filesWrittenLimit, 2, "one raise, to exactly the write it refused");
+
+    const facts = await geneStore.geneLessSuccesses();
+    const fact = facts.find((entry) => entry.filesWritten === 2);
+    assert.ok(fact, `expected this round in the induction archive, got ${JSON.stringify(facts)}`);
+    // The *raised* ceiling, not the 1 it started under: the round ended here, and
+    // a reader handed the starting number would re-derive the too-small one.
+    assert.equal(fact!.ceilingFiles, 2);
+    assert.equal(fact!.ceilingLines, 100);
+  });
+
   it("raises the line ceiling once, and the refusal after that still leaves the file untouched", async () => {
     const targets = ["line-a.txt", "line-b.txt", "line-c.txt"].map((name) => join(fixture.workspaceRoot, name));
     for (const target of targets) await writeFile(target, "keep\n", "utf8");
@@ -459,8 +500,8 @@ describe("enforcement in the runtime", () => {
 // learned "this strategy failed" from what was really "this strategy was given
 // too little room".
 describe("measuredBudget", () => {
-  const obs = (filesWritten: number, linesWritten: number, budgetRefusals = 0) => ({
-    filesWritten, linesWritten, budgetRefusals,
+  const obs = (filesWritten: number, linesWritten: number, budgetRefusals = 0, ceiling?: { files: number; lines: number }) => ({
+    filesWritten, linesWritten, budgetRefusals, ...(ceiling ? { ceilingFiles: ceiling.files, ceilingLines: ceiling.lines } : {}),
   });
 
   it("returns the fallback untouched when nothing has been measured", () => {
@@ -470,17 +511,29 @@ describe("measuredBudget", () => {
     assert.deepEqual(measuredBudget([], { maxFiles: 9, maxLines: 400 }), { maxFiles: 9, maxLines: 400 });
   });
 
-  it("never falls below the fallback, however small the observed rounds were", () => {
-    // Otherwise a group whose rounds all happened to be tiny would mint a gene
-    // that cannot write at all.
-    const small = [obs(0, 0), obs(1, 2), obs(0, 0)];
-    assert.deepEqual(measuredBudget(small), { ...COLD_START_BUDGET });
+  it("falls below the fallback, and stops at the floor rather than at a guess", () => {
+    // ⚠️ This was the opposite assertion until the estimator took the median. A
+    // floor pinned to the fallback meant a gene could never be narrower than a
+    // number nobody had measured — so a demand that needed 5 and drifted up to 10
+    // could be raised but never brought back. The floor now does one job only:
+    // stop a zero (`MIN_MEASURED_BUDGET`).
+    const modest = [obs(2, 10), obs(2, 10), obs(2, 10)];
+    assert.deepEqual(measuredBudget(modest), { maxFiles: 2, maxLines: 10 }, "10 lines is below the cold start's 20, which is the point");
+
+    // A row that recorded nothing at all is not a sample of zero: it is a row from
+    // before the footprint was journaled (`gene-store.ts` promises that reading).
+    // Here the two empty rounds drop out and only the one that wrote speaks.
+    assert.deepEqual(measuredBudget([obs(0, 0), obs(1, 2), obs(0, 0)]), { maxFiles: 1, maxLines: 2 });
+
+    // The floor itself, reached by a row that *is* a measurement because it names
+    // the ceiling it ran under — and the answer still cannot come out at zero.
+    assert.deepEqual(measuredBudget([obs(0, 0, 0, { files: 0, lines: 0 })]), { ...MIN_MEASURED_BUDGET });
   });
 
-  it("raises the budget above the fallback from uncensored observations", () => {
+  it("sizes uncensored observations at their median, not at their top", () => {
     const measured = measuredBudget([obs(4, 90), obs(5, 120), obs(3, 70)]);
-    assert.equal(measured.maxFiles, 5);
-    assert.ok(measured.maxLines >= 120, `expected at least 120, got ${measured.maxLines}`);
+    assert.equal(measured.maxFiles, 4, "the middle of 3, 4 and 5");
+    assert.equal(measured.maxLines, 90, "the middle of 70, 90 and 120, not the 120 a tail quantile would take");
   });
 
   it("⚠️ adds back the room a refusal proved was wanted, instead of re-deriving the cap", () => {
@@ -493,11 +546,34 @@ describe("measuredBudget", () => {
     assert.equal(censored.maxLines, 21, "one refused write proves one more line was wanted");
   });
 
-  it("lets one outsized round widen the budget without defining it (p95, not max)", () => {
+  it("lets one outsized round widen the budget without defining it (median, not max)", () => {
     const typical = Array.from({ length: 19 }, () => obs(3, 40));
     const withOutlier = [...typical, obs(50, 900)];
     const measured = measuredBudget(withOutlier);
     assert.equal(measured.maxFiles, 3, "a single 50-file round must not become the budget");
     assert.equal(measured.maxLines, 40);
+  });
+
+  it("⚠️ lifts the ceiling off the old one when demand exceeds it, settling on the median", () => {
+    // The case the p95 estimator got wrong, in the operator's own arithmetic.
+    // Three rounds refused at a ceiling of 6 prove each of them wanted 7
+    // (`reached + 1`). The ceiling they ran under enters **once** — added three
+    // times it would put 6 in the majority and leave the median sitting on it,
+    // which is the fixed point this estimator exists to escape.
+    const ceiling = { files: 6, lines: 60 };
+    const raised = measuredBudget([obs(6, 60, 1, ceiling), obs(6, 60, 1, ceiling), obs(6, 60, 1, ceiling)]);
+    assert.equal(raised.maxFiles, 7, "samples are {6, 7, 7, 7}; the median is 7");
+    assert.equal(raised.maxLines, 61, "samples are {60, 61, 61, 61}; the median is 61");
+  });
+
+  it("⚠️ pulls the ceiling back down when demand falls, which p95 could never do", () => {
+    // The other half, and the whole reason the ceiling is a sample: a gene that
+    // ran under 7 and was then only ever asked for 4, 4 and 3 must be tightened
+    // to 4. Under p95 it stayed 7 for good, because a tail quantile has nothing
+    // pulling it back down — the estimate could only ratchet upward.
+    const ceiling = { files: 7, lines: 70 };
+    const tightened = measuredBudget([obs(4, 40, 0, ceiling), obs(4, 40, 0, ceiling), obs(3, 30, 0, ceiling)]);
+    assert.equal(tightened.maxFiles, 4, "samples are {7, 4, 4, 3}; the median is 4");
+    assert.equal(tightened.maxLines, 40, "samples are {70, 40, 40, 30}; the median is 40");
   });
 });

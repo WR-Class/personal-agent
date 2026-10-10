@@ -75,6 +75,22 @@ export type GeneStoreRecord =
     readonly linesWritten?: number;
     readonly budgetRefusals?: number;
     /**
+     * The ceiling the round ran under, so the estimator can weigh the limit
+     * beside the demand it produced (D127, second revision).
+     *
+     * The median over demands alone can only ever sit where the demands are: it
+     * can rise but has nothing pulling it back down. The ceiling is what lets the
+     * number fall again when demand falls, and what stops one round from moving
+     * it. Journaled once per round, read once per group — repeating it per
+     * observation would put the old ceiling in the majority and reproduce the
+     * fixed point being removed.
+     *
+     * Optional for the same reason as the three above: rows written before this
+     * field keep their exact bytes and read as "the ceiling is unknown", which
+     * contributes no ceiling sample rather than a zero.
+     */
+    readonly writeCeiling?: { readonly files: number; readonly lines: number };
+    /**
      * Whether drift, not the score, chose the gene this outcome belongs to (D108).
      *
      * Optional, and it stays optional rather than becoming required: every outcome
@@ -310,6 +326,7 @@ export class GeneStore {
       filesWritten?: number;
       linesWritten?: number;
       budgetRefusals?: number;
+      writeCeiling?: { files: number; lines: number };
       graded?: boolean;
     },
     at: number = Date.now(),
@@ -359,6 +376,8 @@ export class GeneStore {
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
+        ceilingFiles: record.writeCeiling?.files,
+        ceilingLines: record.writeCeiling?.lines,
       });
     }
     return facts;
@@ -389,6 +408,8 @@ export class GeneStore {
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
+        ceilingFiles: record.writeCeiling?.files,
+        ceilingLines: record.writeCeiling?.lines,
       });
     }
     return facts;

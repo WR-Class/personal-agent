@@ -165,16 +165,19 @@ describe("distilled budget is measured, not guessed", () => {
       fact({ filesWritten: 3, linesWritten: 70 }),
     ]);
     assert.equal(drafts.length, 1);
-    assert.equal(drafts[0]?.gene.constraints.maxFiles, 5);
-    assert.ok(
-      (drafts[0]?.gene.constraints.maxLines ?? 0) >= 120,
-      `expected the measured line count, got ${drafts[0]?.gene.constraints.maxLines}`,
-    );
+    // The middle of 3, 4 and 5 — and the middle of 70, 90 and 120. This assertion
+    // used to be 5 and "at least 120", which is what a p95 quantile does: take the
+    // top. That let the figure rise with every unusual round and never come back
+    // down, so a guard could be widened but never tightened.
+    assert.equal(drafts[0]?.gene.constraints.maxFiles, 4);
+    assert.equal(drafts[0]?.gene.constraints.maxLines, 90);
   });
 
   it("keeps the cold-start fallback for a group with no measurements yet", () => {
     // The three facts default to a zero footprint (this file's helper), which is
-    // what a group distilled from pre-D127 journal rows looks like.
+    // what a group distilled from pre-D127 journal rows looks like. The estimator
+    // filters rows that recorded no footprint at all, so this stays a cold start
+    // rather than becoming a measurement of zero.
     const drafts = distillGuards([fact(), fact(), fact()]);
     assert.equal(drafts.length, 1);
     assert.deepEqual(

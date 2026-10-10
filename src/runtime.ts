@@ -833,11 +833,19 @@ export class AgentRuntime {
       //
       // ⚠️ `budgetRefusals` must survive even when nothing was written, because
       // it is the flag that says the other two numbers are censored.
+      //
+      // `writeCeiling` rides along under the same condition, and is the ceiling
+      // the round *ended* under — the one that refused, when anything was
+      // refused, not the smaller one it started with. It is what lets
+      // `measuredBudget` take the median over the limit as well as the demand, so
+      // the estimate can come back **down**; a gene whose number could only ever
+      // rise is a gene nobody can tighten. See `WriteObservation.ceilingFiles`.
       ...(this.writeLedger.files.length > 0 || budgetRefusals > 0
         ? {
           filesWritten: this.writeLedger.files.length,
           linesWritten: this.writeLedger.lines,
           ...(budgetRefusals > 0 ? { budgetRefusals } : {}),
+          writeCeiling: { files: this.writeBudget.maxFiles, lines: this.writeBudget.maxLines },
         }
         : {}),
       evidence: evaluation.evidence,
@@ -1181,8 +1189,9 @@ export class AgentRuntime {
     let budgetRefusals = 0;
     // How many times this round corrected an under-sized ceiling. Local rather
     // than journaled: the raise's whole effect is the footprint it lets through,
-    // and `filesWritten` already records that. A field nothing reads would be the
-    // same defect as a constraint nothing enforces.
+    // and `filesWritten` already records that. The number that *is* journaled is
+    // the ceiling it ended under, because the estimator reads that one. A field
+    // nothing reads would be the same defect as a constraint nothing enforces.
     let ceilingRaised = 0;
     let index = 0;
     for (const call of calls) {

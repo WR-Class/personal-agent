@@ -289,10 +289,32 @@ export interface WriteObservation {
   readonly linesWritten: number;
   /** Refusals of this round's writes by the budget — see `measuredBudget`. */
   readonly budgetRefusals: number;
+  /**
+   * The ceiling this round actually ran under, when the row recorded one.
+   *
+   * Carried on the observation rather than passed to `measuredBudget` as an
+   * argument because both callers (`distill.ts`, `induct.ts`) are pure over
+   * facts and hold no library, so neither can resolve a gene address to that
+   * gene's constraints. Optional: rows written before this was journaled
+   * contribute no ceiling sample, which reads the same as a cold start.
+   */
+  readonly ceilingFiles?: number;
+  readonly ceilingLines?: number;
 }
 
 /** The guess used before any round has been measured. */
 export const COLD_START_BUDGET = { maxFiles: 1, maxLines: 20 } as const;
+
+/**
+ * The floor under a measured budget, and deliberately not `COLD_START_BUDGET`.
+ *
+ * It exists to stop one thing: a group whose rounds all wrote nothing minting a
+ * gene with a 0-file budget, which would refuse the first write of the next
+ * round. Pinning the bottom to the cold-start guess instead would mean a gene
+ * could never be narrower than a number nobody measured — and narrowing is the
+ * whole point of taking the median below.
+ */
+export const MIN_MEASURED_BUDGET = { maxFiles: 1, maxLines: 1 } as const;
 
 /** Quantile of an already-sorted array. Nearest-rank; no interpolation. */
 function quantile(sorted: readonly number[], q: number): number {
@@ -302,7 +324,34 @@ function quantile(sorted: readonly number[], q: number): number {
 }
 
 /**
- * Size a budget from what rounds of this kind actually needed (D127).
+ * The estimator `measuredBudget` uses. 0.5, not 0.95 — see property 2 of its doc
+ * block: a quantile near the maximum is dragged up by its tail and has no way
+ * back down, which is exactly the one-way ratchet this replaced.
+ */
+const MEDIAN = 0.5;
+
+/**
+ * The distinct ceilings the observations ran under, once each.
+ *
+ * Once per *value*, never once per observation: repeating the ceiling for every
+ * round under it would put the old ceiling in the majority and leave the median
+ * sitting on it, which is the fixed point `measuredBudget` exists to escape. A
+ * row journaled before the ceiling was recorded contributes nothing here.
+ */
+function ceilings(
+  observations: readonly WriteObservation[],
+  pick: (observation: WriteObservation) => number | undefined,
+): number[] {
+  const seen = new Set<number>();
+  for (const observation of observations) {
+    const value = pick(observation);
+    if (value !== undefined) seen.add(value);
+  }
+  return [...seen];
+}
+
+/**
+ * Size a budget from what rounds of this kind actually needed (D127, revised).
  *
  * The number this replaces was a constant. Every guard `distill.ts` minted
  * carried `{maxFiles: 1, maxLines: 20}`, which nobody derived from anything, and
@@ -310,40 +359,61 @@ function quantile(sorted: readonly number[], q: number): number {
  * strategy failed" from what was really "this strategy was given too little
  * room". A budget is a measurement, so it should be taken rather than guessed.
  *
- * ⚠️ Two properties carry the whole design, and both are needed:
+ * ⚠️ Three properties carry the design.
  *
  * **1. Censoring must be undone.** A round the budget stopped records what it
  * *reached*, never what it *needed* — the observation is a lower bound, and its
  * value is literally the cap. Reading it as demand would re-derive the same
  * too-small budget on every pass, so the cap would never lift: a fixed point
- * that measures nothing. A refusal therefore adds back the room that was
- * missing (`max(reached, cap + 1)`). It is still only a lower bound on true
- * demand — one file was refused, so at least one more was wanted — and that is
- * the honest direction to be wrong in, because the alternative is a budget that
- * can only ratchet downward.
+ * that measures nothing. A refusal therefore adds back the room that was missing
+ * (`reached + 1`). It is still only a lower bound — one file was refused, so at
+ * least one more was wanted — and that is the honest direction to be wrong in.
+ * A write the ceiling refused and then *raised itself to allow* (`raiseFor`) is
+ * not censored at all: it landed, so `filesWritten` is the true demand.
  *
- * **2. The fallback is a floor, never a ceiling.** A measured budget may exceed
- * the guess; it may not fall below it. Without this, a group whose rounds all
- * happened to be tiny would mint a gene with a 0-file budget, which refuses the
- * first write of the next round. Cold start (no observations at all) returns the
- * fallback untouched, which is the normal case for a new request kind.
+ * **2. The median, and the ceiling in force is one of the samples.** p95 had the
+ * defect this whole line of work is about: a quantile near the maximum is
+ * dragged up by its tail and never comes back down, so the estimate could only
+ * ratchet upward. A gene that needed 5, then 8, then 10 could never be tightened
+ * back toward 5, and "must use 10" read as progress instead of as regression.
+ * The median over the demands *plus the ceiling the rounds ran under* fixes both
+ * halves. The ceiling sample is what makes the number fall when demand falls: a
+ * group that ran under 7 and then needed 4, 4, 3 lands on 4, not 7. The median
+ * is what stops one outsized round from defining the budget.
  *
- * p95 rather than the maximum: a single outsized round should widen the budget
- * without defining it. p95 rather than the mean: one 50-file outlier must not
- * drag a typical 3-file group up to 12.
+ * The ceiling enters **once per group**, as the distinct value the observations
+ * were bounded by — never once per observation. Three rounds refused at a
+ * ceiling of 6 contribute a demand of 7 each *and* the single 6 they ran under,
+ * so the samples are `{6, 7, 7, 7}` and the median is 7. Sampling the ceiling
+ * per observation would give `{6, 6, 6, 7, 7, 7}`, whose median is 6 — the same
+ * fixed point, one indirection later.
+ *
+ * **3. The floor stops a zero, and only a zero.** See `MIN_MEASURED_BUDGET`.
+ * Cold start (no observations at all) still returns the fallback untouched,
+ * which is the normal case for a request kind nothing has been measured for.
  */
 export function measuredBudget(
   observations: readonly WriteObservation[],
   fallback: { maxFiles: number; maxLines: number } = COLD_START_BUDGET,
 ): { maxFiles: number; maxLines: number } {
-  if (observations.length === 0) return { ...fallback };
+  // ⚠️ A row that recorded no footprint at all is **not** a measurement of zero.
+  // It is a row written before the footprint was journaled, and `gene-store.ts`
+  // promises exactly that reading ("the estimator treats it as a cold start
+  // rather than as a zero"). The reader maps the absent fields with `?? 0`, so
+  // the promise can only be kept here. Without this, a group nobody ever measured
+  // mints a 1-line gene — the constant-guess defect again, one layer down, and
+  // hidden until the median replaced the floor that used to rescue it.
+  const measured = observations.filter((o) =>
+    o.filesWritten !== 0 || o.linesWritten !== 0 || o.budgetRefusals !== 0
+    || o.ceilingFiles !== undefined || o.ceilingLines !== undefined);
+  if (measured.length === 0) return { ...fallback };
   // Uncensored value: `reached + 1` whenever this round was refused at least
   // once, because a refusal proves at least one more unit was wanted.
   const demand = (reached: number, refusals: number): number => (refusals > 0 ? reached + 1 : reached);
-  const files = observations.map((o) => demand(o.filesWritten, o.budgetRefusals)).sort((a, b) => a - b);
-  const lines = observations.map((o) => demand(o.linesWritten, o.budgetRefusals)).sort((a, b) => a - b);
+  const files = [...measured.map((o) => demand(o.filesWritten, o.budgetRefusals)), ...ceilings(measured, (o) => o.ceilingFiles)].sort((a, b) => a - b);
+  const lines = [...measured.map((o) => demand(o.linesWritten, o.budgetRefusals)), ...ceilings(measured, (o) => o.ceilingLines)].sort((a, b) => a - b);
   return {
-    maxFiles: Math.max(fallback.maxFiles, quantile(files, 0.95)),
-    maxLines: Math.max(fallback.maxLines, quantile(lines, 0.95)),
+    maxFiles: Math.max(MIN_MEASURED_BUDGET.maxFiles, quantile(files, MEDIAN)),
+    maxLines: Math.max(MIN_MEASURED_BUDGET.maxLines, quantile(lines, MEDIAN)),
   };
 }
