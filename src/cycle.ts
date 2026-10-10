@@ -11,7 +11,7 @@
  * phases irreversible, review gate before integration).
  */
 
-import { isJournalPath } from "./write-budget.ts";
+import { isJournalPath, type BlastTier } from "./write-budget.ts";
 
 export type CyclePhase =
   | "planned"
@@ -149,6 +149,22 @@ export interface RunFacts {
    * data skips the check rather than firing it against an empty list.
    */
   readonly filesWritten?: readonly string[];
+  /**
+   * How far this round's blast radius got, relative to the number it declared
+   * (D151).
+   *
+   * The declared number no longer refuses anything, so this is what makes it
+   * cost something. `overrun` (1.3x and up, below the 1.5x hard stop) downgrades
+   * a round that would otherwise be a clean success to `partial`: the work
+   * happened, and it does not count as a clean win for the strategy that asked
+   * for the number. Deliberately *not* `failed` — nothing broke, and calling an
+   * oversized round a strategy failure is the same misattribution D127 removed
+   * from the refusal axis.
+   *
+   * Optional like `reply`: a caller that did not hand the ledger over is not
+   * claiming the round stayed inside its number.
+   */
+  readonly blastTier?: BlastTier;
 }
 
 /** A reply that opens by declining or reporting an inability, whatever follows. */
@@ -228,6 +244,13 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
   // it is deliberately not an input to the status below. Absent when zero, so a
   // round under no budget pressure keeps the evidence it always had.
   if (facts.budgetRefusals) evidence.push(`budgetRefusals=${facts.budgetRefusals}`);
+  // D151: the blast-radius ladder. Recorded whenever the round went past its
+  // declared number — the reference implementation's own split, where an overrun
+  // is labelled and only a larger one costs anything. `hard_stop` cannot normally
+  // appear here (the write that would reach it is refused before it lands), but
+  // it is accepted so a hand-built fact can state what the ladder would have said.
+  const overran = facts.blastTier === "overrun" || facts.blastTier === "hard_stop";
+  if (facts.blastTier !== undefined && facts.blastTier !== "within") evidence.push(`blastRadius=${facts.blastTier}`);
   if (facts.failureClass !== null) {
     // A model that never produced anything usable means the round could not
     // start; the same holds for a budget refusal at step 0, which refused the
@@ -238,8 +261,13 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
     return { status, failureClass: facts.failureClass, evidence, reviewer: "mechanical" };
   }
   const veto = roundVeto(facts);
+  // ⚠️ D151 adds a third way to lose a clean success, and it is the same kind of
+  // thing as the other two: not evidence to be weighed, but a shape that
+  // disqualifies. `overran` is stated separately from the veto because the reason
+  // it is not a veto is that the round may still be a success in every other
+  // respect — it simply cost more room than the strategy said it would.
   return {
-    status: facts.toolErrors === 0 && veto === null ? "success" : "partial",
+    status: facts.toolErrors === 0 && veto === null && !overran ? "success" : "partial",
     failureClass: null,
     evidence: veto === null ? evidence : [...evidence, `veto=${veto}`],
     reviewer: "mechanical",

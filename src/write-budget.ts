@@ -220,8 +220,56 @@ export function isJournalPath(path: string): boolean {
 }
 
 /**
+ * The ratios that turn a declared file count into a ladder.
+ *
+ * ⚠️ These replace a hard wall at `maxFiles + 1`. The operator's reasoning, and
+ * why the wall had to go: a round that needs 28 files against a declared 20 is
+ * doing real work, and refusing it means the work does not get done at all — the
+ * estimate's error costs the objective. The reference implementation has no wall
+ * at the declared number either; it labels the overrun and starts charging only
+ * further out.
+ *
+ * The numbers are the operator's, not the reference's (which uses 2x and 3x), and
+ * they are deliberately tighter: the reference's declared numbers are much larger
+ * and its penalty is a multiplier on a continuous score. Ours: past 1.3x the round
+ * stops counting as a clean success, and at 1.5x the ladder stops.
+ */
+export const OVERRUN_RATIO = 1.3;
+export const HARD_STOP_RATIO = 1.5;
+
+/** How far a round's blast radius got, relative to the number it declared. */
+export type BlastTier = "within" | "exceeded" | "overrun" | "hard_stop";
+
+/**
+ * Classify what a round reached against what it declared.
+ *
+ * Pure, and computed from the ledger the budget already counts, so the ladder
+ * needs no state of its own. Boundaries are inclusive at the top of each tier:
+ * with a declared 20, 25 is `exceeded`, 26 is the first `overrun`, and 30 is the
+ * first refused write. Stated as a table because an off-by-one comparison here
+ * silently restores the wall the ladder exists to remove.
+ */
+export function blastTier(filesReached: number, maxFiles: number): BlastTier {
+  if (maxFiles <= 0) return "within";
+  const ratio = filesReached / maxFiles;
+  if (ratio >= HARD_STOP_RATIO) return "hard_stop";
+  if (ratio >= OVERRUN_RATIO) return "overrun";
+  return ratio > 1 ? "exceeded" : "within";
+}
+
+/** The file count at which the ladder stops: 1.5x the declared number. */
+export function hardStopAt(maxFiles: number): number {
+  return maxFiles * HARD_STOP_RATIO;
+}
+
+/**
  * Decide whether one more write fits, without performing it. Refusing here means
  * the write never happens, so a refusal cannot leave a half-written file behind.
+ *
+ * ⚠️ This no longer refuses at the declared number. It refuses only at the hard
+ * stop (1.5x); everything between the declared number and that stop is allowed
+ * and *labelled* — `blastTier` is what turns "the round went over" into a cost,
+ * and it is applied to the finished round, not to the write in front of it.
  */
 export function checkWrite(
   state: LedgerState,
@@ -251,15 +299,19 @@ export function checkWrite(
   // may have forbidden — skipping the ban for the agent's own journal would turn
   // a restriction into a hole shaped exactly like the file the agent writes most.
   if (!countsTowardWriteBudget(attempt.path)) return { allowed: true };
+  // The only file-count refusal left, and it sits at the hard stop rather than at
+  // the declared number. Reaching the stop is refused *inclusive*: with a declared
+  // 20 the stop is 30, so 29 writes land and the thirtieth does not.
+  const stop = hardStopAt(budget.maxFiles);
   if (attempt.path === null) {
     // A write whose target cannot be read from the arguments still consumes
     // budget: it is charged as its own anonymous slot rather than waved through.
     const anonymous = state.files.filter((entry) => entry.startsWith("\u0000")).length;
-    if (anonymous + 1 > budget.maxFiles) {
-      return refusal(`cycle file budget exhausted (${budget.maxFiles}); a write with no readable path was refused`);
+    if (anonymous + 1 >= stop) {
+      return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is 1.5x the declared ${budget.maxFiles}; a write with no readable path was refused`);
     }
-  } else if (!state.files.includes(attempt.path) && state.files.length + 1 > budget.maxFiles) {
-    return refusal(`cycle file budget exhausted: ${budget.maxFiles} file(s) per cycle, ${attempt.path} would be number ${state.files.length + 1}`);
+  } else if (!state.files.includes(attempt.path) && state.files.length + 1 >= stop) {
+    return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is 1.5x the declared ${budget.maxFiles}, ${attempt.path} would be number ${state.files.length + 1}`);
   }
   const lines = attempt.lines ?? 0;
   // The only line check left, and it is global. A round's own line budget is gone
@@ -277,53 +329,8 @@ function refusal(reason: string): LedgerDecision {
 }
 
 /**
- * The budget a round needs after the ceiling refused one of its writes, or null
- * when raising cannot help and the refusal should stand.
- *
- * This is the outlet D127's separation was missing. D127 established that "this
- * round was given too little room" is a different lesson from "this strategy did
- * not work" — and then left the first lesson with nowhere to go: the refusal was
- * counted, kept off the success axis, and the round carried on with the same
- * too-small ceiling for the rest of its life. The ceiling was a measurement
- * that could never be corrected by the thing it measured.
- *
- * A refusal is checked *before* the tool runs (`checkWrite`), so the write did
- * not happen and re-running it under more room costs nothing and cannot leave a
- * half-written file behind.
- *
- * Null means "do not raise". Two cases produce it: an attempt refused by
- * `forbiddenPaths`, which is policy rather than measurement and cannot be
- * widened by arithmetic; and an attempt that already fits, which would be a
- * refusal this function cannot explain.
- *
- * The "at most one raise per round" bound lives in the caller, not here: a
- * ceiling that always yields is not a ceiling, and the design leans on the wall
- * being real enough to be hit again next round.
+ * Charge an attempt that was actually performed.
  */
-export function raiseFor(
-  state: LedgerState,
-  attempt: WriteAttempt,
-  budget: WriteBudget,
-): WriteBudget | null {
-  // Policy first. A banned path stays banned however much room is added, so
-  // spending the round's one raise on it would waste the raise and still refuse.
-  if (budget.forbiddenPaths.length > 0) {
-    if (attempt.path === null) return null;
-    if (forbiddenEntryFor(attempt.path, budget.forbiddenPaths) !== null) return null;
-  }
-  const anonymous = state.files.filter((entry) => entry.startsWith("\u0000")).length;
-  const filesNeeded = attempt.path === null
-    ? anonymous + 1
-    : state.files.includes(attempt.path) ? state.files.length : state.files.length + 1;
-  const maxFiles = Math.max(budget.maxFiles, filesNeeded);
-  // Files only. Lines no longer have a per-round ceiling to widen, and a refusal
-  // on the global cap is not a measurement of this round's ambition — inventing
-  // room for it would be adding back a number the operator just removed.
-  if (maxFiles === budget.maxFiles) return null;
-  return { maxFiles, forbiddenPaths: budget.forbiddenPaths };
-}
-
-/** Charge an attempt that was actually performed. */
 export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: number): LedgerState {
   // The ledger is what the budget is measured against, so it must record exactly
   // what the budget counts. An exempt write that still landed here would spend

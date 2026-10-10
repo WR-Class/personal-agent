@@ -18,7 +18,7 @@ import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
-import { budgetFor, chargeWrite, checkWrite, raiseFor, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { blastTier, budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type BlastTier, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import type { GeneStore } from "./gene-store.ts";
@@ -628,19 +628,6 @@ export class AgentRuntime {
   /** Cumulative writes for the cycle in flight (D18). */
   private writeLedger: LedgerState = { files: [], lines: 0 };
   private writeBudget: WriteBudget;
-  /**
-   * Whether this round's ceiling is still a guess being discovered rather than a
-   * gene's commitment.
-   *
-   * The one raise lives on the road from "no gene" to "minted gene": there the
-   * ceiling is a provisional estimate, and its first refusal is evidence the
-   * estimate was too low, so the ceiling is widened once and the write runs.
-   * Once a gene supplies a number that number is a commitment — hitting it is a
-   * real failure, which is what makes the score mean anything and what the next
-   * mint's statistic is for. A ceiling that yields every time could never be hit,
-   * and a limit nothing ever hits measures nothing.
-   */
-  private provisionalCeiling = false;
   private readonly defaultWriteBudget: WriteBudget;
   private readonly geneStore: GeneStore | undefined;
   private readonly cycleStore: CycleStore | undefined;
@@ -812,6 +799,10 @@ export class AgentRuntime {
     // `tools` is `undefined` rather than empty on that failure path, which is a
     // second reason the success test comes first.
     const graded = !(evaluation.status === "success" && (tools?.length ?? 0) === 0);
+    // Re-derived here rather than threaded in from the verdict: it is a pure
+    // function of the ledger and the number the round declared, both still in
+    // hand, and the budget can no longer change mid-round (D151).
+    const tier = blastTier(this.writeLedger.files.length, this.writeBudget.maxFiles);
     await this.geneStore.appendOutcome({
       address,
       succeeded: evaluation.status === "success",
@@ -838,11 +829,11 @@ export class AgentRuntime {
       // ⚠️ `budgetRefusals` must survive even when nothing was written, because
       // it is the flag that says the other two numbers are censored.
       //
-      // `writeCeiling` rides along under the same condition, and is the ceiling
-      // the round *ended* under — the one that refused, when anything was
-      // refused, not the smaller one it started with. It is what lets
-      // `measuredBudget` take the median over the limit as well as the demand, so
-      // the estimate can come back **down**; a gene whose number could only ever
+      // `writeCeiling` rides along under the same condition. ⚠️ D151: it is simply
+      // the number this round declared — the raise that used to make the ended
+      // ceiling differ from the starting one is gone. It stays because it is what
+      // lets `measuredBudget` take the median over the limit as well as the demand,
+      // so the estimate can come back **down**; a gene whose number could only ever
       // rise is a gene nobody can tighten. See `WriteObservation.ceilingFiles`.
       ...(this.writeLedger.files.length > 0 || budgetRefusals > 0
         ? {
@@ -850,6 +841,11 @@ export class AgentRuntime {
           linesWritten: this.writeLedger.lines,
           ...(budgetRefusals > 0 ? { budgetRefusals } : {}),
           writeCeiling: { files: this.writeBudget.maxFiles },
+          // D151: how far past the declared number this round went. Written only
+          // when it went past at all, so a round inside its number keeps the exact
+          // bytes it always had, and "did not overrun" stays distinguishable from
+          // "the field did not exist yet".
+          ...(tier === "within" ? {} : { blastTier: tier }),
         }
         : {}),
       evidence: evaluation.evidence,
@@ -941,15 +937,14 @@ export class AgentRuntime {
     // round; with no gene applied the runtime default still applies, because
     // "unbounded" is not a safe default (D18).
     this.writeLedger = { files: [], lines: 0 };
-    // A gene's number is a commitment; with no gene the ceiling is still being
-    // discovered, and only there may a refusal raise it (see `provisionalCeiling`).
-    // Read off the SAME expression that sizes the budget, so the two cannot
-    // disagree: the first version tested `applied === null`, and a gene-less round
-    // leaves `applied` *undefined* (line 891), so the flag read "committed" for
-    // every round and the raise never fired at all.
+    // ⚠️ D151 removed the one provisional raise that used to live here. It existed
+    // only because the declared number was a hard wall, so the first refusal was
+    // evidence the estimate was too low and could be corrected once. Nothing
+    // refuses at the declared number any more — the ladder's hard stop is 1.5x it
+    // — so there is no refusal left for a raise to answer, and keeping it would
+    // have left the round's behaviour decided by a mechanism that never fires.
     const geneConstraints = applied?.constraints ?? null;
     this.writeBudget = budgetFor(geneConstraints, this.defaultWriteBudget);
-    this.provisionalCeiling = geneConstraints === null;
 
     await this.ensureSession();
     signal?.throwIfAborted();
@@ -1055,7 +1050,11 @@ export class AgentRuntime {
         // then the applied gene's claims are compared against that same record.
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
-        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, filesWritten: this.writeLedger.files });
+        // The ladder's label for this round, computed from the ledger the budget
+        // already counts. Handed to the verdict rather than applied here, so the
+        // one place that decides what a round was stays the one place (D151).
+        const tier = blastTier(this.writeLedger.files.length, this.writeBudget.maxFiles);
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, filesWritten: this.writeLedger.files, blastTier: tier });
         const completionEvaluation = finalizing ? {...evaluation,status:'partial' as const,evidence:[...evaluation.evidence,'Configured step cap reached; summary is not task completion.']} : evaluation;
         // One evidence object, named, and read by both consumers. Writing the pair
         // out twice would let the gene's claims and the task's claims be judged
@@ -1190,46 +1189,21 @@ export class AgentRuntime {
     // given too little room". Two different lessons, and only one of them is
     // about the strategy.
     let budgetRefusals = 0;
-    // How many times this round corrected an under-sized ceiling. Local rather
-    // than journaled: the raise's whole effect is the footprint it lets through,
-    // and `filesWritten` already records that. The number that *is* journaled is
-    // the ceiling it ended under, because the estimator reads that one. A field
-    // nothing reads would be the same defect as a constraint nothing enforces.
-    let ceilingRaised = 0;
     let index = 0;
     for (const call of calls) {
       const position = index++;
       this.outcomeTools?.push(call.name);
-      // Write budget, checked before the tool runs. A refusal here means the
-      // write never happened, so it cannot leave a partially written file or a
-      // dangling tool correlation behind — the same rule the count budgets above
-      // follow. The refusal is recorded as a failed tool result rather than
-      // thrown, so the model sees it and one over-budget call cannot abort a
-      // round that has other work left to do. The round's *first* refusal never
-      // reaches the model at all: it raises the ceiling and the write runs, which
-      // is why the code below branches before it starts recording anything.
+      // Write budget, checked before the tool runs. The only refusal left is the
+      // ladder's hard stop at 1.5x the declared number (D151) — the declared
+      // number itself no longer refuses anything, so an estimate that was too low
+      // now costs the round a tier instead of costing it the objective. The
+      // refusal is recorded as a failed tool result rather than thrown, so the
+      // model sees it and one stopped write cannot abort a round that has other
+      // work left to do.
       const attempt = readWriteAttempt(call.name, call.arguments);
       if (attempt !== null) {
         const decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
-        // The one raise, and only while the ceiling is still being discovered.
-        // With no gene applied the ceiling is a provisional estimate, so its first
-        // refusal is read as what it is — evidence the estimate was too low — and
-        // the ceiling is widened to cover exactly this write, which then runs. A
-        // gene-applied round gets no raise: there the number is a commitment, and
-        // hitting it is the real failure that the score and the next mint's
-        // statistic exist for. Either way the model only ever sees a refusal that
-        // stood, and only that reaches `budgetRefusals`.
-        const widened = decision.allowed || !this.provisionalCeiling || ceilingRaised > 0
-          ? null
-          : raiseFor(this.writeLedger, attempt, this.writeBudget);
-        if (widened !== null) {
-          ceilingRaised += 1;
-          this.writeBudget = widened;
-          await this.store.appendAudit(this.sessionId, {
-            tool: call.name, decision: "allowed", cause: "budget",
-            reason: `write budget raised to ${widened.maxFiles} file(s): ${decision.reason ?? "the ceiling refused this write"}`,
-          });
-        } else if (!decision.allowed) {
+        if (!decision.allowed) {
           budgetRefusals += 1;
           this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
           this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: true, content: activityText(`refused: ${decision.reason}`) });

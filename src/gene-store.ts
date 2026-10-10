@@ -29,7 +29,7 @@ import {
 import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 import type { FailureFact } from "./distill.ts";
 import type { SuccessFact } from "./induct.ts";
-import { measuredBudget, type WriteObservation } from "./write-budget.ts";
+import { measuredBudget, type BlastTier, type WriteObservation } from "./write-budget.ts";
 
 const SCHEMA = 1;
 
@@ -333,6 +333,13 @@ export class GeneStore {
       linesWritten?: number;
       budgetRefusals?: number;
       writeCeiling?: { files: number };
+      /**
+       * How far past its declared number this round went (D151). Written only when
+       * it went past at all. Nothing in the fold reads it — the verdict already
+       * carries the cost — so it is here for the operator reading the log, which is
+       * the same reason `evidence` is here.
+       */
+      blastTier?: BlastTier;
       graded?: boolean;
     },
     at: number = Date.now(),
