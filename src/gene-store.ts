@@ -29,6 +29,7 @@ import {
 import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 import type { FailureFact } from "./distill.ts";
 import type { SuccessFact } from "./induct.ts";
+import { measuredBudget, type WriteObservation } from "./write-budget.ts";
 
 const SCHEMA = 1;
 
@@ -158,8 +159,13 @@ export type GeneStoreRecord =
   | { readonly schema: 1; readonly type: "retire"; readonly at: number; readonly address: string; readonly reason: string };
 
 export interface GeneLibraryState {
-  /** Live genes with their folded expression counters. */
-  readonly genes: ReadonlyMap<string, { gene: Gene; expression: GeneExpression }>;
+  /**
+   * Live genes with their folded expression counters and the write budget their
+   * own rounds imply — which is **not** `gene.constraints`, the prior they were
+   * minted from. See `reMeasure` for why the two are allowed to differ, and why
+   * the difference is derived here instead of written into a successor gene.
+   */
+  readonly genes: ReadonlyMap<string, { gene: Gene; expression: GeneExpression; constraints: Gene["constraints"] }>;
   /** Gene-less baseline outcomes, the counterfactual for future gain pricing. */
   readonly baseline: { attempts: number; successes: number };
   /**
@@ -455,12 +461,15 @@ export class GeneStore {
   /** Current state: the fold over the whole log. */
   async state(): Promise<GeneLibraryState> {
     const records = await this.ensureLoaded();
-    const genes = new Map<string, { gene: Gene; expression: GeneExpression }>();
+    // Two passes, and the split is the point: the first walk is the log read in
+    // order (streak and lastSuccessAt depend on that order), the second turns each
+    // gene's own rounds into the budget it now implies. See `reMeasure`.
+    const folded = new Map<string, { gene: Gene; expression: GeneExpression; rounds: WriteObservation[] }>();
     const retired = new Map<string, string>();
     const baseline = { attempts: 0, successes: 0 };
     for (const record of records) {
       if (record.type === "gene") {
-        if (!genes.has(record.address)) genes.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0 } });
+        if (!folded.has(record.address)) folded.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0 }, rounds: [] });
         continue;
       }
       // Before the outcome branch, and the order is load-bearing rather than
@@ -498,9 +507,20 @@ export class GeneStore {
         if (record.succeeded) baseline.successes += 1;
         continue;
       }
-      const entry = genes.get(record.address);
+      const entry = folded.get(record.address);
       if (!entry) continue;
       entry.expression.attempts += 1;
+      // The gene's own footprint, kept as raw material for `reMeasure`. Rows from
+      // before the footprint and the ceiling were journaled carry nothing here, and
+      // the estimator filters those rather than reading them as zeros — the
+      // cold-start promise `WriteObservation` documents.
+      entry.rounds.push({
+        filesWritten: record.filesWritten ?? 0,
+        linesWritten: record.linesWritten ?? 0,
+        budgetRefusals: record.budgetRefusals ?? 0,
+        ceilingFiles: record.writeCeiling?.files,
+        ceilingLines: record.writeCeiling?.lines,
+      });
       if (record.succeeded && !truncated) {
         entry.expression.successes += 1;
         entry.expression.lastSuccessAt = record.at;
@@ -508,7 +528,7 @@ export class GeneStore {
       }
       else if (!record.succeeded) entry.expression.streak += 1;
     }
-    return { genes, baseline, retired };
+    return { genes: reMeasure(folded), baseline, retired };
   }
 
   /**
@@ -548,8 +568,54 @@ export class GeneStore {
     // the gates), so this is exactly "who was eligible and lost", which is what a
     // replay contrasts the winner against.
     const candidateAddresses = ranked.map((candidate) => candidate.address);
-    return { address: selection.address, name: selection.gene.name, constraints: selection.gene.constraints, validation: selection.gene.validation, block: renderGeneBlock(selection), drifted, candidates: candidateAddresses };
+    // The folded budget, not the declared one. A gene's number is re-measured from
+    // its own rounds on every fold, so the declaration is the prior it starts from
+    // rather than the number an old gene runs under forever. See `reMeasure`.
+    const constraints = state.genes.get(selection.address)?.constraints ?? selection.gene.constraints;
+    return { address: selection.address, name: selection.gene.name, constraints, validation: selection.gene.validation, block: renderGeneBlock(selection), drifted, candidates: candidateAddresses };
   }
+}
+
+/**
+ * Every gene's write budget, re-measured from its own rounds.
+ *
+ * ⚠️ **Why this is derived rather than stored, and why no successor is minted.**
+ * A gene is content-addressed and immutable, and the documented way to change one
+ * is to mint a successor and retire the predecessor. That is right for a corrected
+ * *strategy* and wrong for a corrected *number*: a successor is a different
+ * address, so every attempt and success accumulated against the old one stays
+ * there while the old one is retired — a working capability's whole track record
+ * discarded to fix an arithmetic. So the declared `constraints` keep exactly the
+ * bytes they were minted with (they are part of the hash) and the number that
+ * reaches the enforcement layer is folded out of the log instead. Deterministic,
+ * replayable, and nothing has to be migrated.
+ *
+ * The declared pair is the **prior**, not a floor. With no rounds yet it comes
+ * back untouched; once the gene has rounds, the median over those rounds plus the
+ * ceilings they ran under takes over. That is what lets a gene be tightened as
+ * well as widened — "原来5就够，为什么现在要10" is the question, and p95 could
+ * never answer it because a tail quantile has nothing pulling it down. It is also
+ * what eventually lets 甲's floor go: a cold-start `{1, 20}` gene used to be
+ * frozen at the number a minter guessed, and a gene that truncates every round now
+ * has its own truncated rounds in the sample set correcting it.
+ *
+ * ⚠️ `forbiddenPaths` is carried through from the declaration and **never**
+ * re-measured. A ban is policy rather than measurement, and widening it would
+ * silently lift a restriction — 甲's rule, unchanged here.
+ */
+function reMeasure(
+  folded: ReadonlyMap<string, { gene: Gene; expression: GeneExpression; rounds: readonly WriteObservation[] }>,
+): Map<string, { gene: Gene; expression: GeneExpression; constraints: Gene["constraints"] }> {
+  const genes = new Map<string, { gene: Gene; expression: GeneExpression; constraints: Gene["constraints"] }>();
+  for (const [address, entry] of folded) {
+    const measured = measuredBudget(entry.rounds, entry.gene.constraints);
+    genes.set(address, {
+      gene: entry.gene,
+      expression: entry.expression,
+      constraints: { ...measured, forbiddenPaths: entry.gene.constraints.forbiddenPaths },
+    });
+  }
+  return genes;
 }
 
 /** Test-time injection: the strategy and warnings, never the constraints. */

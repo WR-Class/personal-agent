@@ -45,6 +45,9 @@ function draft(overrides: Partial<GeneDraft> = {}): GeneDraft {
   };
 }
 
+/** The request the `draft()` gene answers, so these tests exercise real selection. */
+const matchingRequest = { intent: "build" as const, signals: ["snippet"], text: "用 snippet 替换" };
+
 function expression(attempts: number, successes: number, lastSuccessAt: number | null = NOW, streak = 0): GeneExpression {
   return { attempts, successes, lastSuccessAt, streak };
 }
@@ -179,6 +182,63 @@ describe("gene store", () => {
     }, NOW + 20);
     assert.deepEqual({ ...(await store.state()).baseline }, { attempts: 1, successes: 1 });
     assert.equal((await store.failures()).length, 1, "but it is still a lesson about that round");
+  });
+
+  it("⚠️ re-measures an existing gene's ceiling from its own rounds, upward", async () => {
+    // The operator's own arithmetic, end to end through selection. A gene that
+    // declares 6 and is refused at 6 three times proves each of those rounds wanted
+    // 7 (`reached + 1`), and the single 6 they all ran under is a sample too — so
+    // {6, 7, 7, 7}, and a median of 7. Not 6, which would be the fixed point, and
+    // not 8, which would be believing the loudest round.
+    const store = new GeneStore(join(fixture.root, "remeasure-up.jsonl"));
+    const minted = mintGene(draft({ constraints: { maxFiles: 6, maxLines: 60, forbiddenPaths: ["docs/"] } }));
+    await store.appendGene(minted, NOW);
+    assert.equal((await store.selectFor(matchingRequest, NOW))?.constraints.maxFiles, 6, "the prior, before any round");
+    for (let round = 0; round < 3; round++) {
+      await store.appendOutcome({
+        address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
+        filesWritten: 6, linesWritten: 60, budgetRefusals: 1, writeCeiling: { files: 6, lines: 60 },
+      }, NOW + 10 + round);
+    }
+    const applied = await store.selectFor(matchingRequest, NOW + 100);
+    assert.equal(applied?.address, minted.address, "the gene is still the same gene — no successor, same address");
+    assert.equal(applied?.constraints.maxFiles, 7, "three capped rounds lift it to 7");
+    assert.equal(applied?.constraints.maxLines, 61);
+  });
+
+  it("⚠️ and downward, which is the half p95 could never do", async () => {
+    // The other direction, and the reason the ceiling is a sample at all: a gene
+    // that ran under 7 and was then only asked for 4, 4 and 3 must be tightened to
+    // 4. Under p95 it stayed 7 for good, because a tail quantile has nothing
+    // pulling it back down — the estimate could only ratchet upward.
+    const store = new GeneStore(join(fixture.root, "remeasure-down.jsonl"));
+    const minted = mintGene(draft({ constraints: { maxFiles: 7, maxLines: 70, forbiddenPaths: [] } }));
+    await store.appendGene(minted, NOW);
+    for (const [files, lines] of [[4, 40], [4, 40], [3, 30]] as const) {
+      await store.appendOutcome({
+        address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
+        filesWritten: files, linesWritten: lines, writeCeiling: { files: 7, lines: 70 },
+      }, NOW + 10 + files);
+    }
+    const applied = await store.selectFor(matchingRequest, NOW + 100);
+    assert.equal(applied?.constraints.maxFiles, 4, "samples are {7, 4, 4, 3}; the median is 4");
+    assert.equal(applied?.constraints.maxLines, 40);
+  });
+
+  it("keeps the declared number before any round, and never re-measures a ban", async () => {
+    const store = new GeneStore(join(fixture.root, "remeasure-prior.jsonl"));
+    const minted = mintGene(draft({ constraints: { maxFiles: 6, maxLines: 60, forbiddenPaths: ["docs/"] } }));
+    await store.appendGene(minted, NOW);
+    const fresh = await store.selectFor(matchingRequest, NOW);
+    assert.equal(fresh?.constraints.maxFiles, 6, "no rounds yet, so the prior stands");
+    assert.deepEqual(fresh?.constraints.forbiddenPaths, ["docs/"], "a ban is policy, not a measurement");
+
+    // A row whose footprint was never journaled — a pre-丙 row — is not a
+    // measurement of zero, and must not drag the number down toward the floor.
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
+    const after = await store.selectFor(matchingRequest, NOW + 20);
+    assert.equal(after?.constraints.maxFiles, 6, "an unmeasured row is not a measurement of zero");
+    assert.deepEqual(after?.constraints.forbiddenPaths, ["docs/"]);
   });
 
   it("D116: writes outcomes to a companion file, gene/retire to the main file, and folds both", async () => {
