@@ -129,6 +129,58 @@ describe("gene store", () => {
     assert.deepEqual({ ...(await store.state()).baseline }, { attempts: 0, successes: 0 });
   });
 
+  it("⚠️ treats a round its own gene's ceiling stopped as evidence about that gene", async () => {
+    // The gap this closes: a truncated success reached **neither** collector —
+    // `failures()` wanted `succeeded === false`, `geneLessSuccesses()` wanted
+    // `address === null` — so the strongest evidence that a gene is mis-sized was
+    // excluded from the estimator that sizes genes, while a gene that always
+    // truncated kept a spotless record. 甲 floored the consumer against exactly
+    // that, which is why it could not be removed before this.
+    const path = join(fixture.root, "truncated.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
+    await store.appendOutcome({
+      address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
+      filesWritten: 1, linesWritten: 20, budgetRefusals: 1, writeCeiling: { files: 1, lines: 20 },
+    }, NOW + 20);
+
+    const facts = await store.failures();
+    assert.equal(facts.length, 1, "the truncated round is the one lesson here");
+    assert.equal(facts[0]?.failureClass, "budget", "it ended in success, so it takes the class that names what happened");
+    assert.equal(facts[0]?.address, minted.address, "and it stays attributed to the gene that declared the number");
+    assert.equal(facts[0]?.budgetRefusals, 1, "so the estimator can tell a censored value from a real one");
+    assert.equal(facts[0]?.ceilingFiles, 1, "the ceiling travels with it, which is what lets the estimate come back down");
+
+    const entry = (await store.state()).genes.get(minted.address);
+    assert.equal(entry?.expression.attempts, 2, "the gene was applied twice, and both attempts count");
+    assert.equal(entry?.expression.successes, 1, "but only the round that got what it asked for is a success");
+    assert.equal(entry?.expression.lastSuccessAt, NOW + 10, "a truncated round does not refresh the last clean win");
+    assert.equal(entry?.expression.streak, 0, "and it is not a strategy failure either — quarantine is not for arithmetic");
+  });
+
+  it("keeps a clean success clean, and a gene-less truncation off the genes", async () => {
+    const path = join(fixture.root, "not-truncated.jsonl");
+    const store = new GeneStore(path);
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true, intent: "build", signals: ["snippet"] }, NOW + 10);
+    assert.equal((await store.failures()).length, 0, "a success nothing stopped is not a lesson");
+    assert.equal((await store.state()).genes.get(minted.address)?.expression.successes, 1, "so it stays a clean success");
+
+    // A gene-less round has no declared number that could be wrong, so its
+    // truncation measures the runtime default. Deflating the control group's
+    // success rate would flatter every gene's relative score, so the baseline is
+    // left whole — an asymmetry with a reason rather than an oversight.
+    await store.appendOutcome({
+      address: null, succeeded: true, intent: "build", signals: ["snippet"],
+      filesWritten: 1, linesWritten: 20, budgetRefusals: 1,
+    }, NOW + 20);
+    assert.deepEqual({ ...(await store.state()).baseline }, { attempts: 1, successes: 1 });
+    assert.equal((await store.failures()).length, 1, "but it is still a lesson about that round");
+  });
+
   it("D116: writes outcomes to a companion file, gene/retire to the main file, and folds both", async () => {
     const path = join(fixture.root, "split.jsonl");
     const store = new GeneStore(path);

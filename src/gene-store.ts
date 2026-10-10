@@ -353,24 +353,50 @@ export class GeneStore {
   }
 
   /**
-   * The failure archive: every journaled failure that names the request kind it
-   * came from. Rows without `intent`/`signals` predate the archive (or are
-   * successes) and cannot form a pattern, so they are not returned.
+   * The lesson archive: every journaled round that names the request kind it came
+   * from **and** has something to teach about why it did not manage what it was
+   * asked for. That is two shapes, not one:
+   *
+   * - a round that **failed**, which carries its own `failureClass`; and
+   * - a round that **succeeded but was stopped by its ceiling** — a standing
+   *   `budgetRefusals > 0`. It has no `failureClass` of its own, because it ended
+   *   in success, so it takes `"budget"`: the same class `classifyFailure` gives a
+   *   budget error, and the one that names what actually happened.
+   *
+   * The second shape is why this method matters. `measuredBudget` can only be fed
+   * by this method and by `geneLessSuccesses()`, and a truncated success reached
+   * **neither**: this one required `succeeded === false`, that one required
+   * `address === null`. So the strongest single piece of evidence that a gene is
+   * mis-sized — a round that ran into the number that gene declared — was
+   * excluded from the estimator that sizes genes, while the gene kept a record of
+   * clean successes. 甲 floored the consumer against exactly that, which is why it
+   * could not be removed before this.
+   *
+   * The name is now narrower than the meaning, and stays: renaming it would churn
+   * every caller for a word.
+   *
+   * Rows without `intent`/`signals` predate the archive and cannot form a pattern;
+   * an ungraded row carries no evidence either way. Neither is returned.
    */
   async failures(): Promise<FailureFact[]> {
     const records = await this.ensureLoaded();
     const facts: FailureFact[] = [];
     for (const record of records) {
-      if (record.type !== "outcome" || record.succeeded) continue;
+      if (record.type !== "outcome") continue;
+      const truncated = (record.budgetRefusals ?? 0) > 0;
+      // A success is a lesson only when its ceiling stopped something.
+      if (record.succeeded && !truncated) continue;
       // An ungraded round carries no evidence about the strategy, so it must not
       // reach distillation either: a chat answer is not a failure pattern.
       if (record.graded === false) continue;
-      if (!record.intent || !record.signals || !record.failureClass) continue;
+      if (!record.intent || !record.signals) continue;
+      const failureClass = record.failureClass ?? (truncated ? "budget" : null);
+      if (!failureClass) continue;
       facts.push({
         at: record.at,
         intent: record.intent,
         signals: record.signals,
-        failureClass: record.failureClass,
+        failureClass,
         evidence: record.evidence ?? [],
         address: record.address,
         filesWritten: record.filesWritten ?? 0,
@@ -452,7 +478,21 @@ export class GeneStore {
       // baseline count. Symmetric on purpose — charging an attempt while refusing
       // the success would be strictly worse than either counting or ignoring it,
       // because it manufactures a failure out of a round that produced no evidence.
+      // ⚠️ `budgetRefusals` splits the success branch in two, and it is the only
+      // thing that does. A round that ran into the number its *own gene* declared
+      // did not get what it was asked for, so crediting it as a clean success would
+      // let a gene that truncates every round keep a spotless record — which is the
+      // shape 甲 floored the consumer against. The attempt still counts, because the
+      // gene was applied and did run; `streak` is deliberately left alone, because
+      // quarantine is for strategy failures and deleting a capability over the
+      // minter's arithmetic is the mistake D127 undid, one layer over.
+      //
+      // The baseline below is left whole on purpose, and the asymmetry has a
+      // reason. A gene-less round has no declared number that could be wrong, so
+      // its truncation measures the runtime default — and deflating the control
+      // group's success rate would flatter every gene's relative score.
       if (record.graded === false) continue;
+      const truncated = (record.budgetRefusals ?? 0) > 0;
       if (record.address === null) {
         baseline.attempts += 1;
         if (record.succeeded) baseline.successes += 1;
@@ -461,12 +501,12 @@ export class GeneStore {
       const entry = genes.get(record.address);
       if (!entry) continue;
       entry.expression.attempts += 1;
-      if (record.succeeded) {
+      if (record.succeeded && !truncated) {
         entry.expression.successes += 1;
         entry.expression.lastSuccessAt = record.at;
         entry.expression.streak = 0;
       }
-      else entry.expression.streak += 1;
+      else if (!record.succeeded) entry.expression.streak += 1;
     }
     return { genes, baseline, retired };
   }
