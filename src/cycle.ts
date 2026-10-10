@@ -11,6 +11,8 @@
  * phases irreversible, review gate before integration).
  */
 
+import { isJournalPath } from "./write-budget.ts";
+
 export type CyclePhase =
   | "planned"
   | "executing"
@@ -138,6 +140,15 @@ export interface RunFacts {
    * the gene's to answer for.
    */
   readonly budgetRefusals?: number;
+  /**
+   * Distinct paths this round's writes actually landed on.
+   *
+   * Read for one question only: did the round write anything outside its own
+   * journal? Optional like `reply`, and for the same reason — a caller that did
+   * not hand the ledger over is not claiming the round was hollow, so absent
+   * data skips the check rather than firing it against an empty list.
+   */
+  readonly filesWritten?: readonly string[];
 }
 
 /** A reply that opens by declining or reporting an inability, whatever follows. */
@@ -172,6 +183,25 @@ function isEchoOf(prompt: string, reply: string): boolean {
  */
 export function roundVeto(facts: RunFacts): string | null {
   if (facts.steps === 0) return "no model turn produced a reply";
+  // A round whose only writes were its own journal did no work, whatever the
+  // reply says. This is a shape veto like the four below rather than a weight:
+  // the journal is written on *every* round, so "wrote something" is not
+  // evidence of work, and counting it as such is how a round that changed
+  // nothing still reports success.
+  //
+  // Deliberately narrow. It fires only when *every* write landed in the journal,
+  // so a round whose deliverable is a document is untouched, and one write
+  // anywhere else clears it. Catching "one token file plus the journal" is the
+  // validation commands' job, not this rule's — a path predicate cannot see
+  // whether the work was real, and pretending otherwise would cost more in false
+  // positives than it catches.
+  //
+  // Placed before the `reply === undefined` early return: whether the round did
+  // any work does not depend on whether the caller handed over the reply.
+  if (facts.filesWritten !== undefined && facts.filesWritten.length > 0
+    && facts.filesWritten.every((path) => isJournalPath(path))) {
+    return "wrote only the agent's own journal";
+  }
   // Absent data is not evidence: a caller that did not hand over the reply is
   // not claiming the reply was bad, so the shape checks are skipped rather than
   // fired against an empty string.

@@ -147,6 +147,55 @@ function forbiddenEntryFor(target: string, forbiddenPaths: readonly string[]): s
 }
 
 /**
+ * The agent's own journal, and the paths exempt from the budget count.
+ *
+ * ⚠️ Two lists, deliberately of different length, because they answer two
+ * different questions.
+ *
+ * The **journal** answers "did this round do any work?". Writing your own diary
+ * is never the work, whatever the round was asked to do — the journal is written
+ * on every round, so its presence is not evidence that anything happened. It is
+ * a directory rather than a set of extensions on purpose: an extension whitelist
+ * cannot express "this round's deliverable is the document", so it would call a
+ * documentation round hollow. That false positive is not hypothetical — the
+ * reference implementation shipped it and had to patch it.
+ *
+ * The **budget** list answers "should this write spend the round's room?". It is
+ * the journal plus test artifacts, because a test artifact is not chosen by the
+ * agent at all: the round was told to run the tests and the runner wrote them.
+ * Charging for that would let a single test run exhaust a round's budget.
+ *
+ * Documentation is on the counting side of both lists. A document write is real
+ * blast radius, and a round whose deliverable is the document is real work.
+ */
+const JOURNAL_PREFIXES: readonly string[] = [".personal-agent"];
+
+/** Journal plus test artifacts: exempt from the count, still not work. */
+const BUDGET_EXEMPT_PREFIXES: readonly string[] = [".personal-agent", ".test-artifacts"];
+
+/** Path-segment match, the same rule `forbiddenEntryFor` uses. */
+function underAnyPrefix(raw: string | null, prefixes: readonly string[]): boolean {
+  // A write whose target could not be read is never exempt. This module's
+  // precedent already says unparseable arguments must not buy extra room, and
+  // the same argument holds here: a target that cannot be read cannot be shown
+  // to be the agent's own diary.
+  if (raw === null) return false;
+  const path = normalizeForComparison(raw);
+  if (path === "") return false;
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+/** Does this write spend the round's file and line budget? */
+export function countsTowardWriteBudget(path: string | null): boolean {
+  return !underAnyPrefix(path, BUDGET_EXEMPT_PREFIXES);
+}
+
+/** Is this path inside the agent's own journal? */
+export function isJournalPath(path: string): boolean {
+  return underAnyPrefix(path, JOURNAL_PREFIXES);
+}
+
+/**
  * Decide whether one more write fits, without performing it. Refusing here means
  * the write never happens, so a refusal cannot leave a half-written file behind.
  */
@@ -173,6 +222,11 @@ export function checkWrite(
       return refusal(`cycle forbids this path: ${attempt.path} is under ${entry}`);
     }
   }
+  // Exempt writes pass without touching either counter. Checked *after* the ban,
+  // never before: a ban is policy, and an exempt path is still a path this cycle
+  // may have forbidden — skipping the ban for the agent's own journal would turn
+  // a restriction into a hole shaped exactly like the file the agent writes most.
+  if (!countsTowardWriteBudget(attempt.path)) return { allowed: true };
   if (attempt.path === null) {
     // A write whose target cannot be read from the arguments still consumes
     // budget: it is charged as its own anonymous slot rather than waved through.
@@ -242,6 +296,10 @@ export function raiseFor(
 
 /** Charge an attempt that was actually performed. */
 export function chargeWrite(state: LedgerState, attempt: WriteAttempt, index: number): LedgerState {
+  // The ledger is what the budget is measured against, so it must record exactly
+  // what the budget counts. An exempt write that still landed here would spend
+  // room that `checkWrite` never charged for.
+  if (!countsTowardWriteBudget(attempt.path)) return state;
   const path = attempt.path ?? `\u0000${index}`;
   const files = state.files.includes(path) ? state.files : [...state.files, path];
   return { files, lines: state.lines + (attempt.lines ?? 0) };

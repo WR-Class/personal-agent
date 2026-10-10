@@ -1051,7 +1051,7 @@ export class AgentRuntime {
         // then the applied gene's claims are compared against that same record.
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
-        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals });
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, filesWritten: this.writeLedger.files });
         const completionEvaluation = finalizing ? {...evaluation,status:'partial' as const,evidence:[...evaluation.evidence,'Configured step cap reached; summary is not task completion.']} : evaluation;
         // One evidence object, named, and read by both consumers. Writing the pair
         // out twice would let the gene's claims and the task's claims be judged

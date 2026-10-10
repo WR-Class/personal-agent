@@ -162,6 +162,39 @@ describe("mechanical evaluation", () => {
     // A caller that never supplied a reply is not asserting the reply was bad.
     assert.equal(evaluateRun({ steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null }).status, "success");
   });
+
+  it("refuses to call a journal-only round a success, and leaves a document round alone", () => {
+    // The journal is written on *every* round, so "wrote something" is not
+    // evidence of work. The veto fires only when every write landed there.
+    const hollow = evaluateRun({
+      steps: 1, toolCalls: 1, toolErrors: 0, failureClass: null, reply: "done",
+      filesWritten: [".personal-agent/genes.jsonl", ".personal-agent/sessions/s1.jsonl"],
+    });
+    assert.equal(hollow.status, "partial");
+    // Partial, never failed: the round did not break, it just did not amount to
+    // the work. And a null failureClass is what keeps it out of the failure
+    // archive — the lesson here is about this round, not about the strategy.
+    assert.equal(hollow.failureClass, null);
+    // ⚠️ The reverse direction, and the whole reason the journal is a directory
+    // rather than a code-extension whitelist: a round whose deliverable IS the
+    // document did real work. A whitelist calls this one hollow, which is the
+    // false positive the reference implementation shipped and later had to patch.
+    const documentation = evaluateRun({
+      steps: 1, toolCalls: 1, toolErrors: 0, failureClass: null, reply: "写好了",
+      filesWritten: ["docs/STATUS.md"],
+    });
+    assert.equal(documentation.status, "success");
+    // One write anywhere else clears it, journal or not.
+    assert.equal(evaluateRun({
+      steps: 1, toolCalls: 2, toolErrors: 0, failureClass: null, reply: "done",
+      filesWritten: [".personal-agent/genes.jsonl", "src/runtime.ts"],
+    }).status, "success");
+    // A caller that did not hand the ledger over is not asserting the round was
+    // hollow, so absent data skips the check rather than firing it.
+    assert.equal(evaluateRun({
+      steps: 1, toolCalls: 0, toolErrors: 0, failureClass: null, reply: "1+1 = 2",
+    }).status, "success");
+  });
 });
 
 describe("cycle store", () => {

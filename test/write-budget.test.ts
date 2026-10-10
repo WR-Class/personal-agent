@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { budgetFor, chargeWrite, checkWrite, measuredBudget, raiseFor, COLD_START_BUDGET, MIN_MEASURED_BUDGET, readWriteAttempt, WriteBudgetError } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, raiseFor, COLD_START_BUDGET, MIN_MEASURED_BUDGET, readWriteAttempt, WriteBudgetError, countsTowardWriteBudget, isJournalPath } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -174,6 +174,59 @@ describe("the ledger", () => {
 // to "minted gene" nothing has measured it yet, so its first refusal is evidence
 // that the estimate was too low — and the room that was missing is exactly what
 // the refused write asked for.
+describe("what the budget counts", () => {
+  // The journal is written on every round, so charging for it would let a round
+  // spend its whole room on its own diary. Test artifacts are the same shape of
+  // problem from the other side: the round was told to run the tests, and the
+  // runner wrote them — the agent did not choose those files.
+  it("does not charge the agent's own journal, or the test artifacts", () => {
+    for (const path of [".personal-agent/genes.jsonl", ".personal-agent/sessions/s1.jsonl", ".test-artifacts/run/out.txt"]) {
+      assert.equal(countsTowardWriteBudget(path), false, path);
+      const after = chargeWrite(EMPTY, { tool: "edit_file", path, lines: 500 }, 0);
+      assert.equal(after.files.length, 0, path);
+      assert.equal(after.lines, 0, path);
+    }
+  });
+
+  it("still charges documentation, because a document write is real blast radius", () => {
+    for (const path of ["docs/STATUS.md", "README.md", "src/runtime.ts", "test/cycle.test.ts"]) {
+      assert.equal(countsTowardWriteBudget(path), true, path);
+    }
+  });
+
+  it("does not exempt a write whose target could not be read", () => {
+    // The same precedent as `checkWrite`'s anonymous slot: a target that cannot
+    // be read cannot be shown to be the agent's own diary.
+    assert.equal(countsTowardWriteBudget(null), true);
+  });
+
+  it("lets an exempt write through a budget that is already full", () => {
+    const full = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 0 }, 0);
+    const budget = { maxFiles: 1, maxLines: 0, forbiddenPaths: [] as readonly string[] };
+    assert.equal(checkWrite(full, { tool: "edit_file", path: "b.ts", lines: 0 }, budget).allowed, false);
+    assert.equal(checkWrite(full, { tool: "edit_file", path: ".personal-agent/genes.jsonl", lines: 0 }, budget).allowed, true);
+  });
+
+  it("still refuses an exempt path the cycle forbids", () => {
+    // A ban is policy, and an exempt path is still a path this cycle may have
+    // forbidden. Exempting the journal from the *count* must not exempt it from
+    // the ban, or the restriction would have a hole shaped exactly like the file
+    // the agent writes most often.
+    const decision = checkWrite(EMPTY, { tool: "edit_file", path: ".personal-agent/genes.jsonl", lines: 1 }, {
+      maxFiles: 5, maxLines: 50, forbiddenPaths: [".personal-agent"],
+    });
+    assert.equal(decision.allowed, false);
+  });
+
+  it("keeps the two lists apart: the journal is narrower than the budget exemption", () => {
+    assert.equal(isJournalPath(".personal-agent/x.jsonl"), true);
+    // A test artifact is exempt from the count but is not the journal: it is not
+    // evidence that the round did work, and it is not evidence that it did not.
+    assert.equal(isJournalPath(".test-artifacts/x.txt"), false);
+    assert.equal(isJournalPath("docs/STATUS.md"), false);
+  });
+});
+
 describe("raising an under-sized ceiling", () => {
   const budget = (maxFiles: number, maxLines: number, forbiddenPaths: readonly string[] = []) => ({
     maxFiles, maxLines, forbiddenPaths,
