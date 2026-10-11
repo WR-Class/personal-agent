@@ -1,6 +1,7 @@
 import { before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 
 import { DEFAULT_CAVEAT, DEFAULT_INDUCT_THRESHOLD, DERIVED_CAVEAT, inductGenes, uncoveredCandidates } from "../src/induct.ts";
 import type { SuccessFact } from "../src/induct.ts";
@@ -13,6 +14,7 @@ import { AgentRuntime } from "../src/runtime.ts";
 import { CycleStore } from "../src/cycle-store.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
+import { ToolRegistry, createRunCommandTool } from "../src/tools.ts";
 import type { ToolCall } from "../src/types.ts";
 
 let fixture: Awaited<ReturnType<typeof createTestFixture>>;
@@ -192,6 +194,47 @@ describe("induction on the real journal", () => {
     // The candidate is a proposal, never a capability: the gate refuses it both
     // for the missing validation and for acting without a verify step.
     assert.throws(() => mintGene(drafts[0]!.gene), /must also verify/);
+  });
+
+  it("journals the commands a real round ran, with the exit codes it really got", async () => {
+    // ⚠️ D155 reported this as its own gap: the tests above hand-built the journal
+    // row, so the code that *writes* it was never exercised. A fixture proves the
+    // fixture — this runs real rounds through the real runtime instead, which is the
+    // only thing that can show the writer writes.
+    const geneStore = new GeneStore(join(fixture.root, "e2e-commands-genes.jsonl"));
+    const cycleStore = new CycleStore(join(fixture.root, "e2e-commands-cycles.jsonl"));
+    const script = join(fixture.workspaceRoot, "gate.cjs");
+    const send = async (round: number) => {
+      const runtime = new AgentRuntime({
+        adapter: createScriptedAdapter({
+          steps: [
+            { content: "", toolCalls: [call("run_command", { command: "node gate.cjs" })] },
+            { content: "done" },
+          ],
+        }),
+        store: new SessionStore({ root: fixture.storeRoot }), sessionId: `commands-${round}`,
+        home: fixture.home, workspaceRoot: fixture.workspaceRoot, geneStore, cycleStore,
+        tools: new ToolRegistry([createRunCommandTool()]), approve: async () => true,
+      });
+      return runtime.send("跑一下 gate.cjs");
+    };
+
+    // The negative case, from a real run: the script exits non-zero, and that exit
+    // code is what has to survive all the way to the journal.
+    await writeFile(script, "process.exit(1);\n", "utf8");
+    assert.equal((await send(0)).appliedGene, undefined);
+    // Read back through the accessor production reads — the falsifiability filter.
+    assert.equal(
+      (await geneStore.commandsSeenToFail()).has("node gate.cjs"), true,
+      "真实轮次跑出来的失败退出码必须进日志，否则推导永远拿不到可被反驳的验证",
+    );
+
+    // The positive case, also from a real run, so the assertion above distinguishes
+    // the two rather than merely observing that something got written.
+    await writeFile(script, "process.exit(0);\n", "utf8");
+    await send(1);
+    const facts = await geneStore.geneLessSuccesses();
+    assert.deepEqual(facts.at(-1)?.commands, [{ command: "node gate.cjs", exitCode: 0 }], "成功退出码同样要进日志");
   });
 });
 
