@@ -317,17 +317,28 @@ describe("projectOversizedToolResults", () => {
     assert.deepEqual(projectOversizedToolResults([], 1024), []);
   });
 
-  // D128 §九·六 (2026-10-09): the runtime's default threshold is no longer
-  // "off" — it's `DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES` (32 KiB), chosen
-  // from a personal-agent test-suite n=11 measurement. These two tests pin
-  // the default and the behavior at the boundary, so a refactor that
-  // silently flips the default is caught.
-  it("the runtime default threshold is exactly 32 KiB (= RECALL_MAX_BYTES × 2)", () => {
-    assert.equal(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES, 32 * 1024);
-    assert.equal(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES, RECALL_MAX_BYTES * 2);
+  // D128 §九·六 (2026-10-09) set the default to 32 KiB from a test-suite sample
+  // of n=11. D169 retuned it: over 230 real tool results the median was 0.1 KB
+  // and the maximum 28.7 KB, so 32 KiB never projected at all. These tests pin
+  // the default **and the rule it comes from**, so a refactor that flips either
+  // one is caught.
+  it("the runtime default threshold is one recall page", () => {
+    assert.equal(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES, RECALL_MAX_BYTES);
+    assert.equal(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES, 16 * 1024);
   });
 
-  it("at the default threshold, content at-or-below 32 KiB is not projected, content strictly above is", () => {
+  it("the runtime default threshold is never below one recall page", () => {
+    // The rule, not the number: reading a result back returns at most one page,
+    // so a threshold below a page would make the read-back larger than what was
+    // hidden and the prompt would grow. A future retune may raise this freely;
+    // it may not lower it past the floor.
+    assert.ok(
+      DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES >= RECALL_MAX_BYTES,
+      `threshold ${DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES} is below one recall page (${RECALL_MAX_BYTES})`,
+    );
+  });
+
+  it("at the default threshold, content at-or-below one page is not projected, content strictly above is", () => {
     const justUnder = "x".repeat(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES - 1);
     const exactly = "x".repeat(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES);
     const over = "x".repeat(DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES + 1);

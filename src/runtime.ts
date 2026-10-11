@@ -19,7 +19,7 @@ import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, type LedgerState, type WriteBudget } from "./write-budget.ts";
-import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
+import { omittedResultPlaceholder, projectOversizedToolResults, RECALL_MAX_BYTES } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import { createHash } from "node:crypto";
 
@@ -130,18 +130,26 @@ export interface AgentRuntimeOptions {
    * prompt with an `obs_recall` placeholder (D128 §九), so a session with a
    * few large results can keep working instead of failing `assertContextFits`.
    *
-   * **Default: `32 * 1024` (32 KiB).** Chosen from a personal-agent test-suite
-   * measurement of n=11 real tool calls (D128 §九·六 / `measure-tool-bytes.test.ts`):
-   * 5/11 = 45% of tool results would project at 32 KiB, hitting the 18.9K / 40K /
-   * 65K / 200K "mid-range" cases the projection exists to save while leaving the
-   * < 256 B short shells, small JSONs, and small binary hex dumps untouched. 32 KiB
-   * is `RECALL_MAX_BYTES` × 2, so "≥ 2 recall pages" is the boundary. **The n=11
-   * sample is directional, not precise** — set this explicitly to refine once
-   * DSH session data is available, or pass `Number.POSITIVE_INFINITY` to turn
-   * projection off.
+   * **Default: one recall page (`RECALL_MAX_BYTES`, 16 KiB).**
    *
-   * Pass an integer ≥ 1 to enable, or `Number.POSITIVE_INFINITY` to keep the
-   * projection off. A `0` or negative value is treated as off, not as
+   * **Why one page and not less.** Reading a result back returns at most one
+   * page. A threshold below a page would make the read-back *larger* than what
+   * was hidden, so the prompt would grow — the projection would cost more than
+   * it saved. One page is the floor; it is a structural bound, not a taste.
+   *
+   * **Why not two pages (the previous value).** D128 §九·六 chose 32 KiB from a
+   * personal-agent test-suite sample of n=11, where 45% of results projected.
+   * That sample is not representative: `scripts/measure-recall-usage.ts` over
+   * 25 real session logs and 230 real tool results found the median result is
+   * **0.1 KB** and the largest is **28.7 KB**, so at 32 KiB **nothing ever
+   * projected** — the mechanism was off in practice. At one page it projects
+   * 5 of 230 (2.2%), which is the intended "few large results" case.
+   *
+   * ⚠️ The real measurement is directional (one machine, 25 sessions) and will
+   * change with use. Re-run the script rather than quoting the figures.
+   *
+   * Pass an integer ≥ 1 to set it explicitly, or `Number.POSITIVE_INFINITY` to
+   * keep the projection off. A `0` or negative value is treated as off, not as
    * "project everything", because a placeholder for a one-byte tool result is
    * information loss dressed up as a budget control.
    */
@@ -215,14 +223,19 @@ export const DEFAULT_MAX_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 131_072;
 
 /**
- * Default byte threshold for `obsProjectionThreshold` (D128 §九·六).
- * 32 KiB = `RECALL_MAX_BYTES` × 2, so "≥ 2 recall pages" is the boundary.
- * The value is backed by a personal-agent test-suite measurement of n=11
- * real tool calls (5/11 = 45% projected at 32 KiB), but the n=11 sample
- * is directional, not precise. Operators refine this once DSH session
- * distribution is available; pass `Number.POSITIVE_INFINITY` to disable.
+ * Default byte threshold for `obsProjectionThreshold` (D128 §九·六, retuned D169).
+ *
+ * **One recall page.** A read-back returns at most `RECALL_MAX_BYTES`, so a
+ * threshold below a page would make reading back return more than was hidden.
+ * Deriving the value from the page size keeps the two from drifting apart.
+ *
+ * The previous value was two pages, chosen from a test-suite sample of n=11
+ * that turned out not to be representative — over 230 real tool results the
+ * median was 0.1 KB and the maximum 28.7 KB, so two pages never projected at
+ * all. See `scripts/measure-recall-usage.ts`; re-run it rather than trusting
+ * the numbers here, which are directional and will change with use.
  */
-export const DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES = 32 * 1024;
+export const DEFAULT_OBS_PROJECTION_THRESHOLD_BYTES = RECALL_MAX_BYTES;
 
 export const DEFAULT_MAX_STEPS = Infinity;
 

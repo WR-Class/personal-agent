@@ -1,10 +1,19 @@
 /**
  * One-off tool-byte distribution measurement (D128 §九·六).
  *
+ * ⚠️ **D169: this sample turned out not to be representative, and this file is
+ * kept as the record of that.** It measures the *test suite's own fixtures*,
+ * whose sizes are constructed; the n=11 result (45% would project at 32 KiB) is
+ * what the default threshold was originally chosen from. `scripts/measure-recall-usage.ts`
+ * measured 230 **real** tool results instead: median 0.1 KB, maximum 28.7 KB,
+ * and 0 of 230 above 32 KiB. The projection therefore never fired in real use.
+ * **Read this file as a sample, not as the distribution** — the real one is
+ * produced by that script, and it changes with use.
+ *
  * This file is **test-only**. It does not touch product code, does not touch
  * DSH, and the only side effect is a small set of files in the test fixture
  * directory. The point is to produce an honest byte histogram of the tool
- * result contents a real personal-agent run would see, so the question
+ * result contents a personal-agent run would see, so the question
  * "what's a sensible `obsProjectionThreshold`?" has a measured answer
  * instead of a guess. Numbers printed in the test output; they are also
  * reproduced in D128 §九·六 of REFERENCE_DECISIONS.md.
