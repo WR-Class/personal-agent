@@ -22,7 +22,7 @@ import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError,
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import { SHELL_TOOL_NAME, commandFromArguments, readExitCode } from "./shell-tool.ts";
-import type { CommandRun } from "./types.ts";
+import type { CommandRun, RoundEvidence } from "./types.ts";
 import { retirementDue, type GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
@@ -782,6 +782,35 @@ export class AgentRuntime {
   }
 
   /**
+   * The commands this round recorded as acceptance criteria and never ran.
+   *
+   * This is the debt `validation.ts` splits out of the old single "cannot tell"
+   * bucket (D158), and it is the only part of that split that is actionable: the
+   * round had a working command runner, the criterion named a command, and the
+   * command was not run — so the round skipped the check it wrote down for itself.
+   *
+   * Read through `checkValidation` rather than re-deciding it here. A second
+   * implementation of "is this owed" would drift from the one the record prints,
+   * and the record is the thing being acted on.
+   */
+  private async owedCommands(): Promise<string[]> {
+    const recorded = await this.store.taskState(this.sessionId);
+    if (recorded === undefined) return [];
+    const evidence: RoundEvidence = {
+      filesWritten: this.writeLedger.files,
+      tools: this.outcomeTools ?? [],
+      commands: this.outcomeCommands ?? [],
+    };
+    const owed: string[] = [];
+    for (const step of recorded.steps) {
+      const claim = step.claim;
+      if (claim === undefined || claim.kind !== "command") continue;
+      if (checkValidation([claim], evidence).claims[0]?.outcome === "unchecked") owed.push(claim.command);
+    }
+    return owed;
+  }
+
+  /**
    * Journal one outcome row for the round in flight, whichever way it ended.
    * Consuming the address makes a double journal impossible: the verdict and the
    * gene it belongs to are recorded exactly once per round.
@@ -1003,6 +1032,12 @@ export class AgentRuntime {
     // that completed as a lesson about a limit.
     let budgetRefusals = 0;
     let writeRaises = 0;
+    // ⚠️ D159: a round does not close while it owes a check it wrote down for
+    // itself. Injected into the next step's prompt the way the step-cap notice is,
+    // and deliberately **not persisted**: a user turn the model never actually
+    // received would be a fabricated transcript entry, and the existing notice set
+    // that precedent rather than this one inventing a second convention.
+    let owedNotice: string | undefined;
 
     try {
     cycle = await this.advance(cycle, { type: "execute-start", at: Date.now() });
@@ -1012,6 +1047,7 @@ export class AgentRuntime {
       signal?.throwIfAborted();
       const messages = await this.buildPrompt();
       if(finalizing)messages.push({role:'user',content:'The operator-configured step limit has been reached. Do not call tools. Give a final text summary of verified completed work, remaining work and blockers. Do not claim the entire task is complete unless supported by observed results.'});
+      if(owedNotice !== undefined)messages.push({role:'user',content:owedNotice});
       // Checked every step as well: the prompt grows with each tool result, so a
       // prompt that fit at step one is no guarantee at step five.
       this.assertContextFits(messages);
@@ -1069,6 +1105,38 @@ export class AgentRuntime {
 
       if (response.toolCalls.length === 0) {
         signal?.throwIfAborted();
+        // ⚠️ D159: this is the only place the debt can still be paid, because the
+        // round ends exactly here — when the model stops calling tools.
+        //
+        // **The model pays it, not this runtime.** Running the command here would
+        // make the round look clean while teaching the model nothing, and it would
+        // execute a command the model wrote as a *criterion* — a criterion is a
+        // claim about a check, not an authorisation to run anything.
+        //
+        // Bounded on four sides, so that the cure cannot become a new way to fail:
+        // once per round (`owedNotice`), only when there is room for one more real
+        // step, only when the tool budget can afford the call that would pay it,
+        // and only when the registry actually offers a command tool — otherwise the
+        // model is told to run something it has no tool to run. A round that called
+        // no tool at all is a chat answer rather than work (the same line the
+        // outcome journal draws) and owes nothing.
+        if (
+          owedNotice === undefined &&
+          toolCalls > 0 &&
+          steps < this.maxSteps &&
+          toolCalls < this.maxToolCallsPerRun &&
+          this.tools?.has(SHELL_TOOL_NAME) === true
+        ) {
+          const owed = await this.owedCommands();
+          if (owed.length > 0) {
+            const one = owed.length === 1;
+            owedNotice =
+              `You recorded ${one ? "a command" : "commands"} as an acceptance criterion and did not run ${one ? "it" : "them"} this round:\n` +
+              owed.map((command) => `- ${command}`).join("\n") +
+              `\nA criterion you never run is a debt, not a pass. Run ${one ? "it" : "them"} now with the command tool, or say plainly why ${one ? "it" : "they"} cannot be run. Do not restate your summary.`;
+            continue;
+          }
+        }
         const compaction = await this.store.compaction(this.sessionId);
         const covered = compaction ? Math.min(compaction.covers, (await this.store.history(this.sessionId)).length) : 0;
         // Review: the verdict is read off what the round mechanically did, and

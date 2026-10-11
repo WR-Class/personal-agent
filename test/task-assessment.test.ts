@@ -21,7 +21,7 @@ import { describe, it } from "node:test";
 
 import { AgentRuntime } from "../src/runtime.ts";
 import { SessionStore } from "../src/session-store.ts";
-import { ToolRegistry, createCreateFileTool, createReadFileTool } from "../src/tools.ts";
+import { ToolRegistry, createCreateFileTool, createReadFileTool, createRunCommandTool } from "../src/tools.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
 import { formatTaskAssessment } from "../src/task-state.ts";
@@ -39,22 +39,24 @@ const written = (paths: string[]): GeneValidation => ({ kind: "files-written", p
 async function round(
   steps: unknown[],
   taskState?: { state: string; steps: { text: string; claim?: GeneValidation }[] },
+  tools?: ToolRegistry,
 ) {
   const sessionId = `assess-${created++}`;
   const store = new SessionStore({ root: home });
   await store.create(sessionId);
   if (taskState !== undefined) await store.appendTaskState(sessionId, taskState);
+  const adapter = createScriptedAdapter({ steps: steps as never, model: "assess-model" });
   const agent = new AgentRuntime({
-    adapter: createScriptedAdapter({ steps: steps as never, model: "assess-model" }),
+    adapter,
     store,
     sessionId,
     home,
     workspaceRoot,
-    tools: new ToolRegistry([createReadFileTool(), createCreateFileTool()], ["read_file", "create_file"]),
+    tools: tools ?? new ToolRegistry([createReadFileTool(), createCreateFileTool()], ["read_file", "create_file"]),
     systemPrompt: SYSTEM,
     approve: async () => true,
   });
-  return { result: await agent.send("开始"), store, sessionId, agent };
+  return { result: await agent.send("开始"), store, sessionId, agent, adapter };
 }
 
 const writeFile = (path: string, content: string) => ({
@@ -194,5 +196,84 @@ describe("the assessment never reaches the model", () => {
     // round must not have disturbed it.
     assert.ok(text.includes(MARKER), "the recorded state is still re-injected");
     assert.ok(text.includes("files-written:[c.txt]"), "with its criteria");
+  });
+});
+
+describe("a round does not close while it owes a check it wrote down for itself (D159)", () => {
+  // `node --version` is the command under test: it exits zero, needs no fixture
+  // file and no network, and is byte-identical in the claim and in the call, which
+  // is what a command claim is matched on.
+  const VERSION = "node --version";
+  const owedCriterion: GeneValidation = { kind: "command", command: VERSION };
+
+  const shellTools = () =>
+    new ToolRegistry(
+      [createReadFileTool(), createCreateFileTool(), createRunCommandTool()],
+      ["read_file", "create_file", "run_command"],
+    );
+
+  const runIt = (id: string) => ({
+    toolCalls: [{ id, name: "run_command", arguments: JSON.stringify({ command: VERSION }) }],
+  });
+
+  it("⚠️ asks for the owed command, and only closes once it has been run", async () => {
+    const { result, adapter } = await round(
+      [writeFile("owed-a.txt", "x"), { content: "写好了" }, runIt("c-owed"), { content: "都做完了" }],
+      { state: MARKER, steps: [{ text: "查一下版本", claim: owedCriterion }] },
+      shellTools(),
+    );
+
+    // Three requests would mean the round closed on the summary while the check it
+    // had written down for itself was never run. The fourth is the debt being paid.
+    assert.equal(adapter.requests.length, 4, "the round must not close on the first attempt to summarise");
+    // The notice has to reach the model, or the extra request asks nothing.
+    const asked = adapter.requests[2]!.messages.at(-1)!.content;
+    assert.match(asked, /node --version/);
+    assert.match(asked, /debt, not a pass/);
+
+    assert.equal(result.taskAssessment!.steps[0]!.outcome, "met", "the command really ran, so the criterion is settled");
+    assert.equal(result.taskAssessment!.owed.length, 0, "and nothing is owed any more");
+  });
+
+  it("asks nothing when the criterion was already run before the model tried to finish", async () => {
+    const { result, adapter } = await round(
+      [writeFile("owed-b.txt", "x"), runIt("c-paid"), { content: "都做完了" }],
+      { state: MARKER, steps: [{ text: "查一下版本", claim: owedCriterion }] },
+      shellTools(),
+    );
+    assert.equal(adapter.requests.length, 3, "a round that already ran its check is not asked again");
+    assert.equal(result.taskAssessment!.steps[0]!.outcome, "met");
+  });
+
+  it("asks at most once: a refusal ends the round owing the check, it does not loop", async () => {
+    const { result, adapter } = await round(
+      [writeFile("owed-c.txt", "x"), { content: "写好了" }, { content: "我不打算跑它" }, { content: "还是不跑" }],
+      { state: MARKER, steps: [{ text: "查一下版本", claim: owedCriterion }] },
+      shellTools(),
+    );
+    // Three, not four: the second refusal gets no second nudge. The script has a
+    // fourth reply ready precisely so that a missing bound fails on the assertion
+    // rather than on the adapter running dry.
+    assert.equal(adapter.requests.length, 3, "one nudge, never a second");
+    assert.match(adapter.requests[2]!.messages.at(-1)!.content, /debt, not a pass/, "the one nudge did fire");
+    // And the debt stays on the record instead of being talked away: the round
+    // ended with its check unrun, which is what the operator has to see.
+    assert.equal(result.taskAssessment!.owed.length, 1);
+    assert.match(result.taskAssessment!.owed[0]!, /node --version/);
+    assert.equal(result.taskAssessment!.complete, false);
+  });
+
+  it("owes nothing when the round called no tool at all: a chat answer is not work", async () => {
+    // The bound that keeps the nudge off every conversational turn of a long task.
+    // The criterion is genuinely unchecked here and deliberately not worth a step,
+    // because the round did nothing that could have invalidated it.
+    const { result, adapter } = await round(
+      [{ content: "只是说说" }],
+      { state: MARKER, steps: [{ text: "查一下版本", claim: owedCriterion }] },
+      shellTools(),
+    );
+    assert.equal(adapter.requests.length, 1, "no tool was called, so there is no work to check");
+    assert.equal(result.taskAssessment!.steps[0]!.outcome, "unchecked", "the record still says the check was not run");
+    assert.equal(result.taskAssessment!.owed.length, 1);
   });
 });
