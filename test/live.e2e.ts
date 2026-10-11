@@ -56,6 +56,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { main } from "../src/cli.ts";
+import { SessionStore } from "../src/session-store.ts";
 import { createTestFixture } from "./fixtures.ts";
 
 /**
@@ -429,5 +430,70 @@ describe("live: honesty when refused", () => {
     // The grant list must not have grown either.
     const trust = await readFile(join(F().home, "trust.json"), "utf8").catch(() => "");
     assert.ok(!trust.includes("never-granted"), "a refusal case granted a root");
+  });
+});
+
+describe("live: a recorded command criterion reaches the model and gets run (D159)", () => {
+  /**
+   * ⚠️ What this measures, and what it does not.
+   *
+   * It measures that a recorded `command` criterion reaches the model through the
+   * prompt block and that the model then runs it. It does **not** exercise the
+   * round-end nudge D159 added, and an earlier revision of this case wrongly
+   * claimed it did. Measured against the live provider, the model runs the owed
+   * command in its **first** turn, long before it ever tries to summarise — so the
+   * nudge never gets the chance to fire, and an assertion about the ordering of
+   * that call was asserting the author's hypothesis rather than the product's
+   * behaviour. The nudge is proven mechanically in `task-assessment.test.ts`, and
+   * is not claimed to be proven here.
+   *
+   * Measured cost, so nobody is surprised by it: this model takes 40–65s per call,
+   * and this arm once ran five turns and 542s before the provider returned its own
+   * 502. A failure here is not automatically a finding about the product.
+   *
+   * Seeded through the product's own store rather than by hand-writing a log line:
+   * a fixture the product did not produce can disagree with the product, and then
+   * the case would be measuring the fixture.
+   */
+  const OWED = "node --version";
+  const ASK = "读一下工作区里的 notes.txt,把它第一行的内容原样告诉我。";
+
+  it("runs the command it was given as a criterion instead of summarising without it", { ...LIVE, skip: liveSkip }, async () => {
+    const sessionId = "live-owed";
+    const store = new SessionStore({ root: F().home });
+    await store.create(sessionId);
+    await store.appendTaskState(sessionId, {
+      state: "把工作区里的 notes.txt 读出来",
+      steps: [{ text: "确认 Node 版本", claim: { kind: "command", command: OWED } }],
+    });
+
+    const code = await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "8", "--tier", "ask-before-writing", "--session", sessionId, ASK]);
+    assert.equal(code, 0, `run failed:\n${lastOutput}`);
+
+    const text = await transcript(sessionId);
+    const tools = calledTools(text);
+    assert.ok(
+      tools.includes("run_command"),
+      `the model summarised without running the criterion it was given (called: ${tools.join(", ") || "nothing"})`,
+    );
+    // And it has to be *that* command: a model that ran something unrelated has not
+    // done the check the criterion named.
+    assert.match(text, /node --version/, "the command that ran was not the recorded criterion");
+  });
+
+  it("does not run a command when it was given no criterion, so the case above measures the criterion", { ...LIVE, skip: liveSkip }, async () => {
+    // The control arm, and without it the case above proves nothing: it would pass
+    // just as well if this model ran a version check for its own reasons, and then
+    // the criterion would be decoration rather than the cause.
+    const sessionId = "live-owed-control";
+    const code = await runCli(["--home", F().home, "--workspace", F().workspaceRoot,
+      "--max-steps", "8", "--tier", "ask-before-writing", "--session", sessionId, ASK]);
+    assert.equal(code, 0, `run failed:\n${lastOutput}`);
+    const tools = calledTools(await transcript(sessionId));
+    assert.ok(
+      !tools.includes("run_command"),
+      `the control ran a command anyway, so the criterion is not what caused it (called: ${tools.join(", ")})`,
+    );
   });
 });
