@@ -12,7 +12,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import {
   PLUGIN_MANIFEST_VERSION,
@@ -25,7 +25,17 @@ import { createTestFixture } from "./fixtures.ts";
 // A fixed fake root for parse-level tests. The directory need not exist for
 // parsing itself; only containedPath resolves paths, and it resolves relative to
 // this root without requiring it on disk (canonicalPath tolerates missing leaves).
-const ROOT = join("C:", "fake", "agent-home", "plugins", "demo");
+// ⚠️ D166: built from the platform's own root and separator, not from a Windows drive
+// letter. `join("C:", "fake", …)` is absolute on Windows and a **relative** path
+// everywhere else, so off Windows this root silently became something the parser
+// resolved against the working directory — the "contained cwd" test compared
+// `/work/C:/fake/…` against `C:/fake/…`, and the "escapes the plugin directory" test
+// stopped being exercised at all, because `C:\abs` is not absolute where it was running.
+//
+// `resolve`, not `join`: on Windows `join("\\", "fake")` keeps the path drive-relative,
+// while the parser resolves it against the current drive — so the fixture and the
+// parser disagreed about the same string.
+const ROOT = resolve(sep, "fake", "agent-home", "plugins", "demo");
 const FILE = join(ROOT, "plugin.json");
 
 function parses(obj: unknown) {
@@ -130,7 +140,10 @@ describe("plugin manifest", () => {
       /指向插件目录之外/,
     );
     refuses(
-      { name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", cwd: join("C:", "abs") } } },
+      // ⚠️ D166: the absolute path is the platform's own root, not `C:\`. Off Windows
+      // `C:\abs` is relative, so this half of the test passed nothing through the check
+      // it exists to exercise — a security assertion that had quietly stopped running.
+      { name: "demo", version: "1.0.0", mcpServers: { main: { command: "node", cwd: resolve(sep, "abs") } } },
       /必须是相对路径/,
     );
   });

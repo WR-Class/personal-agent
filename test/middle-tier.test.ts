@@ -16,7 +16,7 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { findTier } from "../src/tiers.ts";
@@ -263,8 +263,19 @@ describe("middle tier: repository config cannot execute through a read", () => {
     // The payload: writes a marker when git invokes it. Git does not care that
     // its output is not a valid fsmonitor token — it warns and carries on, having
     // already run the command, which is the whole point.
-    const payload = join(directory, "payload.cmd");
-    writeFileSync(payload, `@echo off\r\necho EXECUTED> "${marker}"\r\n`, "utf8");
+    //
+    // ⚠️ D166: this used to be a Windows batch file unconditionally. Off Windows git
+    // cannot execute it, so the control arm below could never fire and the test failed
+    // instead of proving anything — the fixture, not the product, was the problem. The
+    // property under test (the middle tier refuses a command that would run the
+    // repository's own config) has nothing to do with which platform runs it, so each
+    // platform now gets a payload it can actually execute.
+    const onWindows = process.platform === "win32";
+    const payload = join(directory, onWindows ? "payload.cmd" : "payload.sh");
+    writeFileSync(payload, onWindows
+      ? `@echo off\r\necho EXECUTED> "${marker}"\r\n`
+      : `#!/bin/sh\nprintf EXECUTED > "${marker}"\n`, "utf8");
+    if (!onWindows) chmodSync(payload, 0o755);
     // `core.untrackedCache` is what makes git consult `core.fsmonitor` on the
     // first `git status` rather than on a later one.
     git("config", "core.fsmonitor", payload.replaceAll("\\", "/"));

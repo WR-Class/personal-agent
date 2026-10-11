@@ -9,7 +9,7 @@
 
 import { existsSync } from "node:fs";
 import { stat, writeFile } from "node:fs/promises";
-import { join, parse, resolve } from "node:path";
+import { join, parse, resolve, sep } from "node:path";
 import { before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -81,7 +81,10 @@ describe("agent home safety", () => {
   });
 
   it("refuses the operator's home written with a trailing separator", () => {
-    assert.ok(agentHomeProblem(`${operatorHome}\\`, { env: fakeEnv, operatorHome }));
+    // ⚠️ D166: the separator is the platform's, not a literal backslash. Off Windows
+    // `"…\\"` is an ordinary character in a filename, so the refusal under test was
+    // never reached and the assertion could only ever hold on Windows.
+    assert.ok(agentHomeProblem(`${operatorHome}${sep}`, { env: fakeEnv, operatorHome }));
   });
 
   it("refuses a filesystem root", () => {

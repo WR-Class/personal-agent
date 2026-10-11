@@ -58,7 +58,16 @@ test('readExitCode reads the code the shell actually wrote, including past the l
     // The clamp keeps the tail. A head-only cut would remove the one line that
     // says whether the command worked, on exactly the long outputs where it
     // matters most.
-    await writeFile(path.join(f.workspace, 'long.cjs'), `for (let i = 0; i < ${SHELL_MAX_LINES + 50}; i++) console.log('line ' + i);\nprocess.exit(4);`);
+    //
+    // ⚠️ D166: `process.exitCode`, never `process.exit()`. Writing to a pipe is
+    // asynchronous on Linux and synchronous on Windows, so `process.exit(4)` after
+    // 2050 `console.log` calls discards whatever is still buffered — the child wrote
+    // ~1297 lines and the suite failed for a clamp that had correctly not fired,
+    // because there was nothing to clamp. Measured on the Linux host: 11874 bytes,
+    // 1298 split lines, no truncation notice, exit code read correctly. The product
+    // had captured everything the child actually wrote; the fixture was racing its
+    // own exit. Letting the process end on its own drains stdout on both platforms.
+    await writeFile(path.join(f.workspace, 'long.cjs'), `for (let i = 0; i < ${SHELL_MAX_LINES + 50}; i++) console.log('line ' + i);\nprocess.exitCode = 4;`);
     const long = await runShellCommand('node long.cjs', f.environment);
     assert.equal(readExitCode(long.content), 4);
     assert.match(long.content, /more lines\]/);
