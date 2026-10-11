@@ -153,15 +153,14 @@ describe("gene store", () => {
     await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 10);
     await store.appendOutcome({
       address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-      filesWritten: 1, linesWritten: 20, budgetRefusals: 1, writeCeiling: { files: 1 },
+      filesWritten: 1, linesWritten: 20, budgetRefusals: 1,
     }, NOW + 20);
 
     const facts = await store.failures();
-    assert.equal(facts.length, 1, "the truncated round is the one lesson here");
+    assert.equal(facts.length, 1, "the stopped round is the one lesson here");
     assert.equal(facts[0]?.failureClass, "budget", "it ended in success, so it takes the class that names what happened");
     assert.equal(facts[0]?.address, minted.address, "and it stays attributed to the gene that declared the number");
-    assert.equal(facts[0]?.budgetRefusals, 1, "so the estimator can tell a censored value from a real one");
-    assert.equal(facts[0]?.ceilingFiles, 1, "the ceiling travels with it, which is what lets the estimate come back down");
+    assert.equal(facts[0]?.budgetRefusals, 1, "a refusal that stood, not an estimate that yielded");
 
     const entry = (await store.state()).genes.get(minted.address);
     assert.equal(entry?.expression.attempts, 2, "the gene was applied twice, and both attempts count");
@@ -191,12 +190,13 @@ describe("gene store", () => {
     assert.equal((await store.failures()).length, 1, "but it is still a lesson about that round");
   });
 
-  it("⚠️ re-measures an existing gene's ceiling from its own rounds, upward", async () => {
-    // The operator's own arithmetic, end to end through selection. A gene that
-    // declares 6 and is refused at 6 three times proves each of those rounds wanted
-    // 7 (`reached + 1`), and the single 6 they all ran under is a sample too — so
-    // {6, 7, 7, 7}, and a median of 7. Not 6, which would be the fixed point, and
-    // not 8, which would be believing the loudest round.
+  it("⚠️ re-measures an existing gene's number from its own rounds, upward", async () => {
+    // ⚠️ D157 changed what the samples are. This used to assert the censoring
+    // arithmetic — three rounds refused at 6 "prove" each of them wanted 7
+    // (`reached + 1`) — and that correction is gone, because a refusal no longer
+    // hides the demand. The wall yields, so a round that needed 7 records 7, and
+    // the median of {7, 7, 7} is 7. The same conclusion, now measured instead of
+    // inferred, and not 8, which would be believing the loudest round.
     const store = new GeneStore(join(fixture.root, "remeasure-up.jsonl"));
     const minted = mintGene(draft({ constraints: { maxFiles: 6, forbiddenPaths: ["docs/"] } }));
     await store.appendGene(minted, NOW);
@@ -204,30 +204,31 @@ describe("gene store", () => {
     for (let round = 0; round < 3; round++) {
       await store.appendOutcome({
         address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-        filesWritten: 6, linesWritten: 60, budgetRefusals: 1, writeCeiling: { files: 6 },
+        filesWritten: 7, linesWritten: 70,
       }, NOW + 10 + round);
     }
     const applied = await store.selectFor(matchingRequest, NOW + 100);
     assert.equal(applied?.address, minted.address, "the gene is still the same gene — no successor, same address");
-    assert.equal(applied?.constraints.maxFiles, 7, "three capped rounds lift it to 7");
+    assert.equal(applied?.constraints.maxFiles, 7, "three rounds that needed 7 lift it to 7");
   });
 
   it("⚠️ and downward, which is the half p95 could never do", async () => {
-    // The other direction, and the reason the ceiling is a sample at all: a gene
-    // that ran under 7 and was then only asked for 4, 4 and 3 must be tightened to
-    // 4. Under p95 it stayed 7 for good, because a tail quantile has nothing
-    // pulling it back down — the estimate could only ratchet upward.
+    // The other direction, and the half that answers the operator's actual
+    // complaint: a gene that declared 7 and was then only asked for 4, 4 and 3 must
+    // be tightened to 4. Under p95 it stayed 7 for good, because a tail quantile has
+    // nothing pulling it back down — the estimate could only ratchet upward, which
+    // is exactly "原来 5 就能完成，为什么现在必须是 10".
     const store = new GeneStore(join(fixture.root, "remeasure-down.jsonl"));
     const minted = mintGene(draft({ constraints: { maxFiles: 7, forbiddenPaths: [] } }));
     await store.appendGene(minted, NOW);
     for (const [files, lines] of [[4, 40], [4, 40], [3, 30]] as const) {
       await store.appendOutcome({
         address: minted.address, succeeded: true, intent: "build", signals: ["snippet"],
-        filesWritten: files, linesWritten: lines, writeCeiling: { files: 7 },
+        filesWritten: files, linesWritten: lines,
       }, NOW + 10 + files);
     }
     const applied = await store.selectFor(matchingRequest, NOW + 100);
-    assert.equal(applied?.constraints.maxFiles, 4, "samples are {7, 4, 4, 3}; the median is 4");
+    assert.equal(applied?.constraints.maxFiles, 4, "samples are {4, 4, 3}; the median is 4");
   });
 
   it("keeps the declared number before any round, and never re-measures a ban", async () => {

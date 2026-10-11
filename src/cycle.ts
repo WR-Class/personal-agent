@@ -11,7 +11,7 @@
  * phases irreversible, review gate before integration).
  */
 
-import { isJournalPath, type BlastTier } from "./write-budget.ts";
+import { isJournalPath } from "./write-budget.ts";
 
 export type CyclePhase =
   | "planned"
@@ -150,21 +150,21 @@ export interface RunFacts {
    */
   readonly filesWritten?: readonly string[];
   /**
-   * How far this round's blast radius got, relative to the number it declared
-   * (D151).
+   * How many times this round's write estimate was refused and then **yielded**
+   * (D157).
    *
-   * The declared number no longer refuses anything, so this is what makes it
-   * cost something. `overrun` (1.3x and up, below the 1.5x hard stop) downgrades
-   * a round that would otherwise be a clean success to `partial`: the work
-   * happened, and it does not count as a clean win for the strategy that asked
-   * for the number. Deliberately *not* `failed` — nothing broke, and calling an
-   * oversized round a strategy failure is the same misattribution D127 removed
-   * from the refusal axis.
+   * ⚠️ Recorded, and deliberately not scored — the opposite of what its
+   * predecessor did. The number that used to stand here priced the overrun onto the
+   * round's record, which turned an estimate's error into a fact about the
+   * strategy. A raise is a fact about the *estimate* instead: the declared number
+   * was too small, and the round showed by how much. The estimator learns from the
+   * footprint the round ended up needing, so this count is here for the operator
+   * reading the log — the same reason `budgetRefusals` is.
    *
    * Optional like `reply`: a caller that did not hand the ledger over is not
-   * claiming the round stayed inside its number.
+   * claiming the estimate was right.
    */
-  readonly blastTier?: BlastTier;
+  readonly writeRaises?: number;
 }
 
 /** A reply that opens by declining or reporting an inability, whatever follows. */
@@ -244,20 +244,10 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
   // it is deliberately not an input to the status below. Absent when zero, so a
   // round under no budget pressure keeps the evidence it always had.
   if (facts.budgetRefusals) evidence.push(`budgetRefusals=${facts.budgetRefusals}`);
-  // D151: the blast-radius ladder. Recorded whenever the round went past its
-  // declared number — the reference implementation's own split, where an overrun
-  // is labelled and only a larger one costs anything. `hard_stop` cannot be
-  // reached by a round declaring 4 or more (the write that would reach it is
-  // refused first), but it is a real tier at small declared values where the
-  // absolute floor is what sets the stop.
-  //
-  // ⚠️ D152: the tier is recorded and **not** allowed to move the verdict. It used
-  // to downgrade `success` to `partial`, which double-charged the same overrun —
-  // the fold then counted it once as a lost success and again as a weighted one.
-  // The cost belongs on the weight (`blastWeight`), which is a graded statement
-  // about how much room the round spent; the verdict is a statement about whether
-  // the round worked, and it did.
-  if (facts.blastTier !== undefined && facts.blastTier !== "within") evidence.push(`blastRadius=${facts.blastTier}`);
+  // D157: the estimate was refused and yielded, so it was wrong rather than
+  // binding. Recorded for the operator, and nothing reads it. Absent when zero, so
+  // a round whose estimate held keeps the evidence it always had.
+  if (facts.writeRaises) evidence.push(`writeRaises=${facts.writeRaises}`);
   if (facts.failureClass !== null) {
     // A model that never produced anything usable means the round could not
     // start; the same holds for a budget refusal at step 0, which refused the

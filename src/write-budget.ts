@@ -220,102 +220,32 @@ export function isJournalPath(path: string): boolean {
 }
 
 /**
- * The ratios that turn a declared file count into a ladder.
+ * The one hard stop on the file axis, and it is global.
  *
- * ⚠️ These replace a hard wall at `maxFiles + 1`. The operator's reasoning, and
- * why the wall had to go: a round that needs 28 files against a declared 20 is
- * doing real work, and refusing it means the work does not get done at all — the
- * estimate's error costs the objective. The reference implementation has no wall
- * at the declared number either; it labels the overrun and starts charging only
- * further out.
+ * ⚠️ The per-gene wall is gone (D157), and what replaced it is not another number
+ * but a different behaviour: a write that would exceed the number a gene declared
+ * is refused, and the runtime then **re-estimates from what the round has just
+ * shown it needs** and asks again. An estimate can therefore be wrong without
+ * costing the round its work — it can only be corrected, which is the entire point
+ * of keeping an estimate at all. The operator's own description: the estimate says
+ * five, the round turns out to need six, so six is what it becomes.
  *
- * The numbers are the operator's, not the reference's (which uses 2x and 3x), and
- * they are deliberately tighter: the reference's declared numbers are much larger
- * and its penalty is a multiplier on a continuous score. Ours: past 1.3x the round
- * stops counting as a clean success, and at 1.5x the ladder stops.
+ * That leaves exactly one thing that stops a round, and it is not a prediction.
+ * No round in this repo's history has come within two orders of magnitude of this
+ * number, so it is a backstop rather than a budget. The yield above is bounded by
+ * it, so "yielding" cannot quietly become "no limit".
  */
-export const OVERRUN_RATIO = 1.3;
-export const HARD_STOP_RATIO = 1.5;
-
-/**
- * The least absolute headroom the stop must leave, whatever the ratio says.
- *
- * ⚠️ Without this the ladder collapses exactly where the declared numbers are
- * smallest, which is where it matters most. A ratio alone has no whole unit to
- * stand on down there: 1.3x and 1.5x of 1 are 1.3 and 1.5, so both bands between
- * the thresholds are empty and the ladder degenerates into "one file, then stop"
- * — the wall it replaced, wearing a new name. Two files of headroom guarantee at
- * least one rung at every declared value.
- *
- * What it costs: at declared values below 4 the stop is no longer exactly 1.5x.
- * That is the trade, stated rather than hidden — and it is why `hard_stop` is a
- * tier that large declared values can never reach: 1.5N - 1 is always under 1.5N,
- * so a round declaring 20 tops out at 29 files and 1.45x. The 0.4 weight below is
- * therefore a small-number tier, which is coherent: the floor gives those rounds
- * absolute room and charges them more, relatively, for using it.
- */
-export const ABSOLUTE_HEADROOM = 2;
-
-/**
- * What an overrunning round contributes to the record it lands in.
- *
- * The operator's own numbers, and deliberately not zero. Zero would say "this
- * strategy did not work" about a strategy that did work — it simply spent more
- * room than it declared — and the hard stop has already cost the round its
- * completeness, so zero would charge the same overrun twice. The progression
- * 1.0 / 0.7 / 0.4 is monotone for the same reason: a cliff at the end tells a
- * reader "never do this", which is not what an oversized round means.
- */
-export const OVERRUN_WEIGHT = 0.7;
-export const HARD_STOP_WEIGHT = 0.4;
-
-/** How far a round's blast radius got, relative to the number it declared. */
-export type BlastTier = "within" | "exceeded" | "overrun" | "hard_stop";
-
-/**
- * Classify what a round reached against what it declared.
- *
- * Pure, and computed from the ledger the budget already counts, so the ladder
- * needs no state of its own. Boundaries are inclusive at the top of each tier:
- * with a declared 20, 25 is `exceeded`, 26 is the first `overrun`, and 30 is the
- * first refused write. Stated as a table because an off-by-one comparison here
- * silently restores the wall the ladder exists to remove.
- */
-export function blastTier(filesReached: number, maxFiles: number): BlastTier {
-  if (maxFiles <= 0) return "within";
-  const ratio = filesReached / maxFiles;
-  if (ratio >= HARD_STOP_RATIO) return "hard_stop";
-  if (ratio >= OVERRUN_RATIO) return "overrun";
-  return ratio > 1 ? "exceeded" : "within";
-}
-
-/** The file count at which the ladder stops: 1.5x the declared number, floored. */
-export function hardStopAt(maxFiles: number): number {
-  return Math.max(maxFiles * HARD_STOP_RATIO, maxFiles + ABSOLUTE_HEADROOM);
-}
-
-/**
- * What this round's tier costs it in the folded record.
- *
- * Kept here beside the tiers rather than in the fold, so the ladder is the one
- * place that says what an overrun is worth. `within` and `exceeded` are both 1:
- * an overrun the operator chose to label but not charge for stays free, which is
- * the reference implementation's own split.
- */
-export function blastWeight(tier: BlastTier): number {
-  if (tier === "overrun") return OVERRUN_WEIGHT;
-  if (tier === "hard_stop") return HARD_STOP_WEIGHT;
-  return 1;
-}
+export const GLOBAL_FILE_CAP = 99;
 
 /**
  * Decide whether one more write fits, without performing it. Refusing here means
  * the write never happens, so a refusal cannot leave a half-written file behind.
  *
- * ⚠️ This no longer refuses at the declared number. It refuses only at the hard
- * stop (1.5x); everything between the declared number and that stop is allowed
- * and *labelled* — `blastTier` is what turns "the round went over" into a cost,
- * and it is applied to the finished round, not to the write in front of it.
+ * ⚠️ The declared number is a wall again (D157), and that is deliberate. What
+ * changed is on the other side of this call: the runtime answers a refusal here by
+ * re-estimating from what the round has demonstrably needed so far and asking
+ * again, so this wall no longer decides whether the work gets done — only whether
+ * the estimate was right. `GLOBAL_FILE_CAP` is the one refusal that stands.
  */
 export function checkWrite(
   state: LedgerState,
@@ -345,19 +275,19 @@ export function checkWrite(
   // may have forbidden — skipping the ban for the agent's own journal would turn
   // a restriction into a hole shaped exactly like the file the agent writes most.
   if (!countsTowardWriteBudget(attempt.path)) return { allowed: true };
-  // The only file-count refusal left, and it sits at the hard stop rather than at
-  // the declared number. Reaching the stop is refused *inclusive*: with a declared
-  // 20 the stop is 30, so 29 writes land and the thirtieth does not.
-  const stop = hardStopAt(budget.maxFiles);
+  // The declared number, bounded by the one global stop. Reaching it is refused
+  // *inclusive*: a declared 3 allows the third file and refuses the fourth, and the
+  // runtime's answer to that refusal is to re-estimate rather than to give up.
+  const limit = Math.min(budget.maxFiles, GLOBAL_FILE_CAP);
   if (attempt.path === null) {
     // A write whose target cannot be read from the arguments still consumes
     // budget: it is charged as its own anonymous slot rather than waved through.
     const anonymous = state.files.filter((entry) => entry.startsWith("\u0000")).length;
-    if (anonymous + 1 >= stop) {
-      return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is the limit for a declared ${budget.maxFiles} (1.5x, never less than +${ABSOLUTE_HEADROOM}); a write with no readable path was refused`);
+    if (anonymous + 1 > limit) {
+      return refusal(`write budget: ${limit} file(s) for this cycle, a write with no readable path was refused`);
     }
-  } else if (!state.files.includes(attempt.path) && state.files.length + 1 >= stop) {
-    return refusal(`cycle blast radius hard stop: ${Math.ceil(stop)} file(s) is the limit for a declared ${budget.maxFiles} (1.5x, never less than +${ABSOLUTE_HEADROOM}), ${attempt.path} would be number ${state.files.length + 1}`);
+  } else if (!state.files.includes(attempt.path) && state.files.length + 1 > limit) {
+    return refusal(`write budget: ${limit} file(s) for this cycle, ${attempt.path} would be number ${state.files.length + 1}`);
   }
   const lines = attempt.lines ?? 0;
   // The only line check left, and it is global. A round's own line budget is gone
@@ -442,16 +372,6 @@ export interface WriteObservation {
   readonly linesWritten: number;
   /** Refusals of this round's writes by the budget — see `measuredBudget`. */
   readonly budgetRefusals: number;
-  /**
-   * The ceiling this round actually ran under, when the row recorded one.
-   *
-   * Carried on the observation rather than passed to `measuredBudget` as an
-   * argument because both callers (`distill.ts`, `induct.ts`) are pure over
-   * facts and hold no library, so neither can resolve a gene address to that
-   * gene's constraints. Optional: rows written before this was journaled
-   * contribute no ceiling sample, which reads the same as a cold start.
-   */
-  readonly ceilingFiles?: number;
 }
 
 /**
@@ -491,26 +411,6 @@ function quantile(sorted: readonly number[], q: number): number {
 const MEDIAN = 0.5;
 
 /**
- * The distinct ceilings the observations ran under, once each.
- *
- * Once per *value*, never once per observation: repeating the ceiling for every
- * round under it would put the old ceiling in the majority and leave the median
- * sitting on it, which is the fixed point `measuredBudget` exists to escape. A
- * row journaled before the ceiling was recorded contributes nothing here.
- */
-function ceilings(
-  observations: readonly WriteObservation[],
-  pick: (observation: WriteObservation) => number | undefined,
-): number[] {
-  const seen = new Set<number>();
-  for (const observation of observations) {
-    const value = pick(observation);
-    if (value !== undefined) seen.add(value);
-  }
-  return [...seen];
-}
-
-/**
  * Size a budget from what rounds of this kind actually needed (D127, revised).
  *
  * The number this replaces was a constant. Every guard `distill.ts` minted
@@ -519,34 +419,25 @@ function ceilings(
  * strategy failed" from what was really "this strategy was given too little
  * room". A budget is a measurement, so it should be taken rather than guessed.
  *
- * ⚠️ Three properties carry the design.
+ * ⚠️ Two properties carry the design, and there were three until D157.
  *
- * **1. Censoring must be undone.** A round the budget stopped records what it
- * *reached*, never what it *needed* — the observation is a lower bound, and its
- * value is literally the cap. Reading it as demand would re-derive the same
- * too-small budget on every pass, so the cap would never lift: a fixed point
- * that measures nothing. A refusal therefore adds back the room that was missing
- * (`reached + 1`). It is still only a lower bound — one file was refused, so at
- * least one more was wanted — and that is the honest direction to be wrong in.
- * A write the ceiling refused and then *raised itself to allow* (`raiseFor`) is
- * not censored at all: it landed, so `filesWritten` is the true demand.
+ * **1. Censoring is gone, because its cause is gone.** This estimator used to add
+ * back the room a refusal had hidden (`reached + 1`), because a round the wall
+ * stopped records what it *reached*, not what it *needed* — the value was
+ * literally the cap, and reading it as demand re-derived the same too-small
+ * number forever. The wall now yields: a refusal is answered by re-estimating from
+ * what the round has shown it needs, so the write lands and `filesWritten` **is**
+ * the demand. The correction was a consequence of the refusal, so removing the
+ * refusal removed it — and with it the ceiling sample that existed only to break
+ * the fixed point censoring created.
  *
- * **2. The median, and the ceiling in force is one of the samples.** p95 had the
- * defect this whole line of work is about: a quantile near the maximum is
- * dragged up by its tail and never comes back down, so the estimate could only
- * ratchet upward. A gene that needed 5, then 8, then 10 could never be tightened
- * back toward 5, and "must use 10" read as progress instead of as regression.
- * The median over the demands *plus the ceiling the rounds ran under* fixes both
- * halves. The ceiling sample is what makes the number fall when demand falls: a
- * group that ran under 7 and then needed 4, 4, 3 lands on 4, not 7. The median
- * is what stops one outsized round from defining the budget.
- *
- * The ceiling enters **once per group**, as the distinct value the observations
- * were bounded by — never once per observation. Three rounds refused at a
- * ceiling of 6 contribute a demand of 7 each *and* the single 6 they ran under,
- * so the samples are `{6, 7, 7, 7}` and the median is 7. Sampling the ceiling
- * per observation would give `{6, 6, 6, 7, 7, 7}`, whose median is 6 — the same
- * fixed point, one indirection later.
+ * **2. The median.** p95 had the defect this whole line of work is about: a
+ * quantile near the maximum is dragged up by its tail and never comes back down,
+ * so the estimate could only ratchet upward. A gene that needed 5, then 8, then
+ * 10 could never be tightened back toward 5, and "must use 10" read as progress
+ * instead of as regression. The median over the demands fixes both halves: a group
+ * that needed 7 and then 4, 4, 3 lands on 4, not 7. And the median is what stops
+ * one outsized round from defining the budget.
  *
  * **3. The floor stops a zero, and only a zero.** See `MIN_MEASURED_BUDGET`.
  * Cold start (no observations at all) still returns the fallback untouched,
@@ -567,12 +458,11 @@ export function measuredBudget(
   // The filter is stated on the axis that exists. `linesWritten` is still
   // journaled as blast radius but is no longer a budget axis, so it cannot make a
   // row "measured" — a row with no file count has nothing this estimator can size.
-  const measured = observations.filter((o) =>
-    o.filesWritten !== 0 || o.budgetRefusals !== 0 || o.ceilingFiles !== undefined);
+  const measured = observations.filter((o) => o.filesWritten !== 0 || o.budgetRefusals !== 0);
   if (measured.length === 0) return { ...fallback };
-  // Uncensored value: `reached + 1` whenever this round was refused at least
-  // once, because a refusal proves at least one more unit was wanted.
-  const demand = (reached: number, refusals: number): number => (refusals > 0 ? reached + 1 : reached);
-  const files = [...measured.map((o) => demand(o.filesWritten, o.budgetRefusals)), ...ceilings(measured, (o) => o.ceilingFiles)].sort((a, b) => a - b);
+  // ⚠️ No correction here, and that is the whole difference D157 made. A refused
+  // write is now one that landed anyway under a re-estimate, so this count is the
+  // demand itself rather than a lower bound on it.
+  const files = measured.map((o) => o.filesWritten).sort((a, b) => a - b);
   return { maxFiles: Math.max(MIN_MEASURED_BUDGET.maxFiles, quantile(files, MEDIAN)) };
 }

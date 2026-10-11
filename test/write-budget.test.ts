@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { blastTier, blastWeight, budgetFor, chargeWrite, checkWrite, hardStopAt, measuredBudget, COLD_START_BUDGET, MIN_MEASURED_BUDGET, GLOBAL_LINE_CAP, OVERRUN_RATIO, HARD_STOP_RATIO, OVERRUN_WEIGHT, HARD_STOP_WEIGHT, ABSOLUTE_HEADROOM, readWriteAttempt, WriteBudgetError, countsTowardWriteBudget, isJournalPath } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, COLD_START_BUDGET, MIN_MEASURED_BUDGET, GLOBAL_FILE_CAP, GLOBAL_LINE_CAP, readWriteAttempt, WriteBudgetError, countsTowardWriteBudget, isJournalPath } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -61,20 +61,17 @@ describe("the ledger", () => {
     assert.equal(second.lines, 5);
   });
 
-  it("refuses the write that would cross the hard stop, and names both the stop and the number it came from", () => {
+  it("refuses the write past the declared number, and names both the number and the write", () => {
     const one = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 1 }, 0);
     const two = chargeWrite(one, { tool: "edit_file", path: "b.ts", lines: 1 }, 1);
-    const decision = checkWrite(two, { tool: "edit_file", path: "c.ts", lines: 1 }, { maxFiles: 1, forbiddenPaths: [] });
+    const decision = checkWrite(two, { tool: "edit_file", path: "c.ts", lines: 1 }, { maxFiles: 2, forbiddenPaths: [] });
     assert.equal(decision.allowed, false);
-    // ⚠️ D151: no longer "file budget exhausted" at the declared number. The only
-    // refusal left is the ladder's stop, and the message must say so — an operator
-    // reading a refusal needs to know whether a number was hit or a number was
-    // blown past, because only the second is a mistake worth correcting.
-    // ⚠️ D152: and it now names the floor as well as the ratio, because at small
-    // declared values it is the floor that sets the stop, not the 1.5x.
-    assert.match(decision.reason!, /hard stop/);
-    assert.match(decision.reason!, /is the limit for a declared 1/);
-    assert.match(decision.reason!, /1\.5x, never less than \+2/);
+    // ⚠️ D157: the declared number refuses again, and that is deliberate — it is
+    // what the runtime answers by re-estimating. The message has to name the number,
+    // because that is the number the re-estimate replaces, and it has to name the
+    // write, because that is what the operator has to size.
+    assert.match(decision.reason!, /2 file\(s\) for this cycle/);
+    assert.match(decision.reason!, /would be number 3/);
     assert.match(decision.reason!, /c\.ts/);
   });
 
@@ -273,91 +270,36 @@ describe("what the budget counts", () => {
 // refusal for a raise to answer and the whole mechanism is gone rather than
 // widened. What replaced it is the ladder below.
 
-describe("the blast-radius ladder", () => {
-  // The operator's arithmetic, written out before the code was: with a declared
-  // 20, 25 is the last round that is merely over, 26 is the first that is charged,
-  // and 30 is the first write refused. Stated as a table because an off-by-one in
-  // a comparison here silently restores the wall the ladder exists to remove.
-  const N = 20;
-  const cases: ReadonlyArray<readonly [number, string]> = [
-    [20, "within"], [21, "exceeded"], [25, "exceeded"],
-    [26, "overrun"], [28, "overrun"], [29, "overrun"],
-    [30, "hard_stop"], [40, "hard_stop"],
-  ];
+describe("the declared number is a wall that yields (D157)", () => {
+  const at = (n: number) => ({ files: Array.from({ length: n }, (_, i) => `f${i}.ts`), lines: n });
 
-  it("labels the operator's own table, boundary values included", () => {
-    for (const [files, tier] of cases) {
-      assert.equal(blastTier(files, N), tier, `${files} of a declared ${N} must read as ${tier}`);
-    }
-  });
-
-  it("pins the ratios themselves, so a silent retune of either is a failing test", () => {
-    assert.equal(OVERRUN_RATIO, 1.3);
-    assert.equal(HARD_STOP_RATIO, 1.5);
-  });
-
-  it("⚠️ floors the stop so the ladder cannot collapse at small declared values", () => {
-    // The tightest numbers the library can mint (`COLD_START_BUDGET` /
-    // `MIN_MEASURED_BUDGET`). A pure ratio has no whole unit to stand on down
-    // here — 1.3x and 1.5x of 1 are 1.3 and 1.5, so both bands between the
-    // thresholds are empty and the ladder degenerated into "one file, then stop":
-    // the wall it was built to remove, wearing a new name.
-    //
-    // The floor is two files of headroom, and what it costs is stated in the
-    // constant: at declared values below 4 the stop is no longer exactly 1.5x.
-    assert.equal(ABSOLUTE_HEADROOM, 2);
-    assert.equal(hardStopAt(1), 3, "not 1.5 — the floor wins");
-    assert.equal(hardStopAt(2), 4, "not 3 — the floor wins");
-    assert.equal(hardStopAt(3), 5, "not 4.5 — the floor still wins");
-    assert.equal(hardStopAt(4), 6, "from here the ratio wins");
-    assert.equal(hardStopAt(20), 30);
-
-    const first = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 1 }, 0);
-    const second = chargeWrite(first, { tool: "edit_file", path: "b.ts", lines: 1 }, 1);
-    const budget = { maxFiles: 1, forbiddenPaths: [] };
-    assert.equal(checkWrite(second, { tool: "edit_file", path: "c.ts", lines: 1 }, budget).allowed, false, "a declared 1 still stops — at three, not at two");
-  });
-
-  it("⚠️ makes the 0.4 tier reachable only where the floor binds", () => {
-    // A declared 20 can reach at most 29 files before the write is refused, so its
-    // worst ratio is 1.45 and it can never enter the 1.5x tier. The 0.4 weight is
-    // therefore a small-number tier, and that is coherent rather than accidental:
-    // the floor gives those rounds absolute room and charges them more, relatively,
-    // for using it.
-    assert.equal(blastTier(hardStopAt(20) - 1, 20), "overrun", "29 of 20 is 1.45x, the worst a declared 20 can do");
-    assert.equal(blastTier(hardStopAt(1) - 1, 1), "hard_stop", "2 of 1 is 2x, and the floor is what let it get there");
-  });
-
-  it("never refuses a write at the declared number, however tight the number is", () => {
-    // The whole point of the ladder. A round that declared 2 and is writing its
-    // second file is *inside* its number — under the wall this was the write that
-    // got refused.
-    const one = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 1 }, 0);
+  it("refuses exactly at the declared number, and not one file earlier", () => {
     const budget = { maxFiles: 2, forbiddenPaths: [] };
-    assert.equal(checkWrite(one, { tool: "edit_file", path: "b.ts", lines: 1 }, budget).allowed, true, "the second of a declared two is not an overrun");
+    const one = chargeWrite(EMPTY, { tool: "edit_file", path: "a.ts", lines: 1 }, 0);
+    assert.equal(checkWrite(one, { tool: "edit_file", path: "b.ts", lines: 1 }, budget).allowed, true, "the second of a declared two is inside it");
     const two = chargeWrite(one, { tool: "edit_file", path: "b.ts", lines: 1 }, 1);
-    assert.equal(checkWrite(two, { tool: "edit_file", path: "c.ts", lines: 1 }, budget).allowed, true, "nor is the third — the floor put the stop at four");
-    const three = chargeWrite(two, { tool: "edit_file", path: "c.ts", lines: 1 }, 2);
-    assert.equal(checkWrite(three, { tool: "edit_file", path: "d.ts", lines: 1 }, budget).allowed, false);
+    const refused = checkWrite(two, { tool: "edit_file", path: "c.ts", lines: 1 }, budget);
+    assert.equal(refused.allowed, false, "the third is past it");
+    assert.match(refused.reason!, /2 file\(s\) for this cycle/);
+    assert.match(refused.reason!, /would be number 3/);
   });
 
-  it("refuses exactly at the hard stop and not one file earlier", () => {
-    const at = (n: number) => ({ files: Array.from({ length: n }, (_, i) => `f${i}.ts`), lines: n });
-    const budget = { maxFiles: 20, forbiddenPaths: [] };
-    assert.equal(checkWrite(at(28), { tool: "edit_file", path: "next.ts", lines: 1 }, budget).allowed, true, "29 files is still under the 30 stop");
-    const stopped = checkWrite(at(29), { tool: "edit_file", path: "next.ts", lines: 1 }, budget);
-    assert.equal(stopped.allowed, false, "the thirtieth file is the stop");
-    assert.match(stopped.reason!, /hard stop/);
-    assert.match(stopped.reason!, /is the limit for a declared 20/);
+  it("⚠️ is bounded by one global cap, which is the only refusal a re-estimate cannot answer", () => {
+    // The wall yields, so what actually stops a round is this and nothing else.
+    // Asserted rather than left to prose, because "yielding" quietly becoming "no
+    // limit" is the exact failure this number exists to prevent.
+    const budget = { maxFiles: GLOBAL_FILE_CAP + 50, forbiddenPaths: [] };
+    assert.equal(checkWrite(at(GLOBAL_FILE_CAP - 1), { tool: "edit_file", path: "next.ts", lines: 1 }, budget).allowed, true, "the 99th file lands");
+    const stopped = checkWrite(at(GLOBAL_FILE_CAP), { tool: "edit_file", path: "next.ts", lines: 1 }, budget);
+    assert.equal(stopped.allowed, false);
+    assert.match(stopped.reason!, /99 file\(s\) for this cycle/);
   });
 
-  it("pins the weights, and that the two uncharged tiers are genuinely free", () => {
-    assert.equal(OVERRUN_WEIGHT, 0.7);
-    assert.equal(HARD_STOP_WEIGHT, 0.4);
-    assert.equal(blastWeight("within"), 1);
-    assert.equal(blastWeight("exceeded"), 1, "labelled but deliberately not charged for — the reference's own split");
-    assert.equal(blastWeight("overrun"), 0.7);
-    assert.equal(blastWeight("hard_stop"), 0.4);
+  it("still refuses a forbidden path and the line ceiling, which a file count cannot answer", () => {
+    const banned = { maxFiles: GLOBAL_FILE_CAP, forbiddenPaths: ["docs"] };
+    assert.equal(checkWrite(EMPTY, { tool: "edit_file", path: "docs/x.md", lines: 1 }, banned).allowed, false);
+    const wide = { maxFiles: GLOBAL_FILE_CAP, forbiddenPaths: [] };
+    assert.equal(checkWrite({ files: [], lines: GLOBAL_LINE_CAP }, { tool: "edit_file", path: "a.ts", lines: 1 }, wide).allowed, false);
   });
 });
 
@@ -386,7 +328,11 @@ describe("enforcement in the runtime", () => {
   // so the first refusal the raise used to correct cannot happen. The two tests
   // below are what the ladder does instead — the writes below the stop all land,
   // and the one that would cross the stop is the only thing refused.
-  it("lets every write below the hard stop land, and refuses only the one that crosses it", async () => {
+  it("⚠️ lets a round finish when its own number was too small, by re-estimating (D157)", async () => {
+    // The operator's own description, as an end-to-end test: the estimate says one,
+    // the round turns out to need three, so three is what it becomes. Nothing is
+    // refused and nothing is left half-written — an estimate is allowed to be wrong,
+    // and it is not allowed to cost the round its work.
     const names = ["one.txt", "two.txt", "three.txt"];
     for (const [index, name] of names.entries()) {
       await writeFile(join(fixture.workspaceRoot, name), `keep${index}\n`, "utf8");
@@ -404,8 +350,6 @@ describe("enforcement in the runtime", () => {
       }),
       store: new SessionStore({ root: fixture.storeRoot }),
       sessionId: "budget-files", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
-      // A declared 1 stops at 3 — the floor, not the 1.5x — so the second file
-      // lands and the third does not.
       maxWriteFiles: 1,
       tools: new ToolRegistry([createEditFileTool()]),
       approve: async () => true,
@@ -413,28 +357,29 @@ describe("enforcement in the runtime", () => {
 
     const result = await runtime.send("改三个文件");
     assert.equal(await readFile(join(fixture.workspaceRoot, "one.txt"), "utf8"), "w0\n");
-    assert.equal(await readFile(join(fixture.workspaceRoot, "two.txt"), "utf8"), "w1\n", "the declared number itself refuses nothing now");
-    assert.equal(await readFile(join(fixture.workspaceRoot, "three.txt"), "utf8"), "keep2\n", "the write that would cross the floored stop is the only refusal left");
-    assert.equal(result.budget.filesWritten, 2);
-    assert.equal(result.budget.filesWrittenLimit, 1, "the number the round declared, unchanged — nothing widens it now");
-    // D127 still holds: a refusal means the tool never ran, so it is not a tool
-    // failure and does not by itself move the verdict.
-    assert.equal(result.evaluation.status, "success");
+    assert.equal(await readFile(join(fixture.workspaceRoot, "two.txt"), "utf8"), "w1\n", "the second file lands — the declared 1 yielded");
+    assert.equal(await readFile(join(fixture.workspaceRoot, "three.txt"), "utf8"), "w2\n", "and so does the third");
+    assert.equal(result.budget.filesWritten, 3);
+    assert.equal(result.budget.filesWrittenLimit, 3, "raised to what the round demonstrably needed, not to the runtime default");
+    // The pair of counters is the whole change: two raises, and **no** refusal that
+    // stood. A round that recovered must not be journaled as a lesson about a limit.
     assert.ok(
-      result.evaluation.evidence.some((line) => line === "budgetRefusals=1"),
-      `expected exactly one standing refusal in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
+      result.evaluation.evidence.some((line) => line === "writeRaises=2"),
+      `expected two raises in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
     );
+    assert.ok(
+      !result.evaluation.evidence.some((line) => line.startsWith("budgetRefusals=")),
+      `expected no standing refusal, got ${JSON.stringify(result.evaluation.evidence)}`,
+    );
+    assert.equal(result.evaluation.status, "success");
   });
 
-  it("⚠️ charges an overrun: past 1.3x the round's success is discounted, not denied", async () => {
-    // The cost the ladder puts where the wall used to be. A declared 3 that
-    // reaches 4 is 1.33x — past the operator's 1.3x threshold and below the 1.5x
-    // stop — so all four writes land and nothing is refused.
-    //
-    // ⚠️ D152: the round is still a `success`. D151 had it downgraded to `partial`
-    // as well as weighted, which charged one overrun twice; the operator asked for
-    // a graded cost, and the weight is where a graded cost belongs. The verdict
-    // answers "did the round work", and it did.
+  it("⚠️ lets the fourth write land when the declared three was too small (D157)", async () => {
+    // ⚠️ D157 retitled this. It used to be "charges an overrun: past 1.3x the
+    // round's success is discounted, not denied" — the ladder priced a round that
+    // went past its number. There is no ladder and no price: the estimate is
+    // corrected and the round keeps its success, because the number was a guess and
+    // the work was real.
     const names = ["over-a.txt", "over-b.txt", "over-c.txt", "over-d.txt"];
     for (const name of names) await writeFile(join(fixture.workspaceRoot, name), "keep\n", "utf8");
 
@@ -455,19 +400,24 @@ describe("enforcement in the runtime", () => {
     const result = await runtime.send("改四个文件");
     assert.equal(result.budget.filesWritten, 4, "all four landed — that is the whole point of moving the wall");
     assert.equal(result.evaluation.status, "success", "the round worked; only its price changed");
+    assert.equal(result.budget.filesWrittenLimit, 4, "raised from the declared 3 to what the round needed");
     assert.ok(
-      result.evaluation.evidence.some((line) => line === "blastRadius=overrun"),
-      `expected the tier in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
+      result.evaluation.evidence.some((line) => line === "writeRaises=1"),
+      `expected the raise in evidence, got ${JSON.stringify(result.evaluation.evidence)}`,
+    );
+    assert.ok(
+      !result.evaluation.evidence.some((line) => line.startsWith("budgetRefusals=")),
+      "and nothing was refused, so the round is not journaled as a lesson about a limit",
     );
     assert.equal(result.evaluation.failureClass, null, "nothing broke, so it is not a failure and not a strategy verdict");
   });
 
-  it("⚠️ folds the weight into the gene's own record, as a fraction of a success", async () => {
-    // The end-to-end of D152, and the assertion that matters most: the weight is
-    // not merely written down, it is READ. A weight that is computed and then
-    // never folded looks identical to a correct one until something asks the gene
-    // how it has been doing — which is the whole defect this round exists to
-    // avoid, one layer over from where it was fixed.
+  it("⚠️ counts a corrected round as a full success for the gene, not a fraction of one", async () => {
+    // ⚠️ D157 inverted this. It used to assert that an overrun was folded as 0.7 of
+    // a success — the gene's own record was where the estimate's error got charged.
+    // That is the misattribution this change removes: the gene said 3, the round
+    // needed 4, and the number being wrong is not the strategy failing. The attempt
+    // counts, the success counts in full, and it is the estimate that learns.
     const names = ["frac-a.txt", "frac-b.txt", "frac-c.txt", "frac-d.txt"];
     for (const name of names) await writeFile(join(fixture.workspaceRoot, name), "keep\n", "utf8");
 
@@ -497,12 +447,13 @@ describe("enforcement in the runtime", () => {
     const result = await runtime.send("改一下文件");
     assert.equal(result.appliedGene?.address, minted.address, "the round must run under the gene");
     assert.equal(result.budget.filesWritten, 4, "the declared 3 did not refuse the fourth write");
+    assert.equal(result.budget.filesWrittenLimit, 4, "the declared 3 was raised to the 4 the round needed");
     assert.equal(result.evaluation.status, "success");
 
     const entry = (await geneStore.state()).genes.get(minted.address);
     assert.equal(entry?.expression.attempts, 1, "the attempt counts in full");
-    assert.equal(entry?.expression.successes, 0.7, "but the success is discounted to 0.7 — not zero, and not one");
-    assert.equal(entry?.expression.streak, 0, "an overrun is not a strategy failure, so it does not march toward quarantine");
+    assert.equal(entry?.expression.successes, 1, "and so does the success — a corrected estimate is not a discounted win");
+    assert.equal(entry?.expression.streak, 0, "nor a strategy failure, so it does not march toward quarantine");
   });
 
   it("journals the ceiling the round ran under, so the estimate can fall later", async () => {
@@ -545,7 +496,10 @@ describe("enforcement in the runtime", () => {
     const facts = await geneStore.geneLessSuccesses();
     const fact = facts.find((entry) => entry.filesWritten === 2);
     assert.ok(fact, `expected this round in the induction archive, got ${JSON.stringify(facts)}`);
-    assert.equal(fact!.ceilingFiles, 2);
+    // ⚠️ D157: the footprint is the demand itself. There is no ceiling sample left
+    // to read — the correction and the sample were both consequences of a refusal,
+    // and the refusal now yields instead.
+    assert.equal(fact!.budgetRefusals, 0, "the estimate held, so nothing was refused");
   });
 
   // ⚠️ Deleted: "raises the line ceiling once, and the refusal after that still
@@ -555,10 +509,25 @@ describe("enforcement in the runtime", () => {
   // wall is gone rather than moved; `checkWrite`'s unit tests above pin what
   // replaced it (a global runaway backstop that cannot refuse real work).
 
-  it("records both outcomes in the audit log: the raise that allowed a write, and the refusal that stood", async () => {
+  it("records a refusal that stood in the audit log, and never a correction that writes no line", async () => {
     for (const name of ["audited-a.txt", "audited-b.txt", "audited-c.txt"]) {
       await writeFile(join(fixture.workspaceRoot, name), "keep\n", "utf8");
     }
+    // ⚠️ D157 changed how this test produces its standing refusal. It used to
+    // declare one file and attempt three; that no longer refuses anything, because
+    // the estimate yields. A standing refusal now has to come from a limit a bigger
+    // file count cannot answer — a forbidden path — and that is the right shape for
+    // this test anyway, because an audit line for a refusal that *can* be answered
+    // would be a record of something that did not happen.
+    const geneStore = new GeneStore(join(fixture.root, "audit-genes.jsonl"));
+    const minted = mintGene({
+      name: "audited", intent: "research", signalsMatch: ["改一下文件"], preconditions: [],
+      strategy: [{ kind: "act", text: "改" }, { kind: "verify", text: "查" }],
+      constraints: { maxFiles: 99, forbiddenPaths: ["audited-b.txt"] },
+      validation: ["npm.cmd test"], avoid: [],
+    });
+    await geneStore.appendGene(minted);
+
     const store = new SessionStore({ root: fixture.storeRoot });
     const runtime = new AgentRuntime({
       adapter: createScriptedAdapter({
@@ -575,35 +544,35 @@ describe("enforcement in the runtime", () => {
         ],
       }),
       store, sessionId: "budget-audit", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
-      // One file allowed, three attempted: the second and third are both past the
-      // 1.5x stop, so both are refused. Nothing widens the number any more.
+      geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-audit.jsonl")),
       maxWriteFiles: 1,
       tools: new ToolRegistry([createEditFileTool()]),
       approve: async () => true,
     });
-    await runtime.send("改文件");
+    await runtime.send("改一下文件");
 
     const { events } = await store.inspect("budget-audit");
     const audits = events.filter((event): event is AuditEvent => event.kind === "audit");
     const denied = audits.find((event) => event.decision === "denied" && event.reason.includes("write budget"));
     assert.ok(denied, `expected a write-budget refusal audit event, got ${JSON.stringify(audits)}`);
-    // ⚠️ D151: the counterpart assertion is inverted. This test used to require a
-    // "write budget raised" line, because a refused write was corrected once. That
-    // mechanism is gone, and the log must not still be able to claim a correction
-    // that nothing performs — an audit line for a mechanism that cannot fire is
-    // the most expensive kind of stale record, because it is read as history.
+    assert.equal(await readFile(join(fixture.workspaceRoot, "audited-b.txt"), "utf8"), "keep\n", "and the banned file is genuinely untouched");
+    // ⚠️ D151/D157: the counterpart assertion stays inverted. This test used to
+    // require a "write budget raised" line, because a refused write was corrected
+    // once. The correction now happens in the runtime rather than in the log, and
+    // the log must not be able to claim a mechanism that writes no line — an audit
+    // line for a mechanism that cannot fire is read as history.
     assert.equal(
       audits.find((event) => event.reason.includes("write budget raised")),
       undefined,
-      "nothing raises a budget any more, so no audit line may say one was",
+      "nothing raises a budget through the audit log, so no audit line may say one was",
     );
   });
 
-  // ⚠️ D151: this used to be "no raise, because a chosen number is a commitment".
-  // There is no raise for anyone now, so the thing worth pinning is what replaced
-  // it — a gene-applied round is bounded by its own number through the ladder, and
-  // the ladder's stop is measured from *that* number, not from the runtime default.
-  it("bounds a gene-applied round by the gene's own number, not by the runtime default", async () => {
+  // ⚠️ D157 inverted this test. It used to be "no raise, because a chosen number is
+  // a commitment" — the gene's number was a wall and the round was bounded by it.
+  // The number is still where the round *starts*, and that is what is pinned here;
+  // what changed is that being wrong about it no longer costs the round its work.
+  it("⚠️ starts a gene-applied round at the gene's own number, and lets it grow from there", async () => {
     const first = join(fixture.workspaceRoot, "committed.txt");
     const second = join(fixture.workspaceRoot, "committed2.txt");
     const third = join(fixture.workspaceRoot, "committed3.txt");
@@ -637,7 +606,12 @@ describe("enforcement in the runtime", () => {
       }),
       store, sessionId: "budget-committed", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
       geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-gene-committed.jsonl")),
-      maxWriteFiles: 1,
+      // ⚠️ Deliberately *above* the gene's own number, so the two raises asserted
+      // below prove the gene's 1 was the starting estimate rather than the default's
+      // 3. This is the surviving half of the old "gives a gene exactly the budget it
+      // declared, below the default as well as above", which D157 deleted: once the
+      // number is no longer enforced as written, there is one claim left to make.
+      maxWriteFiles: 3,
       tools: new ToolRegistry([createEditFileTool()]),
       approve: async () => true,
     });
@@ -645,12 +619,15 @@ describe("enforcement in the runtime", () => {
     const result = await runtime.send("改一下文件");
     assert.equal(result.appliedGene?.address, minted.address, "the round must actually run under the gene");
     assert.equal(await readFile(first, "utf8"), "a\nb\nc\n", "the write inside the declared number ran");
-    assert.equal(await readFile(second, "utf8"), "d\n", "and the one past it — it is the floored stop that refuses, not the declared number");
-    assert.equal(await readFile(third, "utf8"), "keep\n", "the third is where the floored stop sits");
-    assert.equal(result.budget.filesWrittenLimit, 1, "the gene's own number — the ladder is measured from it, not from the default 3");
+    assert.equal(await readFile(second, "utf8"), "d\n", "the one past it ran too — the declared number is a starting estimate, not a wall");
+    assert.equal(await readFile(third, "utf8"), "e\n", "and so did the third");
+    assert.equal(result.budget.filesWritten, 3);
+    // The proof that the gene's 1 was read at all: with the runtime default of 3
+    // there would have been no raise, and there were two.
+    assert.equal(result.budget.filesWrittenLimit, 3, "raised from the gene's own 1 to the 3 the round needed");
     assert.ok(
-      result.evaluation.evidence.some((line) => line === "budgetRefusals=1"),
-      `expected the breach to be recorded as a lost write, got ${JSON.stringify(result.evaluation.evidence)}`,
+      result.evaluation.evidence.some((line) => line === "writeRaises=2"),
+      `expected the gene's number to have been the starting estimate, got ${JSON.stringify(result.evaluation.evidence)}`,
     );
   });
 
@@ -670,63 +647,6 @@ describe("enforcement in the runtime", () => {
     assert.equal(result.budget.filesWrittenLimit, 3);
   });
 
-  it("gives a gene exactly the budget it declared, below the default as well as above", async () => {
-    const first = join(fixture.workspaceRoot, "gene-bounded.txt");
-    const second = join(fixture.workspaceRoot, "gene-bounded2.txt");
-    const third = join(fixture.workspaceRoot, "gene-bounded3.txt");
-    await writeFile(first, "keep\n", "utf8");
-    await writeFile(second, "keep\n", "utf8");
-    await writeFile(third, "keep\n", "utf8");
-
-    const geneStore = new GeneStore(join(fixture.root, "gene-budget.jsonl"));
-    const minted = mintGene({
-      name: "tight", intent: "research", signalsMatch: ["改一下文件"], preconditions: [],
-      strategy: [{ kind: "act", text: "改" }, { kind: "verify", text: "查" }],
-      constraints: { maxFiles: 1, forbiddenPaths: [] },
-      validation: ["npm.cmd test"], avoid: [],
-    });
-    await geneStore.appendGene(minted);
-
-    const store = new SessionStore({ root: fixture.storeRoot });
-    const runtime = new AgentRuntime({
-      adapter: createScriptedAdapter({
-        steps: [
-          {
-            content: "",
-            toolCalls: [
-              call("edit_file", { path: "gene-bounded.txt", content: "a\nb\nc\n" }, "bounded_1"),
-              call("edit_file", { path: "gene-bounded2.txt", content: "d\n" }, "bounded_2"),
-              call("edit_file", { path: "gene-bounded3.txt", content: "e\n" }, "bounded_3"),
-            ],
-          },
-          { content: "done" },
-        ],
-      }),
-      store, sessionId: "gene-bounded", home: fixture.home, workspaceRoot: fixture.workspaceRoot,
-      geneStore, cycleStore: new CycleStore(join(fixture.root, "cycles-gene-bounded.jsonl")),
-      // The runtime default allows 3 files. The gene asks for 1, so the ladder's
-      // stop is measured from 1 — floored to 3 — and not from the default's 4.5.
-      maxWriteFiles: 3,
-      tools: new ToolRegistry([createEditFileTool()]),
-      approve: async () => true,
-    });
-
-    const result = await runtime.send("改一下文件");
-    assert.equal(result.appliedGene?.address, minted.address);
-    // ⚠️ Inverted from "but never narrow it below the default" (甲). A gene's
-    // number is a commitment, so it is enforced as written — including downward,
-    // which is the only direction that makes "this gene was sized wrong"
-    // observable at all.
-    assert.equal(result.budget.filesWrittenLimit, 1, "the gene's 1, not the runtime default's 3");
-    // The refusal is checked before the tool runs, so the third file is untouched.
-    // That refusal is exactly the evidence 戊 re-measures this gene's number from,
-    // and under 甲 it could never be produced: the round was quietly handed the
-    // default 3 and the gene's own number was never tested.
-    assert.equal(await readFile(first, "utf8"), "a\nb\nc\n");
-    assert.equal(await readFile(second, "utf8"), "d\n", "the second lands — the floored stop, not the declared 1, is what refuses");
-    assert.equal(await readFile(third, "utf8"), "keep\n");
-  });
-
   it("classifies an exhausted write budget as a budget failure", () => {
     const error = new WriteBudgetError("cycle file budget exhausted");
     assert.equal(error.name, "WriteBudgetError");
@@ -742,8 +662,8 @@ describe("enforcement in the runtime", () => {
 // no longer a budget — they are journaled as blast radius and not estimated — so
 // every case below is stated in files.
 describe("measuredBudget", () => {
-  const obs = (filesWritten: number, linesWritten: number, budgetRefusals = 0, ceilingFiles?: number) => ({
-    filesWritten, linesWritten, budgetRefusals, ...(ceilingFiles === undefined ? {} : { ceilingFiles }),
+  const obs = (filesWritten: number, linesWritten: number, budgetRefusals = 0) => ({
+    filesWritten, linesWritten, budgetRefusals,
   });
 
   it("returns the fallback untouched when nothing has been measured", () => {
@@ -766,21 +686,24 @@ describe("measuredBudget", () => {
     // Here the two empty rounds drop out and only the one that wrote speaks.
     assert.deepEqual(measuredBudget([obs(0, 0), obs(1, 2), obs(0, 0)]), { maxFiles: 1 });
 
-    // The floor itself, reached by a row that *is* a measurement because it names
-    // the ceiling it ran under — and the answer still cannot come out at zero.
-    assert.deepEqual(measuredBudget([obs(0, 0, 0, 0)]), { ...MIN_MEASURED_BUDGET });
+    // ⚠️ The floor is currently unreachable: the filter above drops every row whose
+    // footprint is zero, so the median of what remains is at least 1. It stays as a
+    // guard on that filter rather than on the arithmetic — if the filter ever stops
+    // dropping zeros, a gene would be sized at 0 files and would refuse the first
+    // write of the next round. Named because an unreachable branch nobody mentions
+    // is how a live one gets deleted by mistake.
+    assert.equal(MIN_MEASURED_BUDGET.maxFiles, 1);
   });
 
-  it("sizes uncensored observations at their median, not at their top", () => {
-    assert.equal(measuredBudget([obs(4, 90), obs(5, 120), obs(3, 70)]).maxFiles, 4, "the middle of 3, 4 and 5");
-  });
-
-  it("⚠️ adds back the room a refusal proved was wanted, instead of re-deriving the cap", () => {
-    // The load-bearing case. A refused round records what it *reached*, and that
-    // value IS the cap — so reading it as demand re-derives the same too-small
-    // budget on every pass, and the budget can never lift. A fixed point that
-    // measures nothing.
-    assert.equal(measuredBudget([obs(1, 20, 1), obs(1, 20, 1), obs(1, 20, 1)]).maxFiles, 2, "one refused write proves a second file was wanted");
+  it("⚠️ sizes the demand directly, with no correction — the refusal it corrected for now yields", () => {
+    // ⚠️ D157, and this is the test that changed meaning rather than shape. It used
+    // to assert the censoring arithmetic: three rounds refused at 1 "prove" each of
+    // them wanted 2 (`reached + 1`), because a refused round's footprint IS the cap.
+    // The wall yields now, so a round that needed 2 records 2 and there is nothing to
+    // add back. The load-bearing property moved out of this arithmetic and into the
+    // runtime's re-estimate, which the round tests below cover end to end.
+    assert.equal(measuredBudget([obs(2, 20), obs(2, 20), obs(2, 20)]).maxFiles, 2, "what the rounds needed, read straight off");
+    assert.equal(measuredBudget([obs(4, 90), obs(5, 120), obs(3, 70)]).maxFiles, 4, "and at their median, not at their top");
   });
 
   it("lets one outsized round widen the budget without defining it (median, not max)", () => {
@@ -788,20 +711,12 @@ describe("measuredBudget", () => {
     assert.equal(measuredBudget([...typical, obs(50, 900)]).maxFiles, 3, "a single 50-file round must not become the budget");
   });
 
-  it("⚠️ lifts the ceiling off the old one when demand exceeds it, settling on the median", () => {
-    // The case the p95 estimator got wrong, in the operator's own arithmetic.
-    // Three rounds refused at a ceiling of 6 prove each of them wanted 7
-    // (`reached + 1`). The ceiling they ran under enters **once** — added three
-    // times it would put 6 in the majority and leave the median sitting on it,
-    // which is the fixed point this estimator exists to escape.
-    assert.equal(measuredBudget([obs(6, 60, 1, 6), obs(6, 60, 1, 6), obs(6, 60, 1, 6)]).maxFiles, 7, "samples are {6, 7, 7, 7}; the median is 7");
-  });
-
-  it("⚠️ pulls the ceiling back down when demand falls, which p95 could never do", () => {
-    // The other half, and the whole reason the ceiling is a sample: a gene that
-    // ran under 7 and was then only ever asked for 4, 4 and 3 must be tightened
-    // to 4. Under p95 it stayed 7 for good, because a tail quantile has nothing
-    // pulling it back down — the estimate could only ratchet upward.
-    assert.equal(measuredBudget([obs(4, 40, 0, 7), obs(4, 40, 0, 7), obs(3, 30, 0, 7)]).maxFiles, 4, "samples are {7, 4, 4, 3}; the median is 4");
+  it("⚠️ comes back down when demand falls, which p95 could never do", () => {
+    // The half that answers the operator's actual complaint. A gene that declared 7
+    // and was then only ever asked for 4, 4 and 3 must be tightened to 4. Under p95
+    // it stayed 7 for good, because a tail quantile has nothing pulling it back down
+    // — the estimate could only ratchet upward, and "must use 10" read as progress
+    // instead of as regression.
+    assert.equal(measuredBudget([obs(4, 40), obs(4, 40), obs(3, 30)]).maxFiles, 4, "samples are {4, 4, 3}; the median is 4");
   });
 });

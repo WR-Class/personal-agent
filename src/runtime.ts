@@ -18,7 +18,7 @@ import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
-import { blastTier, blastWeight, budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type BlastTier, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import { SHELL_TOOL_NAME, commandFromArguments, readExitCode } from "./shell-tool.ts";
@@ -811,11 +811,6 @@ export class AgentRuntime {
     // `tools` is `undefined` rather than empty on that failure path, which is a
     // second reason the success test comes first.
     const graded = !(evaluation.status === "success" && (tools?.length ?? 0) === 0);
-    // Re-derived here rather than threaded in from the verdict: it is a pure
-    // function of the ledger and the number the round declared, both still in
-    // hand, and the budget can no longer change mid-round (D151).
-    const tier = blastTier(this.writeLedger.files.length, this.writeBudget.maxFiles);
-    const weight = blastWeight(tier);
     await this.geneStore.appendOutcome({
       address,
       succeeded: evaluation.status === "success",
@@ -838,36 +833,23 @@ export class AgentRuntime {
       // one-element list would be bytes with no replay value.
       ...(candidates && candidates.length > 1 ? { candidates } : {}),
       // The round's write footprint, so `distill.ts`/`induct.ts` can size a gene's
-      // budget from what rounds of this kind actually reached instead of from a
-      // constant (D127). Written only when the round wrote something or was
-      // stopped by the budget: a round that wrote nothing contributes nothing to
-      // the measurement, and outcome rows are the log's growth hot spot.
+      // budget from what rounds of this kind actually needed instead of from a
+      // constant (D127). Written only when the round wrote something or was stopped
+      // by a limit: a round that wrote nothing contributes nothing to the
+      // measurement, and outcome rows are the log's growth hot spot.
       //
-      // ⚠️ `budgetRefusals` must survive even when nothing was written, because
-      // it is the flag that says the other two numbers are censored.
-      //
-      // `writeCeiling` rides along under the same condition. ⚠️ D151: it is simply
-      // the number this round declared — the raise that used to make the ended
-      // ceiling differ from the starting one is gone. It stays because it is what
-      // lets `measuredBudget` take the median over the limit as well as the demand,
-      // so the estimate can come back **down**; a gene whose number could only ever
-      // rise is a gene nobody can tighten. See `WriteObservation.ceilingFiles`.
+      // ⚠️ D157: this count is the **demand itself**, not a lower bound on it. It
+      // used to be censored — a round the wall stopped recorded the cap rather than
+      // what it needed — which is why the estimator had to add the missing room
+      // back, and why a `writeCeiling` sample rode along to let the estimate come
+      // down again. The wall yields now: the write lands under a re-estimate, so
+      // the number is true. Both the correction and the sample were consequences of
+      // the refusal, so both went with it.
       ...(this.writeLedger.files.length > 0 || budgetRefusals > 0
         ? {
           filesWritten: this.writeLedger.files.length,
           linesWritten: this.writeLedger.lines,
           ...(budgetRefusals > 0 ? { budgetRefusals } : {}),
-          writeCeiling: { files: this.writeBudget.maxFiles },
-          // D151: how far past the declared number this round went. Written only
-          // when it went past at all, so a round inside its number keeps the exact
-          // bytes it always had, and "did not overrun" stays distinguishable from
-          // "the field did not exist yet".
-          ...(tier === "within" ? {} : { blastTier: tier }),
-          // ⚠️ D152: the cost, and it is the *only* cost. Written only when it is
-          // below one, so an `exceeded` round — labelled but deliberately not
-          // charged for — adds no field rather than adding a 1 that a reader would
-          // have to know meant "no charge".
-          ...(weight < 1 ? { outcomeWeight: weight } : {}),
         }
         : {}),
       evidence: evaluation.evidence,
@@ -1015,10 +997,12 @@ export class AgentRuntime {
     let steps = 0;
     let toolCalls = 0;
     let toolErrors = 0;
-    // The third number, kept off the success axis (D127). It is journaled so the
-    // budget estimate can learn from real demand, and deliberately not fed into
-    // `evaluateRun`: see `runToolCalls` for why the two are different lessons.
+    // Two numbers, both kept off the success axis (D127). `budgetRefusals` counts
+    // the limits that **stood**; `writeRaises` counts the times the estimate was
+    // simply wrong and yielded (D157). Folding them together would journal a round
+    // that completed as a lesson about a limit.
     let budgetRefusals = 0;
+    let writeRaises = 0;
 
     try {
     cycle = await this.advance(cycle, { type: "execute-start", at: Date.now() });
@@ -1091,11 +1075,7 @@ export class AgentRuntime {
         // then the applied gene's claims are compared against that same record.
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
-        // The ladder's label for this round, computed from the ledger the budget
-        // already counts. Handed to the verdict rather than applied here, so the
-        // one place that decides what a round was stays the one place (D151).
-        const tier = blastTier(this.writeLedger.files.length, this.writeBudget.maxFiles);
-        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, filesWritten: this.writeLedger.files, blastTier: tier });
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, writeRaises, filesWritten: this.writeLedger.files });
         const completionEvaluation = finalizing ? {...evaluation,status:'partial' as const,evidence:[...evaluation.evidence,'Configured step cap reached; summary is not task completion.']} : evaluation;
         // One evidence object, named, and read by both consumers. Writing the pair
         // out twice would let the gene's claims and the task's claims be judged
@@ -1178,6 +1158,7 @@ export class AgentRuntime {
       toolCalls += executed.calls;
       toolErrors += executed.errors;
       budgetRefusals += executed.budgetRefusals;
+      writeRaises += executed.writeRaises;
     }
     }
     catch (error) {
@@ -1202,7 +1183,7 @@ export class AgentRuntime {
     signal: AbortSignal | undefined,
     runId: string,
     step: number,
-  ): Promise<{ calls: number; errors: number; budgetRefusals: number }> {
+  ): Promise<{ calls: number; errors: number; budgetRefusals: number; writeRaises: number }> {
     // Re-read on every step rather than caching for the session, so revoking a
     // root takes effect on the next step instead of the next conversation.
     try {
@@ -1242,20 +1223,41 @@ export class AgentRuntime {
     // given too little room". Two different lessons, and only one of them is
     // about the strategy.
     let budgetRefusals = 0;
+    // The other half of that distinction (D157), and the opposite half: a refusal
+    // the round **recovered from** is not a limit that stood, it is an estimate
+    // that was wrong.
+    let writeRaises = 0;
     let index = 0;
     for (const call of calls) {
       const position = index++;
       this.outcomeTools?.push(call.name);
-      // Write budget, checked before the tool runs. The only refusal left is the
-      // ladder's hard stop at 1.5x the declared number (D151) — the declared
-      // number itself no longer refuses anything, so an estimate that was too low
-      // now costs the round a tier instead of costing it the objective. The
-      // refusal is recorded as a failed tool result rather than thrown, so the
-      // model sees it and one stopped write cannot abort a round that has other
-      // work left to do.
+      // Write budget, checked before the tool runs, and ⚠️ D157 is the whole of
+      // what happens to a refusal: it is answered by **re-estimating from what the
+      // round has just shown it needs** and asking again, not by giving up on the
+      // write. The operator's own description — the estimate says five, the round
+      // turns out to need six, so six is what it becomes. An estimate is allowed to
+      // be wrong; it is not allowed to cost the round its work.
+      //
+      // The re-estimate happens once per attempt, which is what bounds it: the
+      // refusals that survive are `GLOBAL_FILE_CAP`, the forbidden-path bans and
+      // the line ceiling — none of which a larger file count can answer. A
+      // surviving refusal is recorded as a failed tool result rather than thrown,
+      // so the model sees it and one stopped write cannot abort a round that has
+      // other work left to do.
       const attempt = readWriteAttempt(call.name, call.arguments);
       if (attempt !== null) {
-        const decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
+        let decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
+        if (!decision.allowed) {
+          // The honest new estimate is the number the round has demonstrably needed
+          // so far — one slot past what the ledger holds is exactly what this write
+          // is asking for — rather than a step up from the old guess.
+          const needed = this.writeLedger.files.length + 1;
+          if (needed > this.writeBudget.maxFiles) {
+            this.writeBudget = { ...this.writeBudget, maxFiles: needed };
+            writeRaises += 1;
+            decision = checkWrite(this.writeLedger, attempt, this.writeBudget);
+          }
+        }
         if (!decision.allowed) {
           budgetRefusals += 1;
           this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
@@ -1309,7 +1311,7 @@ export class AgentRuntime {
       );
     }
     signal?.throwIfAborted();
-    return { calls: calls.length, errors, budgetRefusals };
+    return { calls: calls.length, errors, budgetRefusals, writeRaises };
   }
 
   private assertContextFits(messages: readonly ChatMessage[]): void {

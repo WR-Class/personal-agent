@@ -30,7 +30,7 @@ import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 import type { FailureFact } from "./distill.ts";
 import type { CommandRun } from "./types.ts";
 import type { SuccessFact } from "./induct.ts";
-import { measuredBudget, type BlastTier, type WriteObservation } from "./write-budget.ts";
+import { measuredBudget, type WriteObservation } from "./write-budget.ts";
 
 const SCHEMA = 1;
 
@@ -79,12 +79,17 @@ export type GeneStoreRecord =
      * guessed: `distill.ts` used to mint every guard with a hardcoded
      * `{maxFiles: 1, maxLines: 20}`, a number nobody derived from anything.
      *
-     * ⚠️ `filesWritten`/`linesWritten` are a **lower bound on demand**, not
-     * demand itself. A round stopped by the budget records what it managed, not
-     * what it needed — so `budgetRefusals` is what tells a reader whether the
-     * number is censored, and the estimator must add back the room that was
-     * missing. Reading the capped value as demand would re-derive the same
-     * too-small budget forever.
+     * ⚠️ D157: `filesWritten` is the **demand itself**, not a lower bound on it.
+     * It used to be censored — a round the declared wall stopped recorded the cap
+     * rather than what it needed — which is why the estimator added the missing room
+     * back, and why a `writeCeiling` sample rode along to let the number fall again.
+     * The wall yields now, so the write lands and this count is true. The correction
+     * and the sample were both consequences of the refusal and went with it.
+     *
+     * `budgetRefusals` now counts only the refusals that **stood** — the global cap,
+     * a forbidden path, the line ceiling. A refusal the round recovered from is a
+     * fact about the estimate rather than about the limit, and it is journaled as
+     * such in `evidence` instead of here.
      *
      * Optional, like `drifted`: rows written before this field keep their exact
      * bytes and read as "no measurement", which the estimator treats as a
@@ -93,39 +98,6 @@ export type GeneStoreRecord =
     readonly filesWritten?: number;
     readonly linesWritten?: number;
     readonly budgetRefusals?: number;
-    /**
-     * The ceiling the round ran under, so the estimator can weigh the limit
-     * beside the demand it produced (D127, second revision).
-     *
-     * The median over demands alone can only ever sit where the demands are: it
-     * can rise but has nothing pulling it back down. The ceiling is what lets the
-     * number fall again when demand falls, and what stops one round from moving
-     * it. Journaled once per round, read once per group — repeating it per
-     * observation would put the old ceiling in the majority and reproduce the
-     * fixed point being removed.
-     *
-     * Optional for the same reason as the three above: rows written before this
-     * field keep their exact bytes and read as "the ceiling is unknown", which
-     * contributes no ceiling sample rather than a zero.
-     */
-    readonly writeCeiling?: { readonly files: number };
-    /**
-     * How far past its declared number this round went (D151), and what that cost
-     * it (D152).
-     *
-     * `blastTier` is the label the operator reads; `outcomeWeight` is the only
-     * thing the fold uses, and it is absent when it is 1. Written only when the
-     * round went past its number at all, so a round inside its number keeps the
-     * exact bytes it always had and "did not overrun" stays distinguishable from
-     * "the field did not exist yet".
-     *
-     * ⚠️ `outcomeWeight` replaced a binary rule that zeroed a truncated round's
-     * success outright. The two together double-charged one overrun; the graded
-     * weight is what the operator asked for, so the binary rule now covers only
-     * refusals the ladder did not cause.
-     */
-    readonly blastTier?: BlastTier;
-    readonly outcomeWeight?: number;
     /**
      * Whether drift, not the score, chose the gene this outcome belongs to (D108).
      *
@@ -375,20 +347,6 @@ export class GeneStore {
       filesWritten?: number;
       linesWritten?: number;
       budgetRefusals?: number;
-      writeCeiling?: { files: number };
-      /**
-       * How far past its declared number this round went (D151). Written only when
-       * it went past at all. Nothing in the fold reads it — the verdict already
-       * carries the cost — so it is here for the operator reading the log, which is
-       * the same reason `evidence` is here.
-       */
-      blastTier?: BlastTier;
-      /**
-       * What this round contributes to the success count it lands in (D152):
-       * 1 normally, 0.7 for an overrun, 0.4 for one that reached the hard stop.
-       * Absent means 1, so an ordinary round keeps the exact bytes it always had.
-       */
-      outcomeWeight?: number;
       graded?: boolean;
       /** Commands this round ran, with their exit codes. Capped on the way in. */
       commands?: readonly CommandRun[];
@@ -473,7 +431,6 @@ export class GeneStore {
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
-        ceilingFiles: record.writeCeiling?.files,
       });
     }
     return facts;
@@ -506,7 +463,6 @@ export class GeneStore {
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
-        ceilingFiles: record.writeCeiling?.files,
       });
     }
     return facts;
@@ -596,16 +552,12 @@ export class GeneStore {
       // quarantine is for strategy failures and deleting a capability over the
       // minter's arithmetic is the mistake D127 undid, one layer over.
       //
-      // The baseline below is left whole on purpose, and the asymmetry has a
-      // reason. A gene-less round has no declared number that could be wrong, so
-      // its truncation measures the runtime default — and deflating the control
-      // group's success rate would flatter every gene's relative score.
-      // The baseline is still left whole, and for the reason D127 gave: a gene-less
-      // round has no declared number that could be wrong — its ceiling is the
-      // runtime default, a guess — so charging it for exceeding a guess would
-      // deflate the control group and flatter every gene against it. The weight is
-      // recorded on these rows all the same; it is the *fold* that declines to use
-      // it here, and that is a decision, not an omission.
+      // ⚠️ D157: the baseline is left whole, and it is now the only asymmetry left
+      // here. A gene-less round has no declared number that could be wrong, so a
+      // refusal it suffered measures the runtime default rather than a prediction —
+      // and deflating the control group would flatter every gene against it. The
+      // weighted version of this paragraph existed because there was a weight to
+      // decline to use; there no longer is one.
       if (record.graded === false) continue;
       const truncated = (record.budgetRefusals ?? 0) > 0;
       if (record.address === null) {
@@ -624,29 +576,22 @@ export class GeneStore {
       // counts verdicts and therefore counts the whole world along with the strategy.
       if (record.failureClass === "validation") entry.expression.contradicted += 1;
       // The gene's own footprint, kept as raw material for `reMeasure`. Rows from
-      // before the footprint and the ceiling were journaled carry nothing here, and
-      // the estimator filters those rather than reading them as zeros — the
-      // cold-start promise `WriteObservation` documents.
+      // before the footprint was journaled carry nothing here, and the estimator
+      // filters those rather than reading them as zeros — the cold-start promise
+      // `WriteObservation` documents.
       entry.rounds.push({
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
         budgetRefusals: record.budgetRefusals ?? 0,
-        ceilingFiles: record.writeCeiling?.files,
       });
-      // ⚠️ D152: `truncated` no longer zeroes the success on its own. The ladder
-      // grades how much room a round cost, and keeping the binary rule beside the
-      // graded one charged the same overrun twice. What the rule still covers is a
-      // refusal the ladder did NOT cause: a round whose tier is `within` and which
-      // was nonetheless refused was writing under a forbidden path — its own gene
-      // said not to, and no weight expresses that.
-      //
-      // The weight is what the round contributes instead of 1. A gene that is
-      // stopped at the hard stop every time therefore settles at 0.4 rather than a
-      // spotless record, which is the property this branch existed to protect.
-      const weight = record.outcomeWeight ?? 1;
-      const ladderStopped = record.blastTier !== undefined;
-      if (record.succeeded && (ladderStopped || !truncated)) {
-        entry.expression.successes += weight;
+      // ⚠️ D157: the binary rule is back, and it is the only rule — which is what
+      // D152 was working around rather than fixing. A round that a limit actually
+      // stopped is incomplete, so it does not count as a success for the strategy
+      // that ran it. A round that merely had its estimate corrected *did* complete,
+      // and it is a success: `budgetRefusals` no longer counts those, so this test
+      // cannot punish an estimate for having been an estimate.
+      if (record.succeeded && !truncated) {
+        entry.expression.successes += 1;
         entry.expression.lastSuccessAt = record.at;
         entry.expression.streak = 0;
       }
