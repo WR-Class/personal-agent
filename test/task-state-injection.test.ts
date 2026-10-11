@@ -114,13 +114,21 @@ describe("task state injection", () => {
     }
   });
 
-  it("says out loud that it is a record, not a grant, and that unverifiable is not done", async () => {
+  it("says out loud that it is a record, not a grant, and that an unjudged criterion is not done", async () => {
     const block = formatTaskStateForPrompt(MARKER, [{ text: "改配置", claim }])!;
     assert.match(block, /不是保证/);
     assert.match(block, /不放宽任何权限/);
     assert.match(block, /以档位与规则表为准/);
     assert.match(block, /机械求值，写入者说了不算/);
-    assert.match(block, /既不等于完成也不等于失败/);
+    assert.match(block, /都不等于完成也不等于失败/);
+    // And it names both kinds. The sentence that used to stand here justified the
+    // single bucket by claiming this runtime had no command runner; it has one
+    // (D46), so the block now has to say which of the two it means — otherwise
+    // the model reads a debt and a ceiling as the same thing.
+    assert.match(block, /unchecked/);
+    assert.match(block, /undecidable/);
+    assert.match(block, /欠核对/);
+    assert.ok(!block.includes("没有命令执行器"), "this runtime does run commands, so that claim would be false");
   });
 
   it("cannot use the state block to grant itself a permission", async () => {

@@ -113,7 +113,8 @@ export function mintGene(draft: GeneDraft): MintedGene {
 
 /**
  * Validation entries. A bare string is a hand-written command: kept verbatim and
- * reported as unverifiable rather than reinterpreted (D20). Structured claims are
+ * decided against the round's record like any other command claim, rather than
+ * reinterpreted (D20). Structured claims are
  * checked for the fields their kind needs, so a malformed claim is refused at
  * mint rather than silently comparing as "met" later.
  */

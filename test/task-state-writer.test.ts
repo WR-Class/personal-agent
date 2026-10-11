@@ -226,14 +226,15 @@ describe("the writer tool", () => {
     assert.equal(await store.taskState(sessionId), undefined, "no malformed call left anything behind");
   });
 
-  it("refuses a bare-string criterion, so an unverifiable claim cannot arrive by accident", async () => {
+  it("refuses a bare-string criterion, so an undecided claim cannot arrive by accident", async () => {
     // `parseValidation` accepts a bare string and reads it as a hand-written
     // command (D20), which suits a gene file a person typed. This tool's schema
     // deliberately does not, and the reason is concrete rather than stylistic: a
     // bare string silently becomes a `command` claim, and a `command` claim is
-    // *permanently unverifiable* in this runtime — nothing here runs shells. So
-    // `claim: "跑测试"` would produce a criterion that can never be decided, with
-    // the consequence invisible at the call site. Requiring the explicit
+    // decided against what the round actually ran — so `claim: "跑测试"` would
+    // produce a criterion the writer never chose, reported as a debt nobody meant
+    // to take on, with the consequence invisible at the call site. Requiring the
+    // explicit
     // `{kind:"command", command:"..."}` object makes the writer name the thing that
     // cannot be checked. One accepted shape is also one way to be wrong.
     const { store, sessionId, tool } = setup();
@@ -243,7 +244,7 @@ describe("the writer tool", () => {
     assert.equal(result.isError, true);
     assert.match(result.content, /claim must be object/);
     assert.equal(await store.taskState(sessionId), undefined);
-    // The explicit object form is accepted and stored verbatim, still unverifiable.
+    // The explicit object form is accepted and stored verbatim, still undecided.
     const explicit = await registry.execute(
       call({ state: MARKER, steps: [{ text: "跑测试", claim: { kind: "command", command: "npm.cmd test" } }] }),
       context,

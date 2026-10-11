@@ -785,8 +785,12 @@ export function createJobKillTool(): Tool {
  * - **No lowering a criterion.** `appendTaskState` refuses it, so a step's claim
  *   can only stay or get stronger. The subtle attack this closes is not claiming
  *   success but moving the bar, which looks like "updating the plan".
- * - **No deciding a `command` criterion.** Nothing in this runtime runs shells, so
- *   "the tests pass" stays `unverifiable` forever rather than becoming complete.
+ * - **No deciding a `command` criterion by writing it down.** The runtime does run
+ *   commands (D46), but a `command` criterion is decided against the round's own
+ *   execution record, so recording one never makes it true: "the tests pass"
+ *   becomes complete only once the tests actually ran and exited zero, and a
+ *   round that never ran them reports the criterion as `unchecked` — a debt, not
+ *   a pass.
  *
  * It validates nothing itself: every refusal comes from the store, so the tool and
  * the runtime cannot give different answers about the same write.
@@ -801,8 +805,9 @@ export function createUpdateTaskStateTool(store: SessionStore, sessionId: string
       "This tool has no 'done' parameter: completion is computed by the system from journal evidence, " +
       "never reported by you. A criterion already recorded cannot be lowered, swapped or removed — " +
       "such a call is refused and audited; steps can only be appended, and prose can be rewritten freely. " +
-      "A 'command' criterion (for example running tests) can never be decided in this runtime, so it " +
-      "stays unverifiable rather than becoming complete. Claim kinds: files-written {paths}, " +
+      "A 'command' criterion (for example running tests) is decided against what this round actually " +
+      "ran: recording it never makes it true, and a round that did not run it reports the criterion " +
+      "as unchecked — a debt, not a pass. Claim kinds: files-written {paths}, " +
       "no-write, tool-used {tool, times}, command {command}.",
     parameters: {
       type: "object",

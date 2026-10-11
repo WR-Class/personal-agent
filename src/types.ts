@@ -76,9 +76,10 @@ export interface GeneConstraints {
  * ⚠️ A `command` entry used to be reported `unverifiable` on the stated grounds
  * that no command runner existed in this runtime. One does (D46), so the claim is
  * decided against the round's own execution record: a command that ran and exited
- * non-zero now contradicts the claim. What stays undecidable is a command the
- * round **did not run at all** — a round is not the whole task, and the proof may
- * have been shown in an earlier one, so "not seen here" is not "not done".
+ * non-zero now contradicts the claim. A command the round **did not run at all**
+ * is `unchecked`, not undecidable — a round is not the whole task, and the proof
+ * may have been shown in an earlier one, so "not seen here" is not "not done",
+ * but running it here would still settle it.
  */
 export type GeneValidation =
   | { readonly kind: "files-written"; readonly paths: readonly string[] }
@@ -225,11 +226,18 @@ export interface TaskStateAssessment {
   /**
    * True only when there is at least one step and every one of them is `met`.
    * Mirrors `checkValidation.satisfied`: an empty state is not complete, and an
-   * `unverifiable` step is not met.
+   * an unchecked or undecidable step is not met.
    */
   readonly complete: boolean;
-  /** Steps with no criterion, or one this runtime cannot decide. */
+  /** Steps with no criterion, or one no reading of this record can decide. */
   readonly unknowns: readonly string[];
+  /**
+   * Steps whose criterion this round could have settled with means it already
+   * had, and did not. Kept apart from `unknowns` on purpose: only this list is
+   * actionable, so a split that stopped at the outcome literal would change the
+   * vocabulary without changing what anyone can do about it.
+   */
+  readonly owed: readonly string[];
   /** Steps whose criterion was decided and contradicted. */
   readonly failed: readonly string[];
 }
@@ -259,7 +267,25 @@ export interface RoundEvidence {
   readonly commands?: readonly CommandRun[];
 }
 
-export type ClaimOutcome = "met" | "unmet" | "unverifiable";
+/**
+ * What the round's own record says about one claim.
+ *
+ * The third and fourth values are the reason this type has four and not three.
+ * A single "cannot tell" bucket hid two opposite situations, and they have
+ * opposite consequences:
+ *
+ * - `unchecked` — a command exists whose execution would settle this claim, and
+ *   the round did not take it. **A debt.** The proof was reachable and was not
+ *   reached, so this is attributable to the round.
+ * - `undecidable` — no execution settles it: the claim names no command at all,
+ *   or names a kind this runtime does not understand. **A boundary.** Nothing
+ *   was skipped, because there was nothing to do.
+ *
+ * Both are still never `met` and never `unmet`. Collapsing them made a debt
+ * indistinguishable from a boundary, which is the same as having no account of
+ * either.
+ */
+export type ClaimOutcome = "met" | "unmet" | "unchecked" | "undecidable";
 
 /** A tool invocation requested by the model. Arguments stay raw text. */
 export interface ToolCall {

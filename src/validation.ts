@@ -7,22 +7,28 @@
  * strings into claims that name an observable fact, and compares each claim
  * against what the round actually left behind.
  *
- * Three outcomes, and the third one is the point:
+ * Four outcomes. The last two are the point, and keeping them apart is what
+ * makes the record usable:
  *
- * - `met`          — the journal shows the fact the claim names.
- * - `unmet`        — the journal shows the round contradicted it.
- * - `unverifiable` — the record this round left behind cannot settle it. This is
- *                    recorded as itself. It is never counted as met, because that
- *                    would manufacture proof, and never as unmet, because that
- *                    would punish work that may well have been done. An honest
- *                    "we cannot tell" is a real outcome and the only reason this
- *                    module can be trusted at all.
+ * - `met`         — the journal shows the fact the claim names.
+ * - `unmet`       — the journal shows the round contradicted it.
+ * - `unchecked`   — a command exists whose execution would settle this claim and
+ *                   the round did not run it. **A debt the round owes.**
+ * - `undecidable` — no execution settles it: the claim names no command, or
+ *                   names a kind this runtime does not understand. **A boundary.**
  *
- * ⚠️ A `command` claim used to land in that third bucket unconditionally, on the
- * stated grounds that no command runner existed in this runtime. One does (D46),
- * so the claim is now decided against the round's own execution record — see
- * {@link checkCommandClaim} for exactly which cases the record settles and which
- * it still cannot.
+ * Neither of the last two is ever counted as met, because that would manufacture
+ * proof, and neither is ever counted as unmet, because that would punish work
+ * that may well have been done. An honest "we cannot tell" is a real outcome and
+ * the only reason this module can be trusted at all — but "we could have and did
+ * not" is a different fact from "we could not", and an account that files them
+ * together cannot say which of the two it is looking at.
+ *
+ * ⚠️ A `command` claim used to land in a single unverifiable bucket
+ * unconditionally, on the stated grounds that no command runner existed in this
+ * runtime. One does (D46), so the claim is now decided against the round's own
+ * execution record — see {@link checkCommandClaim} for exactly which cases the
+ * record settles and which it still cannot.
  */
 import type { ClaimOutcome, CommandRun, Gene, GeneValidation, RoundEvidence } from "./types.ts";
 
@@ -53,7 +59,7 @@ export interface ClaimResult {
 
 export interface ValidationReport {
   readonly claims: readonly ClaimResult[];
-  /** True when every claim is met. An unverifiable claim is not met. */
+  /** True when every claim is met. An unchecked or undecidable claim is not met. */
   readonly satisfied: boolean;
   /** Claims that could be decided and were contradicted. */
   readonly failed: readonly ClaimResult[];
@@ -101,7 +107,9 @@ export function checkClaim(claim: GeneValidation, evidence: RoundEvidence): Clai
       return checkCommandClaim(claim, evidence);
     default: {
       const unreachable: never = claim;
-      return { claim: unreachable, outcome: "unverifiable", detail: "unknown claim kind" };
+      // `undecidable`, not `unchecked`: an unknown kind names no observable fact
+      // at all, so there is no run that would settle it.
+      return { claim: unreachable, outcome: "undecidable", detail: "unknown claim kind, so no execution could settle it" };
     }
   }
 }
@@ -115,17 +123,22 @@ export function checkClaim(claim: GeneValidation, evidence: RoundEvidence): Clai
  * - **ran, exit code non-zero** — the record contradicts the claim: `unmet`.
  *   This is the case that did not exist before, and the reason a claim about a
  *   command is worth making at all.
- * - **not run this round** — `unverifiable`, and no longer because a runner is
- *   missing. A round is not the whole task: the proof may have been shown in an
- *   earlier one, so "not seen here" is not "not done". Reading it as `unmet`
+ * - **not run this round** — `unchecked`. The runner exists and the round used
+ *   it, so running this one was reachable and was not reached. It is still not
+ *   `unmet`: a round is not the whole task, and the proof may have been shown in
+ *   an earlier one, so "not seen here" is not "not done". Reading it as `unmet`
  *   would punish work that was done — the same defect, in the other direction,
  *   as reading it as `met`.
- * - **ran, no exit code recorded** — also `unverifiable`. A background job, a
- *   timeout and a cancellation all land here, and `null` must never be read as
- *   zero.
+ * - **ran, no exit code recorded** — also `unchecked`, not `undecidable`. A
+ *   background job, a timeout and a cancellation all land here, and `null` must
+ *   never be read as zero. It is a debt rather than a boundary because the fact
+ *   is obtainable: running the command again, or waiting for the job, would
+ *   settle it.
  *
- * A claim that is only whitespace matches every command by containment, so it is
- * refused as undecidable rather than reported as satisfied by accident.
+ * A claim that is only whitespace is `undecidable` rather than `unchecked`:
+ * there is no command whose execution would settle it, so nothing was skipped.
+ * It would otherwise match every command by containment, which is exactly why it
+ * has to be refused instead of reported as satisfied by accident.
  */
 function checkCommandClaim(
   claim: { readonly kind: "command"; readonly command: string },
@@ -133,7 +146,7 @@ function checkCommandClaim(
 ): ClaimResult {
   const wanted = normalizeCommand(claim.command);
   if (wanted === "") {
-    return { claim, outcome: "unverifiable", detail: "the claim names no command, so there is nothing to look for" };
+    return { claim, outcome: "undecidable", detail: "the claim names no command, so there is nothing to look for and nothing was skipped" };
   }
   const runs = evidence.commands ?? [];
   // Last match wins: the most recent run is the state of the world, so a command
@@ -145,15 +158,15 @@ function checkCommandClaim(
   if (match === undefined) {
     return {
       claim,
-      outcome: "unverifiable",
-      detail: `this round ran ${runs.length} command(s), none containing ${JSON.stringify(claim.command)}, cannot decide: ${claim.command}`,
+      outcome: "unchecked",
+      detail: `this round ran ${runs.length} command(s), none containing ${JSON.stringify(claim.command)}, so the proof was reachable and was not taken: ${claim.command}`,
     };
   }
   if (match.exitCode === null) {
     return {
       claim,
-      outcome: "unverifiable",
-      detail: `ran ${JSON.stringify(match.command)} but no exit code was recorded (background job, timeout or cancellation), cannot decide: ${claim.command}`,
+      outcome: "unchecked",
+      detail: `ran ${JSON.stringify(match.command)} but no exit code was recorded (background job, timeout or cancellation); running it again would settle it: ${claim.command}`,
     };
   }
   return match.exitCode === 0
@@ -201,9 +214,10 @@ function describeClaim(claim: GeneValidation): string {
 
 /**
  * Read a claim from a validation entry. A bare string is a command the operator
- * wrote by hand: it is kept verbatim and reported as unverifiable rather than
- * reinterpreted, because guessing what a human meant by "run the tests" is
- * exactly the kind of inference this project refuses.
+ * wrote by hand: it is kept verbatim and decided against the round's record like
+ * any other command claim, rather than reinterpreted, because guessing what a
+ * human meant by "run the tests" is exactly the kind of inference this project
+ * refuses.
  */
 export function readClaim(entry: GeneValidation | string): GeneValidation {
   return typeof entry === "string" ? { kind: "command", command: entry } : entry;

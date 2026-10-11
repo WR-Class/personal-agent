@@ -114,22 +114,26 @@ describe("the assessment is scoped to the round and never gates it", () => {
     assert.equal(result.taskAssessment!.complete, false, "an unknown is not completion");
   });
 
-  it("leaves a command the round never ran undecidable, and says why", async () => {
+  it("⚠️ owes a command the round never ran, and the printed line names which kind of unjudged it is", async () => {
     const { result } = await round([{ content: "跑过了" }], {
       state: MARKER,
       steps: [{ text: "跑测试", claim: { kind: "command", command: "npm.cmd test" } }],
     });
-    // This round ran no command, so the record cannot settle it. That is what is
-    // left of the ceiling, and it is now a statement about this round rather than
-    // about the runtime: the same claim IS decided once the round runs it.
-    assert.deepEqual(result.taskAssessment!.steps[0]!.outcome, "unverifiable");
-    assert.equal(result.taskAssessment!.failed.length, 0, "undecidable is not contradicted");
+    // This round ran no command at all, so the claim is a debt rather than a
+    // boundary: the runtime has a runner, the round used none of it, and running
+    // it would settle the matter. The same claim IS decided once a round runs it.
+    assert.deepEqual(result.taskAssessment!.steps[0]!.outcome, "unchecked");
+    assert.equal(result.taskAssessment!.failed.length, 0, "a debt is not a contradiction");
     assert.equal(result.taskAssessment!.complete, false);
+    assert.equal(result.taskAssessment!.owed.length, 1);
+    assert.equal(result.taskAssessment!.unknowns.length, 0, "a debt is not filed as undecidable");
     const line = formatTaskAssessment(result.taskAssessment!)!;
-    // The ceiling has to be restated wherever the assessment is shown, because a
-    // reader who forgets it will read "unverifiable" as "not done".
-    assert.match(line, /判不了不等于没做/);
-    assert.match(line, /本轮没跑那条命令/);
+    // Restated wherever the assessment is shown, because a reader who forgets it
+    // will read an unjudged step as a step that was not done — and the line has to
+    // name the right kind, or the reader cannot tell a debt from a ceiling.
+    assert.match(line, /欠核对 1/);
+    assert.match(line, /欠核对不等于没做/);
+    assert.match(line, /再跑一次就能定下来/);
   });
 });
 
@@ -139,6 +143,7 @@ describe("the rendering is scoped, because the step strings are not", () => {
       steps: [{ text: "一", outcome: "met" as const }, { text: "二", outcome: "unmet" as const, detail: "x" }],
       complete: false,
       unknowns: [],
+      owed: [],
       failed: ["步骤 2（二） 未达成：x"],
     };
     const line = formatTaskAssessment(assessment)!;
@@ -154,15 +159,17 @@ describe("the rendering is scoped, because the step strings are not", () => {
       steps: [{ text: "一", outcome: "met" as const }],
       complete: true,
       unknowns: [],
+      owed: [],
       failed: [],
     })!;
     assert.match(line, /1\/1 步达成/);
-    assert.ok(!line.includes("未知"), "no unknowns, so no unknown count");
+    assert.ok(!line.includes("无法判定"), "nothing is undecidable, so no undecidable count");
+    assert.ok(!line.includes("欠核对"), "nothing is owed, so no debt count");
     assert.ok(!line.includes("本轮未达成"), "nothing failed, so no failed count");
   });
 
   it("renders nothing for an empty assessment", () => {
-    assert.equal(formatTaskAssessment({ steps: [], complete: false, unknowns: [], failed: [] }), undefined);
+    assert.equal(formatTaskAssessment({ steps: [], complete: false, unknowns: [], owed: [], failed: [] }), undefined);
   });
 });
 

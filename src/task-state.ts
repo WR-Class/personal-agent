@@ -15,21 +15,23 @@
  * saying "this step is finished" and the model saying "this round succeeded" are
  * structurally the same thing, and neither is admissible. `validation.ts` was
  * written for exactly this, so this module adds no new notion of proof — it
- * reuses `checkValidation` and its three outcomes.
+ * reuses `checkValidation` and its four outcomes.
  *
- * `unverifiable` is therefore a real, displayed state. A step whose claim names
- * a shell command is now decided against the round's own execution record: a
- * command that ran and exited non-zero contradicts the step. It stays "we cannot
- * tell" only when the round did not run that command, because a round is not the
- * whole task and the proof may have been shown in an earlier one. That is an
- * inherited ceiling, not a bug: the honest outcome is the only reason the report
- * can be trusted.
+ * Both unjudged outcomes are real, displayed states, and this module keeps them
+ * apart because their consequences differ. A step whose claim names a shell
+ * command is decided against the round's own execution record: a command that ran
+ * and exited non-zero contradicts the step. When the round never ran it, the step
+ * is `unchecked` — **a debt**, because the runner was there, the command was not
+ * run, and running it would settle the matter. A step whose claim names nothing
+ * any execution could settle is `undecidable` — **a boundary**. Filing both under
+ * one word is what made the old report unable to say whether anything had been
+ * skipped, which is the only thing a reader can act on.
  *
  * ## Evaluation never depends on a gene being applied
  *
  * `runtime.ts:822` checks a gene's claims only when a gene was applied
  * (`applied ? … : null`). Copying that gate here would leave every step
- * permanently `unverifiable` in practice, because the gene library is empty and
+ * permanently unjudged in practice, because the gene library is empty and
  * most rounds are gene-less — the feature would look like it worked while never
  * deciding anything. So `assessTaskState` takes evidence directly, following the
  * shape of `evaluateRun` (`runtime.ts:821`), which is mechanical and gene-free.
@@ -195,17 +197,24 @@ export function assessTaskState(steps: readonly TaskStateStep[], evidence: Round
     return { text: step.text, claim: step.claim, outcome: result.outcome, detail: result.detail };
   });
   const unknowns: string[] = [];
+  const owed: string[] = [];
   const failed: string[] = [];
   assessed.forEach((step, index) => {
     const where = `步骤 ${index + 1}（${step.text}）`;
     if (step.outcome === undefined) unknowns.push(`${where} 缺验收条件`);
-    else if (step.outcome === "unverifiable") unknowns.push(`${where} 无法判定：${step.detail}`);
+    // Two lists, not one. `unchecked` means this round had a command runner and
+    // did not run the command the step named, which is a debt someone can pay;
+    // `undecidable` means no run would settle it, which is a ceiling nobody can
+    // pay. Filing them together is what made the old single bucket useless.
+    else if (step.outcome === "unchecked") owed.push(`${where} 本可核对但没核对：${step.detail}`);
+    else if (step.outcome === "undecidable") unknowns.push(`${where} 无法判定：${step.detail}`);
     else if (step.outcome === "unmet") failed.push(`${where} 未达成：${step.detail}`);
   });
   return {
     steps: assessed,
     complete: assessed.length > 0 && assessed.every((step) => step.outcome === "met"),
     unknowns,
+    owed,
     failed,
   };
 }
@@ -236,15 +245,20 @@ export function formatTaskAssessment(assessment: TaskStateAssessment): string | 
   const met = assessment.steps.filter((step) => step.outcome === "met").length;
   const counts = [
     `${met}/${assessment.steps.length} 步达成`,
-    ...(assessment.unknowns.length > 0 ? [`未知 ${assessment.unknowns.length}`] : []),
+    ...(assessment.unknowns.length > 0 ? [`无法判定 ${assessment.unknowns.length}`] : []),
+    ...(assessment.owed.length > 0 ? [`欠核对 ${assessment.owed.length}`] : []),
     ...(assessment.failed.length > 0 ? [`本轮未达成 ${assessment.failed.length}`] : []),
   ];
   // Stated whenever it is true of any step, not only when the count is nonzero:
-  // "cannot decide" is the ceiling of this runtime, and a reader who forgets it
-  // will read an unverifiable step as a step that was not done.
-  const ceiling = assessment.steps.some((step) => step.outcome === "unverifiable")
-    ? " 判不了不等于没做：判不了只说明本轮没跑那条命令，或跑了但没记下退出码。"
-    : "";
+  // a reader who forgets it will read an unjudged step as a step that was not
+  // done. The two clauses are separate because the two facts are — one is a debt
+  // this round owes and could still pay, the other is the ceiling of what any
+  // reading of this record can decide.
+  const ceiling = assessment.owed.length > 0
+    ? " 欠核对不等于没做：本轮有命令执行器却没跑那条命令，或跑了但没记下退出码，再跑一次就能定下来。"
+    : assessment.unknowns.length > 0
+      ? " 判不了不等于没做：那条验收条件没有任何执行能定下来。"
+      : "";
   return `[本轮任务判定 ${counts.join(" · ")}]` +
     "（仅对本轮证据：跨轮任务的步骤可能已在更早的轮次达成，此处不代表从未达成）" +
     ceiling;
@@ -302,7 +316,7 @@ export function formatTaskStateForPrompt(state: string, steps: readonly TaskStat
   }
   lines.push("以上是记录，不是保证：此处文字不放宽任何权限，与档位或规则表冲突时，以档位与规则表为准。");
   lines.push("验收条件由系统对日志证据机械求值，写入者说了不算；求值结果不在本块内。");
-  lines.push("unverifiable（例如需要跑命令的验收条件）既不等于完成也不等于失败：本运行时没有命令执行器，判不了就是判不了。");
+  lines.push("未判定有两种，都不等于完成也不等于失败：unchecked＝本运行时能跑命令而本轮没跑那条（欠核对，再跑一次就能定），undecidable＝没有任何执行能定下来（判不了）。");
   return lines.join("\n");
 }
 

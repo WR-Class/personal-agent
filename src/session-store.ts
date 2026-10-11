@@ -672,7 +672,7 @@ export function migrateEvent(raw: unknown): SessionEvent | ExternalSessionEvent 
       // Rebuilt field by field, so `claim` must be read here or it would vanish on
       // the way back in — the trap the `audit` case below warns about. Only the
       // shape is checked: a claim with an unknown kind falls through to
-      // `checkClaim`'s default and is honestly reported `unverifiable`, which is
+      // `checkClaim`'s default and is honestly reported `undecidable`, which is
       // safer than guessing what it meant.
       const steps: TaskStateStep[] = rawSteps.map((entry, index) => {
         if (entry === null || typeof entry !== "object") throw new Error(`task-state.steps[${index}] must be an object`);

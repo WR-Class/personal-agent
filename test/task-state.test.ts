@@ -53,18 +53,22 @@ describe("task state: completion is computed, never stored", () => {
     assert.equal(assessment.steps[0]!.outcome, "met");
     assert.equal(assessment.complete, true);
     assert.deepEqual([...assessment.unknowns], []);
+    assert.deepEqual([...assessment.owed], []);
     assert.deepEqual([...assessment.failed], []);
   });
 
-  it("treats an unverifiable claim as unknown, never as complete", () => {
-    // "Run the tests" is the most natural acceptance criterion for a coding task,
-    // and it is exactly the kind this runtime cannot decide. Saying so is the
-    // point; counting it as met would manufacture proof.
+  it("⚠️ files a command this round could have run under what it owes, not under what cannot be decided", () => {
+    // "Run the tests" is the most natural acceptance criterion for a coding task.
+    // This runtime does run commands (D46), so a round that ran none of them has
+    // skipped something it could have done — a debt, and the list it lands in is
+    // the actionable one. Counting it as met would manufacture proof; filing it
+    // with the genuinely undecidable would hide the only thing a reader can fix.
     const assessment = assessTaskState([{ text: "跑测试", claim: { kind: "command", command: "npm.cmd test" } }], EVIDENCE);
-    assert.equal(assessment.steps[0]!.outcome, "unverifiable");
+    assert.equal(assessment.steps[0]!.outcome, "unchecked");
     assert.equal(assessment.complete, false);
-    assert.equal(assessment.unknowns.length, 1);
-    assert.match(assessment.unknowns[0]!, /无法判定/);
+    assert.equal(assessment.owed.length, 1);
+    assert.match(assessment.owed[0]!, /本可核对但没核对/);
+    assert.deepEqual([...assessment.unknowns], []);
     assert.deepEqual([...assessment.failed], []);
   });
 

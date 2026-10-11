@@ -83,7 +83,7 @@ describe("claim kinds", () => {
 
   it("⚠️ contradicts the claim when the command it names ran and failed", () => {
     // The case this round exists for. Before it, every command claim was
-    // unverifiable, so a round could declare "prove it with npm test", fail it,
+    // undecided, so a round could declare "prove it with npm test", fail it,
     // and still be recorded as a clean success — the strongest claim a gene can
     // make was the one claim nothing checked.
     const failed = evidence({ commands: [{ command: "npm.cmd test", exitCode: 1 }] });
@@ -114,25 +114,43 @@ describe("claim kinds", () => {
     assert.equal(checkClaim({ kind: "command", command: "npm.cmd test" }, failedThenPassed).outcome, "met");
   });
 
-  it("never reads a missing exit code as success", () => {
+  it("never reads a missing exit code as success, and calls it a debt not a boundary", () => {
     const background = evidence({ commands: [{ command: "npm.cmd test", exitCode: null }] });
     const result = checkClaim({ kind: "command", command: "npm.cmd test" }, background);
-    assert.equal(result.outcome, "unverifiable");
+    // `unchecked`, not `undecidable`: the command did run, so re-running it — or
+    // waiting for the job — would settle the claim. There is something to do.
+    assert.equal(result.outcome, "unchecked");
     assert.match(result.detail, /no exit code was recorded/);
   });
 
-  it("stays undecidable when the round ran other commands, and does not call the claim unmet", () => {
+  it("⚠️ owes the proof when the round ran other commands, and does not call the claim unmet", () => {
     // A round is not the whole task: the proof may have been shown earlier, so
-    // "not seen here" must never be recorded as "not done".
+    // "not seen here" must never be recorded as "not done". It is still a debt
+    // rather than a boundary, because the round had a working command runner and
+    // simply did not run this command.
     const other = evidence({ commands: [{ command: "git status", exitCode: 0 }] });
     const result = checkClaim({ kind: "command", command: "npm.cmd test" }, other);
-    assert.equal(result.outcome, "unverifiable");
+    assert.equal(result.outcome, "unchecked");
     assert.match(result.detail, /none containing/);
+    assert.match(result.detail, /reachable and was not taken/);
   });
 
-  it("refuses a claim that names no command, rather than matching every command", () => {
+  it("⚠️ tells a debt from a boundary: one claim this round could have settled, one no run settles", () => {
+    // The whole point of splitting the old single bucket. Both of these are
+    // undecided and neither is met, and they are still different facts: the first
+    // is something this round skipped and could still do, the second is something
+    // no execution settles. A record that cannot say which is which cannot be
+    // acted on, and a record that says one word for both says nothing.
     const ran = evidence({ commands: [{ command: "git status", exitCode: 0 }] });
-    assert.equal(checkClaim({ kind: "command", command: "   " }, ran).outcome, "unverifiable");
+    const owed = checkClaim({ kind: "command", command: "npm.cmd test" }, ran);
+    const boundary = checkClaim({ kind: "command", command: "   " }, ran);
+    assert.equal(owed.outcome, "unchecked");
+    assert.equal(boundary.outcome, "undecidable");
+    assert.notEqual(owed.outcome, boundary.outcome);
+    // And the split changes neither verdict: both stay unmet-free and unsatisfied.
+    const report = checkValidation([owed.claim, boundary.claim], ran);
+    assert.equal(report.satisfied, false);
+    assert.deepEqual(report.failed, []);
   });
 });
 
@@ -146,10 +164,10 @@ describe("the report", () => {
     assert.deepEqual(report.failed, []);
   });
 
-  it("never counts an unverifiable claim as satisfied", () => {
+  it("never counts an unchecked claim as satisfied", () => {
     const report = checkValidation([{ kind: "command", command: "npm.cmd test" }], NOTHING);
     assert.equal(report.satisfied, false);
-    assert.equal(report.claims[0]?.outcome, "unverifiable");
+    assert.equal(report.claims[0]?.outcome, "unchecked");
     // Not met, but also not a failure: nothing was contradicted.
     assert.deepEqual(report.failed, []);
   });
@@ -299,7 +317,7 @@ describe("validation in the cycle", () => {
     assert.equal(third.result.appliedGene, undefined, "被退休的基因不该再被应用");
   });
 
-  it("records an unverifiable command claim without failing the round", async () => {
+  it("records an unchecked command claim without failing the round", async () => {
     const target = join(fixture.workspaceRoot, "claim-cmd.txt");
     await writeFile(target, "old\n", "utf8");
     const { result } = await run(
@@ -311,9 +329,9 @@ describe("validation in the cycle", () => {
       "claim-cmd",
     );
     assert.equal(result.evaluation.status, "success");
-    assert.equal(result.validation?.claims[0]?.outcome, "unverifiable");
+    assert.equal(result.validation?.claims[0]?.outcome, "unchecked");
     assert.equal(result.validation?.satisfied, false);
-    assert.equal(result.evaluation.evidence.some((line) => line.startsWith("validation:unverifiable")), true);
+    assert.equal(result.evaluation.evidence.some((line) => line.startsWith("validation:unchecked")), true);
   });
 
   it("writes the claim results into the cycle journal", async () => {
