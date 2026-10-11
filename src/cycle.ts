@@ -165,6 +165,20 @@ export interface RunFacts {
    * claiming the estimate was right.
    */
   readonly writeRaises?: number;
+  /**
+   * How many times the round asked the same call and got the identical answer (D161).
+   *
+   * The same shape as `writeRaises`, and for the same reason: it is a fact about the
+   * round rather than a verdict on it. A repeat is a smell — the model asked again
+   * and was told what it already knew — and it is deliberately **not** an input to
+   * the status below, because the one legitimate repeat (polling a job whose output
+   * has not changed yet) is indistinguishable from the pathological one at this
+   * distance. The operator reading the log is who this is for.
+   *
+   * Optional like `reply`: a caller that did not run a loop is not claiming the
+   * round made progress.
+   */
+  readonly stuckRepeats?: number;
 }
 
 /** A reply that opens by declining or reporting an inability, whatever follows. */
@@ -248,6 +262,11 @@ export function evaluateRun(facts: RunFacts): CycleEvaluation {
   // binding. Recorded for the operator, and nothing reads it. Absent when zero, so
   // a round whose estimate held keeps the evidence it always had.
   if (facts.writeRaises) evidence.push(`writeRaises=${facts.writeRaises}`);
+  // D161: the round asked again and was told exactly what it already knew. Recorded
+  // for the operator, and nothing reads it — see the member's own note for why this
+  // must not become a status input. Absent when zero, so an ordinary round keeps the
+  // evidence it always had.
+  if (facts.stuckRepeats) evidence.push(`stuckRepeats=${facts.stuckRepeats}`);
   if (facts.failureClass !== null) {
     // A model that never produced anything usable means the round could not
     // start; the same holds for a budget refusal at step 0, which refused the

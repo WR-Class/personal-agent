@@ -21,6 +21,8 @@ import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
+import { createHash } from "node:crypto";
+
 import { SHELL_TOOL_NAME, commandFromArguments, readExitCode } from "./shell-tool.ts";
 import type { CommandRun, RoundEvidence } from "./types.ts";
 import { retirementDue, type GeneStore } from "./gene-store.ts";
@@ -625,6 +627,21 @@ export class AgentRuntime {
    */
   private outcomeCommands: CommandRun[] | undefined;
   /**
+   * What each call in this round has already been told (D161).
+   *
+   * Keyed by the call — name and arguments, verbatim — and valued by a digest of
+   * the content that came back. A second call with the same key **and** the same
+   * digest is the one signal of a stuck round that has no legitimate twin: the
+   * model asked again and was told exactly what it already knew.
+   *
+   * ⚠️ The cheap heuristics all have legitimate twins and are therefore not used:
+   * "the same tool twice" is polling a job, "no writes for N steps" is an audit
+   * that only reads, "no new tool name" is a deep look at one file. This project
+   * has already paid once for a guard that was right about the symptom and wrong
+   * about the cause, so the signal has to be one that cannot mean anything else.
+   */
+  private readonly callDigests = new Map<string, string>();
+  /**
    * Whether drift, not the score, chose this round's gene (D108).
    *
    * Carried alongside the address for the same reason the address is: the outcome
@@ -985,6 +1002,7 @@ export class AgentRuntime {
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
     this.outcomeTools = [];
     this.outcomeCommands = [];
+    this.callDigests.clear();
     // A fresh cycle starts with an empty ledger. A gene's constraints bound the
     // round; with no gene applied the runtime default still applies, because
     // "unbounded" is not a safe default (D18).
@@ -1038,6 +1056,11 @@ export class AgentRuntime {
     // received would be a fabricated transcript entry, and the existing notice set
     // that precedent rather than this one inventing a second convention.
     let owedNotice: string | undefined;
+    // ⚠️ D161: a round that keeps asking and keeps being told the same thing.
+    // Counted for the record; noticed to the model once. It is deliberately **not**
+    // a stop — see the comment at the accumulation site.
+    let stuckRepeats = 0;
+    let stuckNotice: string | undefined;
 
     try {
     cycle = await this.advance(cycle, { type: "execute-start", at: Date.now() });
@@ -1048,6 +1071,7 @@ export class AgentRuntime {
       const messages = await this.buildPrompt();
       if(finalizing)messages.push({role:'user',content:'The operator-configured step limit has been reached. Do not call tools. Give a final text summary of verified completed work, remaining work and blockers. Do not claim the entire task is complete unless supported by observed results.'});
       if(owedNotice !== undefined)messages.push({role:'user',content:owedNotice});
+      if(stuckNotice !== undefined)messages.push({role:'user',content:stuckNotice});
       // Checked every step as well: the prompt grows with each tool result, so a
       // prompt that fit at step one is no guarantee at step five.
       this.assertContextFits(messages);
@@ -1143,7 +1167,7 @@ export class AgentRuntime {
         // then the applied gene's claims are compared against that same record.
         // A claim that was contradicted makes the round partial at best — the
         // gene said what proof would look like and the proof is not there.
-        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, writeRaises, filesWritten: this.writeLedger.files });
+        const evaluation = evaluateRun({ steps, toolCalls, toolErrors, failureClass: null, reply: response.content, prompt: text, budgetRefusals, writeRaises, stuckRepeats, filesWritten: this.writeLedger.files });
         const completionEvaluation = finalizing ? {...evaluation,status:'partial' as const,evidence:[...evaluation.evidence,'Configured step cap reached; summary is not task completion.']} : evaluation;
         // One evidence object, named, and read by both consumers. Writing the pair
         // out twice would let the gene's claims and the task's claims be judged
@@ -1227,6 +1251,18 @@ export class AgentRuntime {
       toolErrors += executed.errors;
       budgetRefusals += executed.budgetRefusals;
       writeRaises += executed.writeRaises;
+      stuckRepeats += executed.stuckRepeats;
+      // ⚠️ D161: once per round, and only as a notice. A hard stop here would abort
+      // a round that was legitimately polling a job whose output had not changed
+      // yet — the one case where an identical answer is not a stuck model. Saying
+      // it once is enough: the model either changes what it is doing or explains
+      // why it is waiting, and either way the round carries on.
+      if (executed.stuckRepeats > 0 && stuckNotice === undefined) {
+        stuckNotice =
+          `A call in this round returned exactly what an earlier call in the same round returned (${executed.stuckRepeats} this step). ` +
+          `Nothing has changed since, so asking again will produce the same answer again. ` +
+          `Do something different: change what you ask for, act on what you already have, or say plainly what you are waiting for.`;
+      }
     }
     }
     catch (error) {
@@ -1251,7 +1287,7 @@ export class AgentRuntime {
     signal: AbortSignal | undefined,
     runId: string,
     step: number,
-  ): Promise<{ calls: number; errors: number; budgetRefusals: number; writeRaises: number }> {
+  ): Promise<{ calls: number; errors: number; budgetRefusals: number; writeRaises: number; stuckRepeats: number }> {
     // Re-read on every step rather than caching for the session, so revoking a
     // root takes effect on the next step instead of the next conversation.
     try {
@@ -1295,6 +1331,10 @@ export class AgentRuntime {
     // the round **recovered from** is not a limit that stood, it is an estimate
     // that was wrong.
     let writeRaises = 0;
+    // ⚠️ D161: how many times this round asked the same question and was handed
+    // back the same answer. A smell rather than a verdict — it is counted and
+    // reported, and it never moves the round between success and partial.
+    let stuckRepeats = 0;
     let index = 0;
     for (const call of calls) {
       const position = index++;
@@ -1356,6 +1396,13 @@ export class AgentRuntime {
         else {
           if (call.name === SHELL_TOOL_NAME) ranCommand = commandFromArguments(call.arguments);
           result = await this.tools.execute(call, context);
+          // ⚠️ D161. Only a call that really reached an executor is compared here:
+          // a cancelled call and a "no tools configured" both return a fixed
+          // string, and two of those are not a model repeating itself.
+          const key = `${call.name}\u0000${call.arguments}`;
+          const digest = createHash("sha256").update(result.content).digest("hex");
+          if (this.callDigests.get(key) === digest) stuckRepeats += 1;
+          else this.callDigests.set(key, digest);
         }
         this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: result.isError === true, content: activityText(result.content) });
       }
@@ -1379,7 +1426,7 @@ export class AgentRuntime {
       );
     }
     signal?.throwIfAborted();
-    return { calls: calls.length, errors, budgetRefusals, writeRaises };
+    return { calls: calls.length, errors, budgetRefusals, writeRaises, stuckRepeats };
   }
 
   private assertContextFits(messages: readonly ChatMessage[]): void {
