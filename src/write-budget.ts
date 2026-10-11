@@ -133,12 +133,17 @@ export interface LedgerDecision {
   readonly reason?: string;
 }
 
-export class WriteBudgetError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WriteBudgetError";
-  }
-}
+// ⚠️ D162: `WriteBudgetError` used to stand here, and its removal is the record of a
+// mechanism that died twice. It was defined, imported by `runtime.ts` and listed in
+// `classifyFailure` beside the step and token limits — so it looked alive from every
+// direction except the one that matters: nothing ever threw it. `checkWrite` returns
+// `{allowed: false, reason}` instead, because D18 chose to write the refusal back as a
+// failed tool result rather than abort the round. An audit round found it (the fifth
+// instance of "a mechanism built with no consumer"), then a later round *revived* it by
+// building a raise-and-retry that threw it — and D157 deleted that raise, orphaning the
+// class a second time. It is gone now rather than kept as a branch nothing can reach:
+// `classifyFailure` still reaches `"budget"` through `TokenBudgetError` and the
+// zero-step refusal, so no failure class became unreachable with it.
 
 /**
  * Compare paths the way the filesystem under this product does: separators are

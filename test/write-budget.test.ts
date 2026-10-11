@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { budgetFor, chargeWrite, checkWrite, measuredBudget, COLD_START_BUDGET, MIN_MEASURED_BUDGET, GLOBAL_FILE_CAP, GLOBAL_LINE_CAP, readWriteAttempt, WriteBudgetError, countsTowardWriteBudget, isJournalPath } from "../src/write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, measuredBudget, COLD_START_BUDGET, MIN_MEASURED_BUDGET, GLOBAL_FILE_CAP, GLOBAL_LINE_CAP, readWriteAttempt, countsTowardWriteBudget, isJournalPath } from "../src/write-budget.ts";
 import type { LedgerState } from "../src/write-budget.ts";
 import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
@@ -645,11 +645,6 @@ describe("enforcement in the runtime", () => {
     assert.equal(result.budget.filesWritten, 1);
     assert.equal(result.budget.linesWritten, 1);
     assert.equal(result.budget.filesWrittenLimit, 3);
-  });
-
-  it("classifies an exhausted write budget as a budget failure", () => {
-    const error = new WriteBudgetError("cycle file budget exhausted");
-    assert.equal(error.name, "WriteBudgetError");
   });
 });
 

@@ -18,7 +18,7 @@ import { buildTaskSpec, assessTaskSpec, TASK_MODE } from "./taskspec.ts";
 import { assembleTaskPrompt, type TaskPromptSkill } from "./taskspec-prompt.ts";
 import { listSkills } from "./skill-catalogue.ts";
 import type { TaskIntent, TaskSpec } from "./taskspec.ts";
-import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type LedgerState, type WriteBudget } from "./write-budget.ts";
+import { budgetFor, chargeWrite, checkWrite, readWriteAttempt, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import { createHash } from "node:crypto";
@@ -642,6 +642,21 @@ export class AgentRuntime {
    */
   private readonly callDigests = new Map<string, string>();
   /**
+   * What the round that just ended consumed, kept for the caller (D162).
+   *
+   * ⚠️ The reason this is a field rather than only a return value: a round can end by
+   * **throwing**, and a caller that wanted to report the cost had nothing to report.
+   * Cancelling a run printed one error line and no usage at all — the operator could
+   * not see what the abandoned round had already spent, which is exactly the number
+   * that decides whether to try again.
+   *
+   * Set on both endings, and read through `lastBudget()`. It follows the pattern the
+   * module already uses for `lastPromptBytes`, `lastInputTokens` and
+   * `lastPredictedTokens`: the round's own measurements live on the instance because
+   * the return path is not the only path out.
+   */
+  private lastRoundBudget: RunBudget | undefined;
+  /**
    * Whether drift, not the score, chose this round's gene (D108).
    *
    * Carried alongside the address for the same reason the address is: the outcome
@@ -943,7 +958,7 @@ export class AgentRuntime {
     if (isAbortError(error)) return "cancelled";
     if (error instanceof StepLimitError || error instanceof ToolBudgetError
       || error instanceof DeadlineExceededError || error instanceof ContextBudgetError
-      || error instanceof TokenBudgetError || error instanceof WriteBudgetError) return "budget";
+      || error instanceof TokenBudgetError) return "budget";
     const message = error instanceof Error ? error.message : "";
     if (message.startsWith("invalid model response") || message.startsWith("model ")) return "model";
     return "unknown";
@@ -1209,6 +1224,13 @@ export class AgentRuntime {
         cycle = await this.advance(cycle, { type: "integrate-ready", at: Date.now() });
         await this.journalOutcome(verdict, budgetRefusals);
         cycle = await this.advance(cycle, { type: "complete", at: Date.now() });
+        // ⚠️ D162: recorded on this ending too, not only in the catch. The CLI prints the
+        // budget from a place both endings reach, so a round that returns without
+        // recording its own cost prints **no cost line at all** — which is exactly what
+        // the first version of this change did, and the streaming tests caught it: the
+        // entire budget line disappeared from a successful run.
+        const budget = this.runBudget(startedAt, steps, toolCalls, reasoningTokens);
+        this.lastRoundBudget = budget;
         return {
           reply: assistant,
           usage,
@@ -1226,23 +1248,7 @@ export class AgentRuntime {
           steps,
           toolCalls,
           ...(covered > 0 ? { compactedMessages: covered } : {}),
-          budget: {
-            stepsUsed: steps,
-            maxSteps: this.maxSteps,
-            toolCallsUsed: toolCalls,
-            maxToolCallsPerRun: this.maxToolCallsPerRun,
-            promptBytes: this.lastPromptBytes,
-            maxContextBytes: this.maxContextBytes,
-            ...(this.lastInputTokens === undefined ? {} : { inputTokens: this.lastInputTokens }),
-            maxContextTokens: this.tokenCeiling(),
-            ...(this.lastPredictedTokens === undefined ? {} : { predictedTokens: this.lastPredictedTokens }),
-            ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-            elapsedMs: Date.now() - startedAt,
-            deadlineMs: this.deadlineMs,
-            filesWritten: this.writeLedger.files.length,
-            filesWrittenLimit: this.writeBudget.maxFiles,
-            linesWritten: this.writeLedger.lines,
-          },
+          budget,
         };
       }
 
@@ -1271,10 +1277,55 @@ export class AgentRuntime {
       const evaluation = evaluateRun({
         steps, toolCalls, toolErrors, failureClass: this.classifyFailure(error),
       });
+      // ⚠️ D162: measured before the throw, because a caller cannot report a cost it
+      // was never handed. `startedAt` and the two counters are still in scope here;
+      // after the throw they are gone.
+      this.lastRoundBudget = this.runBudget(startedAt, steps, toolCalls);
       await this.advance(cycle, { type: "fail", at: Date.now(), evaluation });
       await this.journalOutcome(evaluation, budgetRefusals);
       throw error;
     }
+  }
+
+  /**
+   * The budget of the most recent round, readable even when that round threw (D162).
+   *
+   * `undefined` before the first round. A caller that already holds a `SendResult`
+   * should use its `budget`; this exists for the path where there is no result.
+   */
+  lastBudget(): RunBudget | undefined {
+    return this.lastRoundBudget;
+  }
+
+  /**
+   * Assemble the round's budget from the counters in scope (D162).
+   *
+   * Extracted so the throwing ending and the returning ending report the same shape —
+   * two literals would drift, and the one that drifts is always the one nobody reads.
+   */
+  private runBudget(
+    startedAt: number,
+    steps: number,
+    toolCalls: number,
+    reasoningTokens?: number,
+  ): RunBudget {
+    return {
+      stepsUsed: steps,
+      maxSteps: this.maxSteps,
+      toolCallsUsed: toolCalls,
+      maxToolCallsPerRun: this.maxToolCallsPerRun,
+      promptBytes: this.lastPromptBytes,
+      maxContextBytes: this.maxContextBytes,
+      ...(this.lastInputTokens === undefined ? {} : { inputTokens: this.lastInputTokens }),
+      maxContextTokens: this.tokenCeiling(),
+      ...(this.lastPredictedTokens === undefined ? {} : { predictedTokens: this.lastPredictedTokens }),
+      ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+      elapsedMs: Date.now() - startedAt,
+      deadlineMs: this.deadlineMs,
+      filesWritten: this.writeLedger.files.length,
+      filesWrittenLimit: this.writeBudget.maxFiles,
+      linesWritten: this.writeLedger.lines,
+    };
   }
 
   async totals(): Promise<ChatUsage> {

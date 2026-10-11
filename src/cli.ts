@@ -574,17 +574,20 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     const controller=new AbortController();
     const abort=()=>controller.abort();process.on("SIGINT",abort);
     try {
-      // One write of the reply, then the budget line. An earlier revision of this
-      // block left the inline write in place after the budget line was added, so
-      // the answer printed twice; the smoke output caught it.
+      // One write of the reply. An earlier revision of this block left the inline
+      // write in place after the budget line was added, so the answer printed twice;
+      // the smoke output caught it.
       const result=await runtime.send(options.prompt!,controller.signal);
       if(result.reasoning!==undefined)write(`[思考] ${result.reasoning}\n`);
       write(result.reply.content+"\n");
-      write(`${formatBudget(result.budget)}\n`);
-      // Between the budget and the task assessment, and that order is the meaning:
-      // what this round consumed, then what the system concluded about this round,
-      // then where the cross-round task stands. The task line goes last because it
-      // is the only one of the three that is not scoped to this round.
+      // Between the reply and the task assessment, and that order is the meaning: what
+      // the system concluded about this round, then where the cross-round task stands.
+      // The task line goes last because it is the only one of the two that is not
+      // scoped to this round. ⚠️ D162: the **budget** line is no longer here — it moved
+      // to the `finally`, so that a round which ended by throwing still reports what it
+      // spent. It therefore prints after these two on the success path. That is the
+      // price of the line existing at all on the other path, and it is the right price:
+      // a reader who sees no budget line cannot tell "spent nothing" from "cancelled".
       write(`${formatEvaluation(result.evaluation)}\n`);
       // Printed only when a task state was recorded. An assessment computed but
       // never shown would be dead code of exactly the kind D58 found: built,
@@ -592,7 +595,17 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       const taskLine = result.taskAssessment === undefined ? undefined : formatTaskAssessment(result.taskAssessment);
       if (taskLine !== undefined) write(`${taskLine}\n`);
       if(options.showTotals){const totals=await runtime.totals();write(`[adapter=${adapter.id} model=${result.model} steps=${result.steps} tools=${result.toolCalls} in=${totals.inputTokens} out=${totals.outputTokens}]\n`);}
-    } finally {process.off("SIGINT",abort);}
+    } finally {
+      // ⚠️ D162: the accounting print lives here so both endings reach it. A round that
+      // ends by throwing skips every line after the call, so cancelling a run used to
+      // print one error line and no usage at all — the operator could not see what the
+      // abandoned round had already cost, which is exactly the number that decides
+      // whether to try again. `lastBudget()` is set on both endings; the format is the
+      // same one line either way, so the numbers are what distinguish them.
+      const spent = runtime.lastBudget();
+      if (spent !== undefined) write(`${formatBudget(spent)}\n`);
+      process.off("SIGINT",abort);
+    }
     return 0;
   } finally {
     // Closing the agent closes its background jobs, which is the operator's
