@@ -267,6 +267,38 @@ describe("validation in the cycle", () => {
     assert.equal(result.evaluation.evidence.some((line) => line.startsWith("validation:unmet=command:")), true);
   });
 
+  it("⚠️ retires a gene whose own declared proof was contradicted twice and never held", async () => {
+    // The whole loop rather than the rule alone: a real round, a real shell, a real
+    // exit code, a real outcome row, and then the library acting on its own record
+    // with nobody deciding. This is the first consumer `retire` has ever had.
+    await writeFile(join(fixture.workspaceRoot, "fail2.cjs"), "process.exit(5);", "utf8");
+    const steps = [
+      { content: "", toolCalls: [{ id: "c1", name: "run_command", arguments: JSON.stringify({ command: "node fail2.cjs" }) }] },
+      { content: "测试通过了" },
+    ];
+    const geneDraft = draft([{ kind: "command", command: "node fail2.cjs" }]);
+    const genePath = join(fixture.root, "v-genes-claim-retire.jsonl");
+    const first = await run(steps, geneDraft, "claim-retire", [createRunCommandTool()]);
+    assert.equal(first.result.appliedGene?.address, first.minted.address, "第一轮确实应用了这条基因");
+    assert.equal((await new GeneStore(genePath).state()).retired.size, 0, "一轮不足以退休一条能力");
+
+    await run(steps, geneDraft, "claim-retire", [createRunCommandTool()]);
+    // ⚠️ A fresh instance per read, on purpose: a `GeneStore` caches the log it
+    // loaded, so reusing one object would answer with the snapshot from the first
+    // read and a retirement written in between would be invisible. `append` updates
+    // that cache (`this.records?.push`), which is why the runtime — which writes
+    // through the same instance it reads — does not need this care.
+    const after = await new GeneStore(genePath).state();
+    const reason = after.retired.get(first.minted.address) ?? "";
+    assert.match(reason, /自动退休/, "理由必须说明这是被规则退休的，而不是被谁拍板的");
+    assert.match(reason, /被反驳 2 轮/, "理由必须带上那个数，否则它只是一句评语");
+
+    // And the retirement is load-bearing rather than decorative: the next matching
+    // round must no longer run a gene the library has just taken out.
+    const third = await run([{ content: "好" }], geneDraft, "claim-retire", [createRunCommandTool()]);
+    assert.equal(third.result.appliedGene, undefined, "被退休的基因不该再被应用");
+  });
+
   it("records an unverifiable command claim without failing the round", async () => {
     const target = join(fixture.workspaceRoot, "claim-cmd.txt");
     await writeFile(target, "old\n", "utf8");

@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { DEFAULT_SELECTION_POLICY, canonicalize, computeDriftIntensity, driftIndex, geneAddress, mintGene, scoreCandidates, selectGene } from "../src/gene.ts";
-import { GeneStore } from "../src/gene-store.ts";
+import { GeneStore, retirementDue } from "../src/gene-store.ts";
 import type { Gene, GeneDraft, GeneExpression } from "../src/gene.ts";
 import { SessionStore } from "../src/session-store.ts";
 import { AgentRuntime } from "../src/runtime.ts";
@@ -48,8 +48,8 @@ function draft(overrides: Partial<GeneDraft> = {}): GeneDraft {
 /** The request the `draft()` gene answers, so these tests exercise real selection. */
 const matchingRequest = { intent: "build" as const, signals: ["snippet"], text: "用 snippet 替换" };
 
-function expression(attempts: number, successes: number, lastSuccessAt: number | null = NOW, streak = 0): GeneExpression {
-  return { attempts, successes, lastSuccessAt, streak };
+function expression(attempts: number, successes: number, lastSuccessAt: number | null = NOW, streak = 0, contradicted = 0): GeneExpression {
+  return { attempts, successes, lastSuccessAt, streak, contradicted };
 }
 
 describe("mint", () => {
@@ -353,6 +353,55 @@ describe("gene store", () => {
     assert.equal((await reopened.state()).retired.get(minted.address), "已过时");
     const text = await readFile(path, "utf8");
     assert.equal(text.split("\n").filter((line) => line !== "").length, 2, "追加式：一条基因加一条退休，没有重写任何旧行");
+  });
+
+  it("counts only a contradicted claim, not a bad round, and needs two of them", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-auto.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    // Two failed rounds whose cause is not the gene's claim: the model broke, and
+    // one nobody could name. These are exactly what `streak` counts and what this
+    // counter must refuse to count.
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "model" }, NOW + 1);
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "unknown" }, NOW + 2);
+    let entry = (await store.state()).genes.get(minted.address)!;
+    assert.equal(entry.expression.contradicted, 0, "归因不到基因的失败不算被反驳");
+    assert.equal(entry.expression.streak, 2, "而它们照旧算进连败——两个计数器管的是两件事");
+    assert.equal(retirementDue(entry), null, "两次与基因无关的失败不足以退休一条能力");
+
+    // Now the gene's own declared proof, contradicted.
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "validation" }, NOW + 3);
+    entry = (await store.state()).genes.get(minted.address)!;
+    assert.equal(entry.expression.contradicted, 1);
+    assert.equal(retirementDue(entry), null, "一轮不足以退休：这正是「没被给过机会」与「给了机会仍失败」的分界");
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "validation" }, NOW + 4);
+    entry = (await store.state()).genes.get(minted.address)!;
+    assert.equal(entry.expression.contradicted, 2);
+    assert.match(retirementDue(entry) ?? "", /被反驳 2 轮/);
+  });
+
+  it("lets a single success veto an automatic retirement, because the weak signal may only hold back", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-veto.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    await store.appendOutcome({ address: minted.address, succeeded: true }, NOW + 1);
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "validation" }, NOW + 2);
+    await store.appendOutcome({ address: minted.address, succeeded: false, failureClass: "validation" }, NOW + 3);
+    const entry = (await store.state()).genes.get(minted.address)!;
+    assert.equal(entry.expression.contradicted, 2);
+    // Two against and one for is not the same as two against and nothing for. The
+    // verdict is the weaker signal, so it may only hold the rule back — using it to
+    // pull the trigger is the mistake D106 recorded as the starvation trap.
+    assert.equal(retirementDue(entry), null, "成功过的能力不因被反驳两轮而被自动删掉");
+  });
+
+  it("never retires a gene that was never given a round", async () => {
+    const store = new GeneStore(join(fixture.root, "retire-unpicked.jsonl"));
+    const minted = mintGene(draft());
+    await store.appendGene(minted, NOW);
+    const entry = (await store.state()).genes.get(minted.address)!;
+    assert.equal(entry.expression.attempts, 0);
+    assert.equal(retirementDue(entry), null, "「没机会」必须与「有机会且失败」保持可区分");
   });
 
   // D108: drift wired into selectFor, and the choice recorded. Two tests, because

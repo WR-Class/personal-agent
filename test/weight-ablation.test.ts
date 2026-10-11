@@ -78,9 +78,9 @@ function draft(name: string, signalsMatch: readonly string[]): GeneDraft {
  * mistake the first version of this file made.
  */
 const CASES = [
-  { name: "narrow", signals: ["snippet"], expression: { attempts: 10, successes: 6, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
-  { name: "broad", signals: ["snippet", "编辑", "replace", "重构", "测试", "文档"], expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
-  { name: "excluded", signals: ["kubernetes"], expression: { attempts: 10, successes: 10, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+  { name: "narrow", signals: ["snippet"], expression: { attempts: 10, successes: 6, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
+  { name: "broad", signals: ["snippet", "编辑", "replace", "重构", "测试", "文档"], expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
+  { name: "excluded", signals: ["kubernetes"], expression: { attempts: 10, successes: 10, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
 ];
 
 const REQUEST = { intent: "build" as const, signals: ["snippet", "编辑", "replace"], text: "用 snippet 替换并编辑" };
@@ -160,8 +160,8 @@ describe("weight ablation", () => {
     const broad = mintGene(draft("same-hit-broad", ["snippet", "重构", "部署", "回滚", "监控"]));
     const scored = scoreCandidates(
       [
-        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
-        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
+        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
       ],
       { intent: "build" as const, signals: ["snippet"], text: "改一下 snippet" },
       DEFAULT_SELECTION_POLICY,
@@ -204,8 +204,8 @@ describe("weight ablation", () => {
     const broad = mintGene(draft("lock-broad", ["snippet", "重构", "部署", "回滚", "监控"]));
     const scored = scoreCandidates(
       [
-        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
-        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0 } as GeneExpression },
+        { address: narrow.address, gene: narrow.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
+        { address: broad.address, gene: broad.gene, expression: { attempts: 10, successes: 8, lastSuccessAt: NOW - 1000, streak: 0, contradicted: 0 } as GeneExpression },
       ],
       { intent: "build" as const, signals: ["snippet"], text: "改一下 snippet" },
       DEFAULT_SELECTION_POLICY,

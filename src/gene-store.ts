@@ -161,10 +161,18 @@ export type GeneStoreRecord =
    * say what it once knew and why it stopped using it.
    *
    * Retirement is not deletion and not quarantine. Quarantine (`quarantineStreak`)
-   * is automatic and recoverable — one new success lifts it. Retirement is a
-   * decision, it persists, and the gene stays in the library: its address must
+   * is automatic and **recoverable** — one new success lifts it, and it is
+   * recomputed on every selection rather than recorded anywhere. Retirement is
+   * written once, it persists, and the gene stays in the library: its address must
    * keep resolving, because outcome rows already written against it are that
    * gene's track record and `state()` folds them whether or not it is selectable.
+   *
+   * ⚠️ A retirement can now be **automatic** as well as human — see
+   * `retirementDue`. The reason is still mandatory and still recorded; what
+   * changed is that the reason may now be a counted fact instead of an operator's
+   * opinion. That is better attribution, not less: a machine that retires a gene
+   * for a stated mechanical reason is more auditable than one that only ever
+   * retires it because somebody said so.
    *
    * There is deliberately no `unretire`. A gene's address is its content hash, so
    * "bring it back" is already expressible without a new record type: mint the
@@ -497,7 +505,7 @@ export class GeneStore {
     const baseline = { attempts: 0, successes: 0 };
     for (const record of records) {
       if (record.type === "gene") {
-        if (!folded.has(record.address)) folded.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0 }, rounds: [] });
+        if (!folded.has(record.address)) folded.set(record.address, { gene: record.gene, expression: { attempts: 0, successes: 0, lastSuccessAt: null, streak: 0, contradicted: 0 }, rounds: [] });
         continue;
       }
       // Before the outcome branch, and the order is load-bearing rather than
@@ -544,6 +552,13 @@ export class GeneStore {
       const entry = folded.get(record.address);
       if (!entry) continue;
       entry.expression.attempts += 1;
+      // ⚠️ The one counter here that is attributable to the *gene* rather than to
+      // the round. `failureClass === "validation"` is written only where the verdict
+      // was downgraded because a claim **the gene itself declared** was shown false —
+      // not because a tool errored, the model misbehaved, or the task was hard. That
+      // is why `retirementDue` may act on this counter and not on `streak`, which
+      // counts verdicts and therefore counts the whole world along with the strategy.
+      if (record.failureClass === "validation") entry.expression.contradicted += 1;
       // The gene's own footprint, kept as raw material for `reMeasure`. Rows from
       // before the footprint and the ceiling were journaled carry nothing here, and
       // the estimator filters those rather than reading them as zeros — the
@@ -673,4 +688,47 @@ function renderGeneBlock(candidate: ScoredCandidate): string {
   if (gene.avoid.length > 0) lines.push(`Avoid, distilled from past failures:`, ...gene.avoid.map((item) => `- ${item}`));
   lines.push(`</applied_gene>`);
   return lines.join("\n");
+}
+
+/**
+ * Contradicted rounds after which the library retires a gene on its own.
+ *
+ * ⚠️ Two, and it is not a new number: `DEFAULT_SELECTION_POLICY.quarantineStreak`
+ * is already 2, and the reference implementation's ban layer is also "two
+ * independent failures". A third threshold for the same question would be a
+ * third answer to one question, which is how a library stops being auditable.
+ */
+export const AUTO_RETIRE_CONTRADICTIONS = 2;
+
+/**
+ * Whether the library should retire this gene by itself, and the reason to write
+ * into the retirement record if so. `null` means "no".
+ *
+ * The rule is **two against and nothing for**, and each half is there for a
+ * different reason:
+ *
+ * - `contradicted >= 2` may *cause* a retirement, because it is the only signal
+ *   in this store that is attributable to the gene. The gene said what proof
+ *   looks like; the round ran exactly that and it failed. The task, the model and
+ *   the context are all still in that number, but the gene chose the test.
+ * - `successes === 0` may only *veto* one. A verdict is produced by everything at
+ *   once, so it is far too weak to retire a gene on — but it is more than strong
+ *   enough to hold the rule back, and holding back is the conservative direction.
+ *   **A weak signal is safe as a guard and unsafe as a cause**, which is why the
+ *   two halves are not symmetric.
+ *
+ * ⚠️ The asymmetry also makes the rule immune to the starvation trap recorded in
+ * D106. A gene that has never been selected has no rounds, so it cannot be
+ * retired here — "never had a chance" and "was given chances and failed" stay
+ * distinguishable, which is exactly what "retire after N non-selections" got
+ * wrong and why it was rejected.
+ *
+ * ⚠️ The counts are read from the folded record, not from a live tally, so the
+ * rule is a pure function of the log and replays identically.
+ */
+export function retirementDue(entry: { readonly expression: GeneExpression }): string | null {
+  const { contradicted, successes } = entry.expression;
+  if (contradicted < AUTO_RETIRE_CONTRADICTIONS) return null;
+  if (successes > 0) return null;
+  return `自动退休：自己声明的验证被反驳 ${contradicted} 轮、且从未成功过（阈值 ${AUTO_RETIRE_CONTRADICTIONS} 轮）`;
 }

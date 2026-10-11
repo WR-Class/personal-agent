@@ -23,7 +23,7 @@ import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-rec
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
 import { SHELL_TOOL_NAME, commandFromArguments, readExitCode } from "./shell-tool.ts";
 import type { CommandRun } from "./types.ts";
-import type { GeneStore } from "./gene-store.ts";
+import { retirementDue, type GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
 import type { CycleEvaluation, CycleEvent, CycleState, FailureClass } from "./cycle.ts";
@@ -870,6 +870,24 @@ export class AgentRuntime {
       // graded, which is what they were.
       ...(graded ? {} : { graded: false }),
     });
+
+    // ⚠️ The consumer `retire` never had. `gene-store.ts` has named it, in its own
+    // comments, as one of the mechanisms that were built and never wired — for many
+    // batches. This is the rule that turns it on, and it is deliberately narrow: it
+    // fires on the gene's own contradicted proof and never on a round verdict. See
+    // `retirementDue` for why the two halves of the rule are not symmetric.
+    //
+    // Read back from the store rather than tallied in memory. The log is the only
+    // source of truth for a gene's record, and a second tally is exactly how the two
+    // come to disagree.
+    // `null` is the gene-less baseline, which has no gene to retire — the same
+    // distinction the fold draws one layer down.
+    const library = address === null ? null : await this.geneStore.state();
+    const entry = library?.genes.get(address ?? "");
+    if (library && entry !== undefined && !library.retired.has(address ?? "")) {
+      const reason = retirementDue(entry);
+      if (reason !== null) await this.geneStore.retire(address ?? "", reason);
+    }
   }
 
   /** Journal one PDRI event and advance the machine. Illegal moves throw first. */
@@ -1094,6 +1112,17 @@ export class AgentRuntime {
           ? {
             ...evaluation,
             status: "partial" as const,
+            // ⚠️ The first producer this failure class has ever had. `FailureClass`
+            // has declared `"validation"` and `distill.ts` has carried its prompt
+            // text since the type was written, but `classifyFailure` cannot return it
+            // — nothing threw. A round downgraded because the gene's own declared
+            // proof was shown false is precisely that case, and writing it is what
+            // lets the library tell "the gene's own test failed" apart from "the
+            // round went badly", which is the difference the retirement rule needs.
+            //
+            // `??` and not a plain assignment: a round that already failed for a real
+            // reason keeps that reason. The clearer cause wins.
+            failureClass: evaluation.failureClass ?? "validation",
             evidence: [...evaluation.evidence, ...validationEvidence(validation)],
           }
           : validation

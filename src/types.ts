@@ -126,6 +126,19 @@ export interface GeneExpression {
   lastSuccessAt: number | null;
   /** Consecutive failures since the last success. */
   streak: number;
+  /**
+   * Rounds where this gene's **own declared proof was contradicted** — the round
+   * ran the command the gene named as its verification and it failed.
+   *
+   * ⚠️ Deliberately not folded into `streak`, and the difference is attribution.
+   * `streak` counts a round *verdict*, and a verdict is produced by the task, the
+   * model, the context and the strategy together. This counter moves only when the
+   * gene's own claim was shown false — it said what proof looks like, and the proof
+   * was not there. So `retirementDue` may *cause* a retirement on this counter and
+   * may only *veto* one on `successes`: an unattributable signal is safe as a guard
+   * and unsafe as a cause.
+   */
+  contradicted: number;
 }
 
 export interface SelectionPolicy {
