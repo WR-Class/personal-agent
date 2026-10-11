@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "./gene.ts";
 import { RULE_TIERS, decide } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
-import { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
+import { READ_ONLY_TOOLS, UNASKED_WRITE_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
 export interface FileGrant {
   tool: string;
@@ -20,8 +20,16 @@ const FILE_TOOLS = ["edit_file", "patch_file", "create_file", "delete_file", "re
  * offered by a tier but denied by this table, so the model was told to use
  * something it could never call. `run_command` joins by being in `WRITE_TOOLS`,
  * which is the same list the tiers read, so the two answers cannot drift.
+ *
+ * ⚠️ D163: `UNASKED_WRITE_TOOLS` is subtracted rather than listed here. Those tools
+ * change the agent's own record, not anything the operator owns, so they are still
+ * writes for the purpose of *absence* (a read-only session must not have them) but
+ * not for the purpose of *approval*. The subtraction keeps one name per tool.
  */
-export const APPROVAL_TOOLS: readonly string[] = [...FILE_TOOLS, ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool))];
+export const APPROVAL_TOOLS: readonly string[] = [
+  ...FILE_TOOLS,
+  ...WRITE_TOOLS.filter((tool) => !FILE_TOOLS.includes(tool) && !UNASKED_WRITE_TOOLS.includes(tool)),
+];
 
 /**
  * The built-in rules. These express exactly what the previous hardcoded switch
@@ -37,6 +45,18 @@ export const DEFAULT_RULES: readonly Rule[] = [
     decision: "approve",
     tier: RULE_TIERS.WORKSPACE,
     priority: 10,
+  })),
+  // ⚠️ D163: an explicit **allow**, not merely the absence of an approve rule. An
+  // unmatched tool is denied by default (`rule-table.ts`), so dropping the approval
+  // would have turned "asks" into "refused" — the same failure this change exists to
+  // fix, arriving from the other side. Priority sits above the read allows so the two
+  // can never be read as competing.
+  ...UNASKED_WRITE_TOOLS.map((tool): Rule => ({
+    id: `self-record.${tool}`,
+    tool,
+    decision: "allow",
+    tier: RULE_TIERS.WORKSPACE,
+    priority: 60,
   })),
   // Every read-only tool gets its own allow, not just `read_file`. Measured
   // consequence of listing only that one: adding an inspection tool left it

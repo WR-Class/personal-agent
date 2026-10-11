@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_RULES, filePolicy } from "../src/file-policy.ts";
-import { WRITE_TOOLS } from "../src/write-tools.ts";
+import { WRITE_TOOLS, UNASKED_WRITE_TOOLS } from "../src/write-tools.ts";
 import { MAX_PRIORITY, RULE_TIERS, decide, effectivePriority } from "../src/rule-table.ts";
 import type { Rule } from "../src/rule-table.ts";
 
@@ -10,7 +10,7 @@ function rule(overrides: Partial<Rule> & Pick<Rule, "id" | "decision">): Rule {
   return { tool: "*", tier: RULE_TIERS.DEFAULT, priority: 0, ...overrides };
 }
 
-describe("rule table: behaviour is preserved", () => {
+describe("rule table: the switch it replaced, and the one reversal since", () => {
   it("reproduces the switch it replaced", () => {
     assert.equal(filePolicy("read_file"), "allow");
     assert.equal(filePolicy("inspect_file"), "allow");
@@ -33,8 +33,17 @@ describe("rule table: behaviour is preserved", () => {
     // The two mechanisms must agree about which tools need approval. Listing the
     // names a second time here is what let an offered tool be denied earlier.
     for (const tool of WRITE_TOOLS) {
+      if (UNASKED_WRITE_TOOLS.includes(tool)) continue;
       assert.equal(filePolicy(tool), "approve", tool);
     }
+    // ⚠️ D163: and the exempted ones are **allowed**, not merely un-approved. An
+    // unmatched tool is denied by default, so this is the assertion that catches the
+    // exemption being implemented as "delete the approval rule" — a change that reads
+    // as identical and produces the exact opposite outcome.
+    for (const tool of UNASKED_WRITE_TOOLS) {
+      assert.equal(filePolicy(tool), "allow", tool);
+    }
+    assert.ok(UNASKED_WRITE_TOOLS.length > 0, "an empty exemption list would make the loop above vacuous");
   });
 });
 

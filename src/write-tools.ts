@@ -55,6 +55,10 @@ export const WRITE_TOOLS: readonly string[] = [
   // it is a write in the only sense this list cares about. Leaving it out would
   // hand a read-only posture a way to edit its own instructions — and the tier and
   // rule tables both derive from this list, so the two cannot drift apart.
+  //
+  // ⚠️ D163: being on this list is what makes it **absent** from a read-only
+  // session. It is no longer what makes it **ask** — see `UNASKED_WRITE_TOOLS`
+  // below. This list used to answer both questions at once; they are now separate.
   "update_task_state",
   "edit_file",
   "patch_file",
@@ -63,3 +67,30 @@ export const WRITE_TOOLS: readonly string[] = [
   "rename_file",
   "batch_files",
 ];
+
+/**
+ * Writes that ask nobody, because what they change is the agent's own record (D163).
+ *
+ * The distinction is *whose* thing changes. Everything else in `WRITE_TOOLS` changes
+ * something the operator owns — a file in the workspace, a process they started — and
+ * asking is how they keep authority over it. This one appends to the session log the
+ * agent already owns.
+ *
+ * It stays on `WRITE_TOOLS` as well, and that is not redundancy: the write list is
+ * what a read-only session's *absence* is derived from, and a read-only session must
+ * not be able to rewrite what every later prompt tells the model. So it is offered
+ * like a write and asked about like a read.
+ *
+ * ⚠️ Why it stopped asking, measured rather than argued. The rule table gave it an
+ * `approve` decision, so in a headless run — a prompt on the command line, no approval
+ * channel — the call came back "no approval channel is configured". The model could
+ * then not record what it was doing **at all**, which empties the task-state mechanism
+ * precisely where automation needs it: the acceptance criteria, the unpaid-check debt
+ * and the notice that asks the model to pay it all read from that record. Asking a
+ * question nobody can answer buys no authority; it only turns the feature off.
+ *
+ * Every consumer derives from this list, so naming the tool once here is what keeps
+ * the tier tables and the rule tables from disagreeing. A test pins the membership
+ * relationship between the two lists, because two lists can drift.
+ */
+export const UNASKED_WRITE_TOOLS: readonly string[] = ["update_task_state"];

@@ -48,7 +48,7 @@
 import { RULE_TIERS } from "./rule-table.ts";
 import type { Decision, Rule } from "./rule-table.ts";
 import { APPROVAL_TOOLS, DEFAULT_RULES } from "./file-policy.ts";
-import { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
+import { READ_ONLY_TOOLS, UNASKED_WRITE_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
 export { READ_ONLY_TOOLS, WRITE_TOOLS } from "./write-tools.ts";
 
@@ -152,6 +152,20 @@ function askBeforeWriting(): Rule[] {
         decision: "approve",
         tier: RULE_TIERS.WORKSPACE,
         priority: 10,
+      }),
+    ),
+    // ⚠️ D163: the self-recording write is allowed here too, and it has to be stated
+    // rather than inherited — this tier's rules are its own list, not the defaults, so
+    // leaving it out would deny it by default. That would make the middle tier
+    // *stricter* than the default one for a call the operator never sees either way,
+    // which is the kind of asymmetry nobody would think to test for.
+    ...UNASKED_WRITE_TOOLS.map(
+      (tool): Rule => ({
+        id: `ask-before-writing.self-record-${tool}`,
+        tool,
+        decision: "allow",
+        tier: RULE_TIERS.WORKSPACE,
+        priority: 60,
       }),
     ),
     // Reads are allowed, one rule per tool, for the reason recorded in
@@ -329,13 +343,13 @@ export const TIERS: readonly Tier[] = [
   },
   {
     name: "ask-before-writing",
-    summary: "读取不询问；写入类工具仍然逐次批准",
+    summary: "读取不询问；写入类工具仍然逐次批准（agent 自己那份进度记录除外——它写的是自己的日志，不是你的东西）",
     tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
     rules: askBeforeWriting(),
   },
   {
     name: "workspace-write",
-    summary: "在工作区内读写；写入仍需逐次批准",
+    summary: "在工作区内读写；写入仍需逐次批准（agent 自己那份进度记录除外——它写的是自己的日志）",
     tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
     rules: DEFAULT_RULES,
   },

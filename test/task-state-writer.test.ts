@@ -1,11 +1,16 @@
 /**
- * The task-state writer, under the same two gates as every other write.
+ * The task-state writer, under the write budget — and, since D163, under no approval.
  *
- * D60 named this the largest risk in the whole feature: appending task state does
- * not go through the file tools, so neither the agent-home location denial nor the
- * write budget would reach it by default — yet it changes what every later prompt
- * tells the model. So the load-bearing assertions here are about gate coverage,
- * not about the tool working.
+ * D60 named this the largest risk in the whole feature: appending task state does not
+ * go through the file tools, so neither the agent-home location denial nor the write
+ * budget would reach it by default — yet it changes what every later prompt tells the
+ * model.
+ *
+ * ⚠️ D63 answered that with two gates and a deliberate rule: **no carve-out**, so the
+ * tool asks exactly like every other write. D163 reverses the approval half and keeps
+ * the other. D63's reasoning is not wrong, it is outweighed — and the measurement is
+ * in the test below — so the assertions that encoded it were **replaced rather than
+ * relaxed**, and the replacement defends the opposite property.
  */
 
 import assert from "node:assert/strict";
@@ -17,9 +22,9 @@ import { ToolRegistry, createReadFileTool, createUpdateTaskStateTool } from "../
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
 import { findTier } from "../src/tiers.ts";
-import { decide } from "../src/rule-table.ts";
-import { READ_ONLY_TOOLS, WRITE_TOOLS } from "../src/write-tools.ts";
-import { DEFAULT_RULES } from "../src/file-policy.ts";
+import { RULE_TIERS, decide } from "../src/rule-table.ts";
+import { READ_ONLY_TOOLS, UNASKED_WRITE_TOOLS, WRITE_TOOLS } from "../src/write-tools.ts";
+import { APPROVAL_TOOLS } from "../src/file-policy.ts";
 import { chargeWrite, checkWrite, isWriteTool, readWriteAttempt } from "../src/write-budget.ts";
 import type { GeneValidation } from "../src/gene.ts";
 
@@ -61,29 +66,57 @@ describe("gate coverage: offered and allowed must agree", () => {
     assert.match(result.content, /unknown tool|not offered|unknown/i);
   });
 
-  it("is treated exactly like another write, under both the defaults and a tier", () => {
-    const tier = findTier("full-access")!;
-    assert.ok(tier.tools.includes("update_task_state"), "offered by a write-capable posture");
-    // The load-bearing property is "no carve-out". Were this tool quietly exempted
-    // from asking, it would be the one tool that reshapes what every later prompt
-    // tells the model without the operator ever seeing it. Asserting equality with
-    // `run_command` rather than a hardcoded decision is what makes a future
-    // exception fail this test instead of passing silently.
-    for (const rules of [DEFAULT_RULES, tier.rules]) {
-      assert.equal(
-        decide(rules, "update_task_state", {}).decision,
-        decide(rules, "run_command", {}).decision,
-        "same decision as run_command under the same rules",
-      );
+  it("asks under no posture, and the record is how the operator sees it (D163)", () => {
+    // ⚠️ This replaces a rule D63 set deliberately, and the replacement is written out
+    // rather than nudged. D63's rule was "no carve-out": this is the one tool that
+    // reshapes what every later prompt tells the model, so exempting it would make it
+    // the one write an operator never sees before it happens.
+    //
+    // That is not wrong, it is outweighed, and the measurement is the reason. With an
+    // `approve` decision and no approval channel — a prompt on the command line — the
+    // call comes back "no approval channel is configured". A headless run then cannot
+    // record its task state at all, and the acceptance criteria, the unpaid-check debt
+    // and the notice that asks the model to pay it all read from that record: the
+    // mechanism is empty exactly where automation needs it. Asking a question nobody
+    // can answer buys no authority, it only turns the feature off.
+    //
+    // What the operator gives up is seeing it **first**, not seeing it. Every recorded
+    // version lands in the session log, and the round prints the assessment. So the old
+    // "same decision as run_command" assertion is gone, and what is defended now is the
+    // opposite property, checked on every posture by name rather than on one.
+    for (const name of ["read-only", "ask-before-writing", "workspace-write", "full-access"]) {
+      const tier = findTier(name)!;
+      const decision = decide(tier.rules, "update_task_state", {}).decision;
+      if (name === "read-only") {
+        // The half D63 got right and D163 must not lose: absence in **both** mechanisms.
+        assert.ok(!tier.tools.includes("update_task_state"), "a read-only posture still must not offer it");
+        assert.notEqual(decision, "allow", "and still must not allow it");
+        continue;
+      }
+      assert.equal(decision, "allow", `${name} must not ask about the agent's own record`);
     }
-    // Pinned explicitly because it is counter-intuitive, and an earlier draft of
-    // this test asserted the wrong half of it: DEFAULT_RULES say `approve`, and the
-    // full-access tier overrides that to `allow`. A higher RULE_TIER always
-    // outranks a lower one whatever the priority, so a write-capable posture does
-    // not prompt for writes — the usability worry behind "should this ask at all"
-    // was about a posture that does not exist.
-    assert.equal(decide(DEFAULT_RULES, "update_task_state", {}).decision, "approve");
-    assert.equal(decide(tier.rules, "update_task_state", {}).decision, "allow");
+    // The asymmetry nobody would think to test for. The middle tier's rules are its own
+    // list rather than the defaults, so an exemption added in only one of the two places
+    // would make the middle tier *stricter* than the default one — a posture difference
+    // no operator would ever suspect and no other test would catch.
+    assert.equal(
+      decide(findTier("ask-before-writing")!.rules, "update_task_state", {}).decision,
+      decide(findTier("workspace-write")!.rules, "update_task_state", {}).decision,
+      "the middle tier and the default must agree about a call the operator never sees either way",
+    );
+  });
+
+  it("keeps the two lists in step: an unasked write is still a write", () => {
+    // Two lists can drift, and a test is what stops it rather than care. If a tool were
+    // ever added to the unasked list without also being a write, a read-only session
+    // would start offering it — which is the exact thing the write list exists to
+    // prevent, and it would arrive silently.
+    for (const tool of UNASKED_WRITE_TOOLS) {
+      assert.ok(WRITE_TOOLS.includes(tool), `${tool} is unasked but not a write, so a read-only posture would offer it`);
+      assert.ok(!READ_ONLY_TOOLS.includes(tool), `${tool} must not be a read tool`);
+      assert.ok(!APPROVAL_TOOLS.includes(tool), `${tool} must not be in the approval list`);
+    }
+    assert.ok(UNASKED_WRITE_TOOLS.length > 0, "an empty exemption list would make this test vacuous");
   });
 
   it("consumes a write-budget slot without consuming line budget", () => {
@@ -253,7 +286,7 @@ describe("the writer tool", () => {
     assert.deepEqual((await store.taskState(sessionId))?.steps[0]!.claim, { kind: "command", command: "npm.cmd test" });
   });
 
-  it("asks before recording, and records nothing when the operator says no", async () => {
+  it("records without asking, even with an approver attached (D163)", async () => {
     const { store, sessionId, tool } = setup();
     await store.create(sessionId);
     const registry = new ToolRegistry([tool], ["update_task_state"]);
@@ -265,9 +298,39 @@ describe("the writer tool", () => {
         return false;
       },
     });
-    assert.equal(asked, 1, "the operator is asked, as for any other write");
+    // ⚠️ D163, stated as an assertion: the approver is attached and is **not consulted**.
+    // An operator who answers "no" to everything still gets the record, because the
+    // record is the agent's own and the alternative is a headless run that cannot record
+    // anything at all. D63 asserted the opposite here on purpose; this is the reversal.
+    assert.equal(asked, 0, "the agent's own record is not the operator's to approve");
+    assert.notEqual(result.isError, true, result.content);
+    assert.equal((await store.taskState(sessionId))?.state, MARKER);
+  });
+
+  it("still asks — and records nothing — when a rule says approve", async () => {
+    // The surviving half, and the reason the tool keeps its own approval call rather
+    // than dropping it: **the decision belongs to the rule table, not to the tool.** A
+    // posture that decides to ask must still be able to, and a refusal must leave
+    // nothing behind — otherwise "no" would mean "yes, quietly", which is worse than
+    // the friction this round removed.
+    const { store, sessionId, tool } = setup();
+    await store.create(sessionId);
+    const registry = new ToolRegistry([tool], ["update_task_state"]);
+    const asking = [
+      { id: "test.ask", tool: "update_task_state", decision: "approve" as const, tier: RULE_TIERS.WORKSPACE, priority: 10 },
+    ];
+    let asked = 0;
+    const result = await registry.execute(call({ state: MARKER, steps: [] }), {
+      workspaceRoot,
+      rules: asking,
+      approve: async () => {
+        asked += 1;
+        return false;
+      },
+    });
+    assert.equal(asked, 1, "a posture that asks still asks");
     assert.equal(result.isError, true);
-    assert.equal(await store.taskState(sessionId), undefined);
+    assert.equal(await store.taskState(sessionId), undefined, "and a no leaves no record");
   });
 
   it("reaches the next prompt, which is the whole point of the tool", async () => {
