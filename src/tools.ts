@@ -30,7 +30,7 @@ import {
   INSPECTION_MAX_LINES,
   runInspection,
 } from "./inspection-tools.ts";
-import { runShellCommand, shellFor } from "./shell-tool.ts";
+import { runShellCommand, shellFor, SHELL_TOOL_NAME } from "./shell-tool.ts";
 import { FOREGROUND_GRACE_MS, findJob, killJob, listJobs, readJobOutput, startBackgroundJob } from "./background-jobs.ts";
 // Type-only, so the registry gains no runtime dependency on the session store.
 import type { SessionStore } from "./session-store.ts";
@@ -617,7 +617,7 @@ export function createInspectFileTool(): Tool {
  */
 export function createRunCommandTool(): Tool {
   return {
-    name: "run_command",
+    name: SHELL_TOOL_NAME,
     description:
       "Run a shell command and return its output. Use this to build, test, search, and inspect: " +
       "anything you would otherwise type into a terminal. The command runs through the platform " +

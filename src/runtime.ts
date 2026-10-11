@@ -21,6 +21,8 @@ import type { TaskIntent, TaskSpec } from "./taskspec.ts";
 import { blastTier, blastWeight, budgetFor, chargeWrite, checkWrite, readWriteAttempt, WriteBudgetError, type BlastTier, type LedgerState, type WriteBudget } from "./write-budget.ts";
 import { omittedResultPlaceholder, projectOversizedToolResults } from "./obs-recall.ts";
 import { checkValidation, claimsOf, validationEvidence, type ValidationReport } from "./validation.ts";
+import { SHELL_TOOL_NAME, commandFromArguments, readExitCode } from "./shell-tool.ts";
+import type { CommandRun } from "./types.ts";
 import type { GeneStore } from "./gene-store.ts";
 import type { CycleStore } from "./cycle-store.ts";
 import { applyEvent, evaluateRun, startCycle } from "./cycle.ts";
@@ -615,6 +617,14 @@ export class AgentRuntime {
   /** Tools this round actually called, in order (D17). */
   private outcomeTools: string[] | undefined;
   /**
+   * Commands this round actually ran, with the exit code each reported (D20).
+   *
+   * Kept beside `outcomeTools` because the two answer different questions: the
+   * tool list says a shell was used, this says what it was asked and what came
+   * back. Only the second can decide a `command` claim.
+   */
+  private outcomeCommands: CommandRun[] | undefined;
+  /**
    * Whether drift, not the score, chose this round's gene (D108).
    *
    * Carried alongside the address for the same reason the address is: the outcome
@@ -785,6 +795,7 @@ export class AgentRuntime {
     this.outcomeAddress = undefined;
     this.outcomeSpec = undefined;
     this.outcomeTools = undefined;
+    this.outcomeCommands = undefined;
     this.outcomeDrifted = undefined;
     this.outcomeCandidates = undefined;
     if (address === undefined || !this.geneStore) return;
@@ -939,6 +950,7 @@ export class AgentRuntime {
     this.outcomeCandidates = applied?.candidates;
     this.outcomeSpec = { intent: taskSpec.intent, signals: taskSpec.signals };
     this.outcomeTools = [];
+    this.outcomeCommands = [];
     // A fresh cycle starts with an empty ledger. A gene's constraints bound the
     // round; with no gene applied the runtime default still applies, because
     // "unbounded" is not a safe default (D18).
@@ -1068,6 +1080,7 @@ export class AgentRuntime {
         const roundEvidence = {
           filesWritten: this.writeLedger.files,
           tools: this.outcomeTools ?? [],
+          commands: this.outcomeCommands ?? [],
         };
         const validation = applied ? checkValidation(applied.validation, roundEvidence) : null;
         // Read here rather than reusing what `buildPrompt` saw: the model may have
@@ -1226,13 +1239,28 @@ export class AgentRuntime {
       }
       // Complete pending tool correlations even after cancellation, but never start another executor.
       let result;
+      // Set only on the path that really awaits the executor. A cancellation and a
+      // "no tools configured" must not be recorded as commands that ran: the
+      // record is evidence about the workspace, and a call that never reached the
+      // shell is evidence of nothing (D20).
+      let ranCommand: string | null = null;
       if (signal?.aborted) result = { content: "cancelled: tool was not executed", isError: true };
       else {
         this.activity({ type: "tool-start", name: call.name, callId: call.id, arguments: activityText(call.arguments) });
-        result = signal?.aborted ? { content: "cancelled: tool was not executed", isError: true }
-          : this.tools ? await this.tools.execute(call, context)
-          : { content: `no tools are configured, cannot run ${call.name}`, isError: true };
+        if (signal?.aborted) result = { content: "cancelled: tool was not executed", isError: true };
+        else if (!this.tools) result = { content: `no tools are configured, cannot run ${call.name}`, isError: true };
+        else {
+          if (call.name === SHELL_TOOL_NAME) ranCommand = commandFromArguments(call.arguments);
+          result = await this.tools.execute(call, context);
+        }
         this.activity({ type: "tool-end", name: call.name, callId: call.id, isError: result.isError === true, content: activityText(result.content) });
+      }
+      // Recorded outside the abort branches, so a cancelled command leaves no
+      // record. The exit code is read from the result rather than from whether the
+      // tool reported an error: a non-zero exit is a normal result here, which is
+      // what makes it usable as evidence that the claim was contradicted.
+      if (ranCommand !== null) {
+        this.outcomeCommands?.push({ command: ranCommand, exitCode: readExitCode(result.content) });
       }
       // One line, not three (ADR-0001): the assistant turn above already recorded
       // what was requested, so this message is the whole record of what came back.

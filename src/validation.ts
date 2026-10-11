@@ -11,14 +11,20 @@
  *
  * - `met`          — the journal shows the fact the claim names.
  * - `unmet`        — the journal shows the round contradicted it.
- * - `unverifiable` — nothing in this runtime can decide it (a shell command,
- *                    today). This is recorded as itself. It is never counted as
- *                    met, because that would manufacture proof, and never as
- *                    unmet, because that would punish work that may well have
- *                    been done. An honest "we cannot tell" is a real outcome and
- *                    the only reason this module can be trusted at all.
+ * - `unverifiable` — the record this round left behind cannot settle it. This is
+ *                    recorded as itself. It is never counted as met, because that
+ *                    would manufacture proof, and never as unmet, because that
+ *                    would punish work that may well have been done. An honest
+ *                    "we cannot tell" is a real outcome and the only reason this
+ *                    module can be trusted at all.
+ *
+ * ⚠️ A `command` claim used to land in that third bucket unconditionally, on the
+ * stated grounds that no command runner existed in this runtime. One does (D46),
+ * so the claim is now decided against the round's own execution record — see
+ * {@link checkCommandClaim} for exactly which cases the record settles and which
+ * it still cannot.
  */
-import type { ClaimOutcome, Gene, GeneValidation, RoundEvidence } from "./types.ts";
+import type { ClaimOutcome, CommandRun, Gene, GeneValidation, RoundEvidence } from "./types.ts";
 
 /**
  * ⚠️ D88: `RoundEvidence` and `ClaimOutcome` moved to `types.ts` and are re-exported
@@ -92,14 +98,80 @@ export function checkClaim(claim: GeneValidation, evidence: RoundEvidence): Clai
       return { claim, outcome: "met", detail: `called ${claim.tool} ${times} time(s)` };
     }
     case "command":
-      // No shell exists yet, so nothing here can decide this. Saying so is the
-      // whole reason the outcome enum has a third value (D19/D20).
-      return { claim, outcome: "unverifiable", detail: `no command runner in this runtime, cannot decide: ${claim.command}` };
+      return checkCommandClaim(claim, evidence);
     default: {
       const unreachable: never = claim;
       return { claim: unreachable, outcome: "unverifiable", detail: "unknown claim kind" };
     }
   }
+}
+
+/**
+ * Decide a command claim against the round's execution record.
+ *
+ * Which cases this settles, and which it refuses to, is the whole design:
+ *
+ * - **ran, exit code 0** — the proof the claim named is in the record: `met`.
+ * - **ran, exit code non-zero** — the record contradicts the claim: `unmet`.
+ *   This is the case that did not exist before, and the reason a claim about a
+ *   command is worth making at all.
+ * - **not run this round** — `unverifiable`, and no longer because a runner is
+ *   missing. A round is not the whole task: the proof may have been shown in an
+ *   earlier one, so "not seen here" is not "not done". Reading it as `unmet`
+ *   would punish work that was done — the same defect, in the other direction,
+ *   as reading it as `met`.
+ * - **ran, no exit code recorded** — also `unverifiable`. A background job, a
+ *   timeout and a cancellation all land here, and `null` must never be read as
+ *   zero.
+ *
+ * A claim that is only whitespace matches every command by containment, so it is
+ * refused as undecidable rather than reported as satisfied by accident.
+ */
+function checkCommandClaim(
+  claim: { readonly kind: "command"; readonly command: string },
+  evidence: RoundEvidence,
+): ClaimResult {
+  const wanted = normalizeCommand(claim.command);
+  if (wanted === "") {
+    return { claim, outcome: "unverifiable", detail: "the claim names no command, so there is nothing to look for" };
+  }
+  const runs = evidence.commands ?? [];
+  // Last match wins: the most recent run is the state of the world, so a command
+  // that passed and was then re-run and failed reads as failed.
+  let match: CommandRun | undefined;
+  for (const run of runs) {
+    if (normalizeCommand(run.command).includes(wanted)) match = run;
+  }
+  if (match === undefined) {
+    return {
+      claim,
+      outcome: "unverifiable",
+      detail: `this round ran ${runs.length} command(s), none containing ${JSON.stringify(claim.command)}, cannot decide: ${claim.command}`,
+    };
+  }
+  if (match.exitCode === null) {
+    return {
+      claim,
+      outcome: "unverifiable",
+      detail: `ran ${JSON.stringify(match.command)} but no exit code was recorded (background job, timeout or cancellation), cannot decide: ${claim.command}`,
+    };
+  }
+  return match.exitCode === 0
+    ? { claim, outcome: "met", detail: `ran ${JSON.stringify(match.command)}, exit code 0` }
+    : { claim, outcome: "unmet", detail: `ran ${JSON.stringify(match.command)} and it exited ${match.exitCode}` };
+}
+
+/**
+ * Whitespace-insensitive, so a claim written `npm.cmd test` matches a command
+ * that ran as `cd personal-agent && npm.cmd  test`.
+ *
+ * Containment rather than equality, because a claim is usually a fragment of the
+ * command that actually ran. Case is left alone — a different spelling is a
+ * different command — and the detail reports the command that matched, so a wrong
+ * match is visible rather than silent.
+ */
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ");
 }
 
 /** Compare every claim a gene declares. */

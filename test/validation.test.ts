@@ -11,7 +11,7 @@ import { AgentRuntime } from "../src/runtime.ts";
 import { GeneStore } from "../src/gene-store.ts";
 import { CycleStore } from "../src/cycle-store.ts";
 import { SessionStore } from "../src/session-store.ts";
-import { ToolRegistry, createEditFileTool } from "../src/tools.ts";
+import { ToolRegistry, createEditFileTool, createRunCommandTool, type Tool } from "../src/tools.ts";
 import { createScriptedAdapter } from "../src/echo-adapter.ts";
 import { createTestFixture } from "./fixtures.ts";
 import type { ToolCall } from "../src/types.ts";
@@ -74,10 +74,65 @@ describe("claim kinds", () => {
     );
   });
 
-  it("reports a command as unverifiable rather than pretending either way", () => {
-    const result = checkClaim({ kind: "command", command: "npm.cmd test" }, NOTHING);
+  it("decides a command the round ran, instead of reporting it as undecidable", () => {
+    const ran = evidence({ commands: [{ command: "npm.cmd test", exitCode: 0 }] });
+    const result = checkClaim({ kind: "command", command: "npm.cmd test" }, ran);
+    assert.equal(result.outcome, "met");
+    assert.match(result.detail, /exit code 0/);
+  });
+
+  it("⚠️ contradicts the claim when the command it names ran and failed", () => {
+    // The case this round exists for. Before it, every command claim was
+    // unverifiable, so a round could declare "prove it with npm test", fail it,
+    // and still be recorded as a clean success — the strongest claim a gene can
+    // make was the one claim nothing checked.
+    const failed = evidence({ commands: [{ command: "npm.cmd test", exitCode: 1 }] });
+    const result = checkClaim({ kind: "command", command: "npm.cmd test" }, failed);
+    assert.equal(result.outcome, "unmet");
+    assert.match(result.detail, /exited 1/);
+  });
+
+  it("matches a claim that is a fragment of the command that actually ran", () => {
+    const ran = evidence({ commands: [{ command: "cd personal-agent && npm.cmd   test", exitCode: 0 }] });
+    assert.equal(checkClaim({ kind: "command", command: "npm.cmd test" }, ran).outcome, "met");
+  });
+
+  it("takes the last run, so a later failure is not hidden by an earlier pass", () => {
+    const passedThenFailed = evidence({
+      commands: [
+        { command: "npm.cmd test", exitCode: 0 },
+        { command: "npm.cmd test", exitCode: 1 },
+      ],
+    });
+    assert.equal(checkClaim({ kind: "command", command: "npm.cmd test" }, passedThenFailed).outcome, "unmet");
+    const failedThenPassed = evidence({
+      commands: [
+        { command: "npm.cmd test", exitCode: 1 },
+        { command: "npm.cmd test", exitCode: 0 },
+      ],
+    });
+    assert.equal(checkClaim({ kind: "command", command: "npm.cmd test" }, failedThenPassed).outcome, "met");
+  });
+
+  it("never reads a missing exit code as success", () => {
+    const background = evidence({ commands: [{ command: "npm.cmd test", exitCode: null }] });
+    const result = checkClaim({ kind: "command", command: "npm.cmd test" }, background);
     assert.equal(result.outcome, "unverifiable");
-    assert.match(result.detail, /no command runner/);
+    assert.match(result.detail, /no exit code was recorded/);
+  });
+
+  it("stays undecidable when the round ran other commands, and does not call the claim unmet", () => {
+    // A round is not the whole task: the proof may have been shown earlier, so
+    // "not seen here" must never be recorded as "not done".
+    const other = evidence({ commands: [{ command: "git status", exitCode: 0 }] });
+    const result = checkClaim({ kind: "command", command: "npm.cmd test" }, other);
+    assert.equal(result.outcome, "unverifiable");
+    assert.match(result.detail, /none containing/);
+  });
+
+  it("refuses a claim that names no command, rather than matching every command", () => {
+    const ran = evidence({ commands: [{ command: "git status", exitCode: 0 }] });
+    assert.equal(checkClaim({ kind: "command", command: "   " }, ran).outcome, "unverifiable");
   });
 });
 
@@ -137,7 +192,12 @@ describe("reading claims", () => {
 });
 
 describe("validation in the cycle", () => {
-  async function run(steps: ReadonlyArray<{ content: string; toolCalls?: ToolCall[] }>, geneDraft: GeneDraft, sessionId: string) {
+  async function run(
+    steps: ReadonlyArray<{ content: string; toolCalls?: ToolCall[] }>,
+    geneDraft: GeneDraft,
+    sessionId: string,
+    tools: readonly Tool[] = [createEditFileTool()],
+  ) {
     const geneStore = new GeneStore(join(fixture.root, `v-genes-${sessionId}.jsonl`));
     const minted = mintGene(geneDraft);
     await geneStore.appendGene(minted);
@@ -146,7 +206,7 @@ describe("validation in the cycle", () => {
       adapter: createScriptedAdapter({ steps: [...steps] }),
       store, sessionId, home: fixture.home, workspaceRoot: fixture.workspaceRoot,
       geneStore, cycleStore: new CycleStore(join(fixture.root, `v-cycles-${sessionId}.jsonl`)),
-      tools: new ToolRegistry([createEditFileTool()]),
+      tools: new ToolRegistry([...tools]),
       approve: async () => true,
     });
     return { result: await runtime.send("改文件"), store, minted };
@@ -183,6 +243,28 @@ describe("validation in the cycle", () => {
     assert.equal(result.evaluation.status, "partial");
     assert.equal(result.validation?.failed.length, 1);
     assert.equal(result.evaluation.evidence.some((line) => line.startsWith("validation:unmet")), true);
+  });
+
+  it("⚠️ decides a command claim from the round's real execution record", async () => {
+    // The wiring this test exists for. The checker could always compare a command
+    // claim; nothing ever handed it the command or its exit code, so every such
+    // claim was reported undecidable no matter what the round actually did — and
+    // a round that failed its own declared proof still ended as a clean success.
+    // This is the only test that runs the whole path: tool call, real shell, exit
+    // code, evidence, verdict.
+    await writeFile(join(fixture.workspaceRoot, "fail.cjs"), "process.exit(5);", "utf8");
+    const { result } = await run(
+      [
+        { content: "", toolCalls: [{ id: "c1", name: "run_command", arguments: JSON.stringify({ command: "node fail.cjs" }) }] },
+        { content: "测试通过了" },
+      ],
+      draft([{ kind: "command", command: "node fail.cjs" }]),
+      "claim-cmd",
+      [createRunCommandTool()],
+    );
+    assert.equal(result.validation?.claims[0]?.outcome, "unmet", "a non-zero exit must contradict the claim");
+    assert.equal(result.evaluation.status, "partial", "and it must not leave the round a clean success");
+    assert.equal(result.evaluation.evidence.some((line) => line.startsWith("validation:unmet=command:")), true);
   });
 
   it("records an unverifiable command claim without failing the round", async () => {

@@ -18,9 +18,12 @@
  * reuses `checkValidation` and its three outcomes.
  *
  * `unverifiable` is therefore a real, displayed state. A step whose claim names
- * a shell command stays "we cannot tell" forever, because no command runner
- * exists in this runtime (`validation.ts:86-89`). That is an inherited ceiling,
- * not a bug: the honest outcome is the only reason the report can be trusted.
+ * a shell command is now decided against the round's own execution record: a
+ * command that ran and exited non-zero contradicts the step. It stays "we cannot
+ * tell" only when the round did not run that command, because a round is not the
+ * whole task and the proof may have been shown in an earlier one. That is an
+ * inherited ceiling, not a bug: the honest outcome is the only reason the report
+ * can be trusted.
  *
  * ## Evaluation never depends on a gene being applied
  *
@@ -164,7 +167,7 @@ function compareClaim(previous: GeneValidation | undefined, next: GeneValidation
       if (before.command !== after.command) {
         throw new WeakenedTaskStateError(
           `步骤 ${step} 的 command 从 ${JSON.stringify(before.command)} 改成了 ${JSON.stringify(after.command)}：` +
-            `该类型在本运行时恒为 unverifiable，无从比较强弱，故只允许原样保留`,
+            `换一条命令就是换一个验收标准，而换标准正是失败步骤被改写成通过步骤的方式，故只允许原样保留`,
         );
       }
       return;
@@ -240,7 +243,7 @@ export function formatTaskAssessment(assessment: TaskStateAssessment): string | 
   // "cannot decide" is the ceiling of this runtime, and a reader who forgets it
   // will read an unverifiable step as a step that was not done.
   const ceiling = assessment.steps.some((step) => step.outcome === "unverifiable")
-    ? " 判不了不等于没做：需要跑命令的验收条件在本运行时恒为 unverifiable。"
+    ? " 判不了不等于没做：判不了只说明本轮没跑那条命令，或跑了但没记下退出码。"
     : "";
   return `[本轮任务判定 ${counts.join(" · ")}]` +
     "（仅对本轮证据：跨轮任务的步骤可能已在更早的轮次达成，此处不代表从未达成）" +

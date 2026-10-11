@@ -71,8 +71,14 @@ export interface GeneConstraints {
 
 /**
  * A validation entry: an observable fact the round must show, or — as a bare
- * string written before this existed — a command kept verbatim and reported as
- * unverifiable until a runner exists (D20).
+ * string written before this existed — a command kept verbatim (D20).
+ *
+ * ⚠️ A `command` entry used to be reported `unverifiable` on the stated grounds
+ * that no command runner existed in this runtime. One does (D46), so the claim is
+ * decided against the round's own execution record: a command that ran and exited
+ * non-zero now contradicts the claim. What stays undecidable is a command the
+ * round **did not run at all** — a round is not the whole task, and the proof may
+ * have been shown in an earlier one, so "not seen here" is not "not done".
  */
 export type GeneValidation =
   | { readonly kind: "files-written"; readonly paths: readonly string[] }
@@ -215,12 +221,29 @@ export interface TaskStateAssessment {
   readonly failed: readonly string[];
 }
 
+/** One command the round ran, and what it exited with. */
+export interface CommandRun {
+  readonly command: string;
+  /**
+   * `null` means the command was started but no exit code was recorded — a
+   * background job, a timeout, a cancellation. It is **not** zero: nothing may
+   * read "unknown" as "succeeded".
+   */
+  readonly exitCode: number | null;
+}
+
 /** What a round left behind, as the journal recorded it. */
 export interface RoundEvidence {
   /** Paths the round actually wrote, in order. */
   readonly filesWritten: readonly string[];
   /** Tools the round actually called, in order. */
   readonly tools: readonly string[];
+  /**
+   * Commands the round actually ran, in order. Optional so that a caller written
+   * before this existed supplies nothing and simply decides nothing, rather than
+   * having to be found and changed.
+   */
+  readonly commands?: readonly CommandRun[];
 }
 
 export type ClaimOutcome = "met" | "unmet" | "unverifiable";

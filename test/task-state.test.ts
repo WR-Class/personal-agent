@@ -141,7 +141,7 @@ describe("task state: claims are monotone", () => {
     const previous = [{ text: "一", claim: { kind: "command", command: "npm.cmd test" } as GeneValidation }];
     assert.throws(
       () => assertNotWeakened(previous, [{ text: "一", claim: { kind: "command", command: "npm.cmd run build" } }]),
-      /恒为 unverifiable/,
+      /换一个验收标准/,
     );
     assert.doesNotThrow(() => assertNotWeakened(previous, previous));
   });

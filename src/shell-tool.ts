@@ -31,10 +31,68 @@ import { spawn } from "node:child_process";
 import { boundedCleanup, processGroupOptions, terminateProcessTree } from './process-tree.ts';
 import type { ToolEnvironment } from "./tool-environment.ts";
 
+/**
+ * The one tool that runs a command.
+ *
+ * Named in one place because two files must agree about it: `tools.ts` registers
+ * it, and the runtime reads a round's execution record by looking for it. A
+ * literal in each would drift silently, and the symptom would be that commands
+ * stop being recorded — which looks exactly like a round that ran none.
+ */
+export const SHELL_TOOL_NAME = "run_command";
+
 /** Output is capped: a build log or a recursive listing can dwarf any context. */
 export const SHELL_MAX_OUTPUT_BYTES = 64 * 1024;
 export const SHELL_TIMEOUT_MS = 120_000;
 export const SHELL_MAX_LINES = 2_000;
+
+/**
+ * The exit-code marker this file appends, and the reader for it.
+ *
+ * Exported together on purpose: the producer of a format should own its reader.
+ * A parser written next to the consumer would be a second copy of this string,
+ * and the day one of them changed the other would go on finding no exit code —
+ * which is indistinguishable from a background job, so every command claim would
+ * quietly go back to being undecidable while the code looked correct.
+ */
+const EXIT_CODE_LINE = /^\[exit code: (-?\d+|unknown)\]$/;
+
+/**
+ * The exit code recorded in a result, or `null` when none was recorded.
+ *
+ * Read from the end, because a command's own output can contain a line shaped
+ * like this marker and the real one is written last. `null` covers a background
+ * job, a timeout, a cancellation and an unparseable value alike — the caller
+ * must treat it as unknown, never as zero.
+ */
+export function readExitCode(content: string): number | null {
+  const lines = content.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = EXIT_CODE_LINE.exec(lines[index]!.trim());
+    if (match === null) continue;
+    const value = Number(match[1]);
+    return Number.isSafeInteger(value) ? value : null;
+  }
+  return null;
+}
+
+/**
+ * The command a `run_command` call asked for, or `null` if it did not ask for one.
+ *
+ * The arguments arrive as the model's own JSON, so a malformed or absent
+ * `command` yields `null` rather than throwing: this feeds a record of what
+ * happened, and a record that can abort a round is worse than one that says less.
+ */
+export function commandFromArguments(argumentsJson: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(argumentsJson);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const command = (parsed as { command?: unknown }).command;
+    return typeof command === "string" && command.trim() !== "" ? command : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface ShellResult {
   readonly content: string;
@@ -159,10 +217,23 @@ export async function runShellCommand(
   });
 }
 
+/**
+ * Cap the body, and keep the tail.
+ *
+ * The tail is not decoration. The exit-code marker is appended last, so a
+ * head-only cut removes exactly the line that says whether the command worked —
+ * on the long outputs, where a failing test log is most likely to be, and where
+ * the answer matters most. A reader that wants the exit code cannot recover it
+ * from a body that never carried it.
+ */
+const SHELL_MAX_TAIL_LINES = 2;
+
 function clampLines(text: string): string {
   const lines = text.split("\n");
   if (lines.length <= SHELL_MAX_LINES) return text;
-  return [...lines.slice(0, SHELL_MAX_LINES), `[... ${lines.length - SHELL_MAX_LINES} more lines]`].join("\n");
+  const head = SHELL_MAX_LINES - SHELL_MAX_TAIL_LINES;
+  const omitted = lines.length - SHELL_MAX_LINES;
+  return [...lines.slice(0, head), `[... ${omitted} more lines]`, ...lines.slice(-SHELL_MAX_TAIL_LINES)].join("\n");
 }
 
 /** Decode a complete buffer, preferring GBK only when UTF-8 is visibly damaged. */

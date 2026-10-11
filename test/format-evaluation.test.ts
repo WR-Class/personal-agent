@@ -64,7 +64,7 @@ describe("the verdict line", () => {
           "toolErrors=0",
           "validation:met=files-written:src/a.ts (wrote exactly the claimed paths)",
           "validation:unmet=tool-used:create_file>=2 (used 1 time)",
-          "validation:unverifiable=command:npm.cmd test (no shell exists yet)",
+          "validation:unverifiable=command:npm.cmd test (this round ran 0 command(s), none containing \"npm.cmd test\", cannot decide: npm.cmd test)",
         ],
       }),
     );
@@ -73,7 +73,7 @@ describe("the verdict line", () => {
       "toolErrors=0",
       "validation:met=files-written:src/a.ts (wrote exactly the claimed paths)",
       "validation:unmet=tool-used:create_file>=2 (used 1 time)",
-      "validation:unverifiable=command:npm.cmd test (no shell exists yet)",
+      "validation:unverifiable=command:npm.cmd test (this round ran 0 command(s), none containing \"npm.cmd test\", cannot decide: npm.cmd test)",
     ]);
     assert.match(block, /unmet/, "a contradicted claim is visible, not summarized away");
     assert.match(block, /unverifiable/, "and so is one that could not be decided");

@@ -114,11 +114,14 @@ describe("the assessment is scoped to the round and never gates it", () => {
     assert.equal(result.taskAssessment!.complete, false, "an unknown is not completion");
   });
 
-  it("keeps a command criterion unverifiable, and says so out loud", async () => {
+  it("leaves a command the round never ran undecidable, and says why", async () => {
     const { result } = await round([{ content: "跑过了" }], {
       state: MARKER,
       steps: [{ text: "跑测试", claim: { kind: "command", command: "npm.cmd test" } }],
     });
+    // This round ran no command, so the record cannot settle it. That is what is
+    // left of the ceiling, and it is now a statement about this round rather than
+    // about the runtime: the same claim IS decided once the round runs it.
     assert.deepEqual(result.taskAssessment!.steps[0]!.outcome, "unverifiable");
     assert.equal(result.taskAssessment!.failed.length, 0, "undecidable is not contradicted");
     assert.equal(result.taskAssessment!.complete, false);
@@ -126,7 +129,7 @@ describe("the assessment is scoped to the round and never gates it", () => {
     // The ceiling has to be restated wherever the assessment is shown, because a
     // reader who forgets it will read "unverifiable" as "not done".
     assert.match(line, /判不了不等于没做/);
-    assert.match(line, /恒为 unverifiable/);
+    assert.match(line, /本轮没跑那条命令/);
   });
 });
 
