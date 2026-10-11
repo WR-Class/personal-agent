@@ -368,18 +368,39 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       write(`${JSON.stringify(draft.gene)}\n`);
       write(`（草稿不含 validation，铸造前须自己补上真正的验证命令）\n`);
     }
+    // Why this half stays a draft while induction now mints. A guard distilled from
+    // failures says what to be careful about; it has no proof of its own to carry,
+    // and inventing one would be exactly the narration D14/D16 removed. Half a
+    // pipeline wired is the honest amount, and the other half says so out loud.
+    if(drafts.length)write(`（蒸馏出来的守卫仍然只打印、不落库：它没有属于自己的证明可携带。归纳那一路能自动落库，是因为它的验证是从记录里转录来的。见 docs/STATUS.md D155）\n`);
     return 0;
   }
   if(options.induct){
     const facts=await geneStore.geneLessSuccesses();
     const library=await geneStore.state();
-    const drafts=uncoveredCandidates(inductGenes(facts),[...library.genes.values()]);
+    // The filter that decides whether a derived validation is a check or a badge:
+    // a command this library has never watched fail cannot contradict a claim, so a
+    // gene carrying it could never be retired. Read from the archive rather than
+    // guessed from a keyword list — see `commandsSeenToFail`.
+    const falsifiable=await geneStore.commandsSeenToFail();
+    const drafts=uncoveredCandidates(inductGenes(facts,{falsifiable}),[...library.genes.values()]);
     if(!drafts.length)write(`没有达到阈值的无基因成功模式（已归档无基因成功 ${facts.length} 轮）。\n`);
+    let minted=0,refused=0;
     for(const draft of drafts){
-      write(`${draft.summary}\n`);
-      write(`${JSON.stringify(draft.gene)}\n`);
-      write(`（${draft.caveat}）\n`);
+      try{
+        const gene=mintGene(draft.gene);
+        await geneStore.appendGene(gene);
+        write(`已铸造 ${gene.gene.name} → ${gene.address}\n`);
+        minted+=1;
+      }catch(error){
+        // A refusal is an answer, not a failure. The draft carried no proof the
+        // record could supply, and inventing one is the thing this pipeline must
+        // never do — so the reason is printed and the draft stays a draft.
+        write(`${draft.summary}\n拒绝铸造：${(error as Error).message}\n${JSON.stringify(draft.gene)}\n`);
+        refused+=1;
+      }
     }
+    write(`归纳：${drafts.length} 个候选，铸造 ${minted} 个，拒绝 ${refused} 个。\n`);
     return 0;
   }
   if(options.listTrusted){

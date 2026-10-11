@@ -790,6 +790,7 @@ export class AgentRuntime {
     const address = this.outcomeAddress;
     const spec = this.outcomeSpec;
     const tools = this.outcomeTools;
+    const commands = this.outcomeCommands;
     const drifted = this.outcomeDrifted;
     const candidates = this.outcomeCandidates;
     this.outcomeAddress = undefined;
@@ -824,6 +825,10 @@ export class AgentRuntime {
       ...(spec ? { intent: spec.intent, signals: spec.signals } : {}),
       // The proven tool order is what induction may build on — and nothing more.
       ...(tools ? { tools } : {}),
+      // The commands, so induction can transcribe a real proof instead of inventing
+      // one. Only written when non-empty: a round that ran nothing keeps the exact
+      // bytes it always had, and the store caps the list on the way in.
+      ...(commands && commands.length > 0 ? { commands } : {}),
       // Only written when true, so rows from before drift keep their exact bytes and
       // a log reader can still tell "chosen by score" from "field did not exist yet"
       // by the absence of the key rather than by a value that was never recorded.

@@ -404,6 +404,43 @@ describe("gene store", () => {
     assert.equal(retirementDue(entry), null, "「没机会」必须与「有机会且失败」保持可区分");
   });
 
+  it("journals a round's commands and answers which ones it has watched fail", async () => {
+    const store = new GeneStore(join(fixture.root, "commands-seen.jsonl"));
+    await store.appendOutcome({
+      address: null, succeeded: true, intent: "build", signals: ["改文件"],
+      commands: [{ command: "npm.cmd test", exitCode: 0 }, { command: "git status", exitCode: 0 }],
+    }, NOW);
+    // A round where the command ran and failed. A non-zero exit is a normal result
+    // rather than an error, which is exactly what lets it be evidence.
+    await store.appendOutcome({
+      address: null, succeeded: false, intent: "build", signals: ["改文件"], failureClass: "validation",
+      commands: [{ command: "npm.cmd test", exitCode: 1 }],
+    }, NOW + 1);
+    // A background job: no exit code was ever recorded. It must not enter the set —
+    // "never finished" is not "failed", and reading it as one would admit a command
+    // on the strength of not having run.
+    await store.appendOutcome({
+      address: null, succeeded: true, intent: "build", signals: ["改文件"],
+      commands: [{ command: "sleep 1", exitCode: null }],
+    }, NOW + 2);
+    assert.deepEqual([...(await store.commandsSeenToFail())], ["npm.cmd test"], "只有真的失败过的命令才进这个集合");
+    // The wiring's input: induction can now see what the rounds actually ran.
+    const facts = await store.geneLessSuccesses();
+    assert.deepEqual(facts[0]?.commands, [{ command: "npm.cmd test", exitCode: 0 }, { command: "git status", exitCode: 0 }]);
+  });
+
+  it("caps the journaled commands by keeping the tail, because the tail is what a claim reads", async () => {
+    const store = new GeneStore(join(fixture.root, "commands-cap.jsonl"));
+    const many = Array.from({ length: 20 }, (_, index) => ({ command: `cmd-${index}`, exitCode: index === 0 || index === 19 ? 1 : 0 }));
+    await store.appendOutcome({ address: null, succeeded: true, intent: "build", signals: ["改文件"], commands: many }, NOW);
+    // ⚠️ Both ends of this assertion are the point. The tail survives, so the
+    // command a round ends on — its check — is the one kept. The head does not, and
+    // that is a real cost stated out loud rather than hidden: a failure early in a
+    // very long round is forgotten, and the row stays inside the size budget that
+    // this whole line of work exists to protect.
+    assert.deepEqual([...(await store.commandsSeenToFail())], ["cmd-19"], "留尾不留头：一轮结束在它的检查上");
+  });
+
   // D108: drift wired into selectFor, and the choice recorded. Two tests, because
   // the two halves fail differently — drift that never fires is a dead mechanism,
   // while drift that fires unrecorded rebuilds exactly the silence D107 removed for

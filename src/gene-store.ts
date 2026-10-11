@@ -28,6 +28,7 @@ import {
 } from "./gene.ts";
 import type { EvaluationStatus, FailureClass } from "./cycle.ts";
 import type { FailureFact } from "./distill.ts";
+import type { CommandRun } from "./types.ts";
 import type { SuccessFact } from "./induct.ts";
 import { measuredBudget, type BlastTier, type WriteObservation } from "./write-budget.ts";
 
@@ -54,6 +55,23 @@ export type GeneStoreRecord =
      * not what a strategy should be (D17).
      */
     readonly tools?: readonly string[];
+    /**
+     * Commands this round actually ran, with the exit code each returned.
+     *
+     * ⚠️ This is the fact that lets a derived gene carry a **falsifiable**
+     * validation instead of an invented one, and it is the reason `induct.ts` was
+     * able to refuse to supply any validation at all before it existed. The record
+     * held tool *names*, and "the round called run_command" is true of every round
+     * that runs anything — a claim that can never be contradicted. A command and
+     * its exit code is a different kind of fact: the next round that runs it can
+     * contradict it, which is what makes it evidence rather than decoration.
+     *
+     * Written only when non-empty, and capped keeping the **tail** — a round ends
+     * with its check, and `checkCommandClaim` resolves a repeated command to its
+     * *last* run, so trimming from the front would leave the meaning intact while
+     * trimming from the back would change what a claim asserts.
+     */
+    readonly commands?: readonly CommandRun[];
     /**
      * What the round's write ledger actually reached (D127).
      *
@@ -372,10 +390,19 @@ export class GeneStore {
        */
       outcomeWeight?: number;
       graded?: boolean;
+      /** Commands this round ran, with their exit codes. Capped on the way in. */
+      commands?: readonly CommandRun[];
     },
     at: number = Date.now(),
   ): Promise<void> {
-    await this.append({ schema: SCHEMA, type: "outcome", at, ...outcome });
+    // The cap lives here rather than at the call site because this is where the
+    // row's shape is defined. `commands` is destructured out so the spread below
+    // cannot smuggle an uncapped list past it.
+    const { commands, ...rest } = outcome;
+    await this.append({
+      schema: SCHEMA, type: "outcome", at, ...rest,
+      ...(commands && commands.length > 0 ? { commands: capCommands(commands) } : {}),
+    });
   }
 
   /**
@@ -473,6 +500,8 @@ export class GeneStore {
         intent: record.intent,
         signals: record.signals,
         tools: record.tools ?? [],
+        // Threaded so induction can transcribe a real proof rather than invent one.
+        commands: record.commands ?? [],
         evidence: record.evidence ?? [],
         filesWritten: record.filesWritten ?? 0,
         linesWritten: record.linesWritten ?? 0,
@@ -481,6 +510,41 @@ export class GeneStore {
       });
     }
     return facts;
+  }
+
+  /**
+   * Commands this library has actually watched exit non-zero.
+   *
+   * ⚠️ This is the filter that decides whether a derived validation is a check or
+   * a badge, and it is **empirical on purpose**. A keyword list ("test", "build",
+   * "lint") would be an invented rule standing in for a measurable one, and it
+   * would be wrong in both directions: `git status` is not a check, and a
+   * project's own `make verify-all` is.
+   *
+   * The measurable question is the only one that matters — **can this command
+   * fail?** A command that has never once exited non-zero here can never
+   * contradict a claim, so a gene carrying it could never be retired: an immortal
+   * entry, injected forever, in a library whose whole problem is that it only
+   * grows. The archive is the only evidence available about whether a command can
+   * fail, so the archive is what gets read.
+   *
+   * An empty set is an honest answer rather than a failure. A young library that
+   * has never watched anything fail has nothing to derive a check from, and
+   * deriving nothing beats deriving a badge.
+   */
+  async commandsSeenToFail(): Promise<ReadonlySet<string>> {
+    const records = await this.ensureLoaded();
+    const failed = new Set<string>();
+    for (const record of records) {
+      if (record.type !== "outcome") continue;
+      for (const run of record.commands ?? []) {
+        // `null` is "no exit code was recorded" — a background job, a timeout, a
+        // cancellation. It is not a failure, and reading it as one would put a
+        // command into this set on the strength of never having finished.
+        if (run.exitCode !== null && run.exitCode !== 0) failed.add(run.command);
+      }
+    }
+    return failed;
   }
 
   private async append(record: GeneStoreRecord): Promise<void> {
@@ -698,6 +762,22 @@ function renderGeneBlock(candidate: ScoredCandidate): string {
  * independent failures". A third threshold for the same question would be a
  * third answer to one question, which is how a library stops being auditable.
  */
+/**
+ * How many of a round's commands the outcome row keeps.
+ *
+ * ⚠️ A cap exists because the size of this log is the concern that started this
+ * whole line of work: rows are appended forever at 232–560 bytes each. Keeping
+ * the **tail** rather than the head is not arbitrary — a round ends with the
+ * command that checks it, and `checkCommandClaim` resolves a repeated command to
+ * its *last* run, so trimming from the front shortens the row without changing
+ * what any claim asserts, while trimming from the back would change it.
+ */
+const MAX_JOURNALED_COMMANDS = 8;
+
+function capCommands(commands: readonly CommandRun[]): readonly CommandRun[] {
+  return commands.length <= MAX_JOURNALED_COMMANDS ? commands : commands.slice(-MAX_JOURNALED_COMMANDS);
+}
+
 export const AUTO_RETIRE_CONTRADICTIONS = 2;
 
 /**
