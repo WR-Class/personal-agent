@@ -26,7 +26,11 @@ const sessionId = process.argv[3] ?? `probe-${seed}`;
 // Inside the project's own artifacts directory: the OS temp directory is refused
 // by `assertSafeStateDirectory`, which is the right answer and not something to
 // work around.
-const root = await mkdtemp(join(process.cwd(), ".test-artifacts", "d159-"));
+//
+// ⚠️ D165: the `live-` prefix is load-bearing. That directory is now pruned by age,
+// and everything under `live-` is exempt — a probe talks to a real model, which does
+// not repeat itself, so its transcript cannot be recreated by re-running anything.
+const root = await mkdtemp(join(process.cwd(), ".test-artifacts", "live-d159-"));
 const home = join(root, "home");
 const workspaceRoot = join(root, "ws");
 await mkdir(home, { recursive: true });
