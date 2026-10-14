@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>personal-agent 架构实测图</title>
+<style>
+:root{--ink:#16181d;--muted:#6b7280;--line:#c9ced6;--bg:#fff;--soft:#fbfbfc;
+--red:#ab2318;--redbg:#fdeae7;--green:#0d6b37;--greenbg:#e6f5ec;
+--orange:#9a5a00;--orangebg:#fdf2e0;--blue:#1c46c8;--bluebg:#ebefff;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.65 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+header{padding:34px 40px 22px;border-bottom:1px solid var(--line)}
+h1{margin:0 0 6px;font-size:31px;letter-spacing:-.3px}
+.sub{color:var(--muted);font-size:14px}
+.wrap{max-width:1560px;margin:0 auto;padding:0 40px 80px}
+h2{font-size:23px;margin:44px 0 6px;padding-top:22px;border-top:1px solid var(--line)}
+h2:first-of-type{border-top:0}
+h3{font-size:17px;margin:22px 0 8px}
+p{margin:8px 0}
+.note{color:var(--muted);font-size:14px}
+.stats{display:flex;gap:14px;flex-wrap:wrap;margin:20px 0 4px}
+.stat{border:1px solid var(--line);border-radius:10px;padding:12px 18px;background:var(--soft);min-width:150px}
+.stat b{font-size:27px;font-weight:700;display:inline-block}
+.stat .u{color:var(--muted);font-size:14px;margin-left:6px}
+.stat .c{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.stat.hot b{color:var(--red)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin:14px 0 0;font-size:13px;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-2px}
+#search{width:280px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.mapbox{position:relative;margin-top:14px}
+#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.band{display:flex;align-items:flex-start;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line);position:relative;z-index:2}
+.blab{flex:0 0 132px;font-size:13px;color:var(--muted);padding-top:8px}
+.blab b{display:block;font-size:15px;color:var(--ink)}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{border:2px solid;border-radius:8px;padding:4px 10px;font-size:13px;white-space:nowrap;
+cursor:pointer;background:#fff;position:relative;z-index:2;transition:transform .08s}
+.chip:hover{transform:translateY(-1px)}
+.chip .kb{opacity:.7;font-size:12px;margin-left:5px}
+.chip .deg{opacity:.62;font-size:11px;margin-left:6px}
+.chip.dim{opacity:.22}
+.chip.sel{outline:3px solid var(--ink);outline-offset:1px}
+#panel{border:1px solid var(--line);border-radius:10px;background:var(--soft);padding:14px 18px;margin-top:14px;min-height:74px}
+#panel h4{margin:0 0 6px;font-size:16px}
+#panel .row{font-size:13px;margin:3px 0;color:var(--muted)}
+#panel code{background:#eef0f3;border-radius:4px;padding:1px 5px;font-size:12px;color:var(--ink)}
+.card{border:1px solid var(--line);border-left-width:5px;border-radius:10px;padding:14px 20px;margin:12px 0;background:var(--soft)}
+.card.red{border-color:var(--red);background:var(--redbg)}
+.card.green{border-color:var(--green);background:var(--greenbg)}
+.card.orange{border-color:var(--orange);background:var(--orangebg)}
+.card.blue{border-color:var(--blue);background:var(--bluebg)}
+.card h3{margin:0 0 8px;font-size:19px}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:700}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+code{font-family:Consolas,"Courier New",monospace}
+.mono{font-family:Consolas,"Courier New",monospace;font-size:13px;line-height:1.9}
+.ok{color:var(--green);font-weight:700}
+.no{color:var(--red);font-weight:700}
+.pill{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;border:1px solid}
+.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:14px}
+@media(max-width:1400px){.steps{grid-template-columns:repeat(2,1fr)}}
+.step{border:2px solid;border-radius:10px;padding:14px 16px}
+.step .n{display:inline-flex;width:26px;height:26px;border-radius:50%;color:#fff;
+align-items:center;justify-content:center;font-weight:700;font-size:14px;margin-right:8px}
+.step h4{margin:0 0 10px;font-size:17px;display:flex;align-items:center}
+.step ul{margin:6px 0 10px;padding-left:19px;font-size:13px}
+.step li{margin:2px 0}
+.step .why{border-top:1px solid;margin-top:10px;padding-top:8px;font-size:12.5px}
+</style></head><body>
+<header><h1>personal-agent 架构实测图</h1>
+<div class="sub">仪器：<code>_research/measure-the-module-map.mjs</code> → <code>module-map.json</code>　·　本页由实测数据生成，可重跑　·　2026-10-13</div>
+<div class="stats">
+<div class="stat"><b>64</b><span class="u">个模块</span><span class="c">全部平铺，一个子目录都没有</span></div>
+<div class="stat"><b>16,260</b><span class="u">行</span><span class="c">845 KB 源码</span></div>
+<div class="stat hot"><b>1</b><span class="u">个环</span><span class="c">架构文档「零循环依赖」已过期</span></div>
+<div class="stat"><b>2</b><span class="u">个组合根</span><span class="c">cli.ts 与 desktop/main.cjs</span></div>
+<div class="stat"><b>29</b><span class="u">个叶子</span><span class="c">不 import 任何本项目模块</span></div>
+<div class="stat"><b>10</b><span class="u">层</span><span class="c">实测深度（到叶子的最长路径）</span></div>
+</div>
+<div class="legend">
+<span><i style="background:#c9ced6"></i>层号 = 实测深度，同一层内模块互不依赖</span>
+<span>颜色 = 角色　·　点一个方块看它的上下游</span>
+<span><i style="background:#1c46c8"></i>词汇表</span>
+<span><i style="background:#6b21a8"></i>策略与安全</span>
+<span><i style="background:#0d6b37"></i>能力（工具）</span>
+<span><i style="background:#0f766e"></i>会话与存储</span>
+<span><i style="background:#9a5a00"></i>蜂群纪律层</span>
+<span><i style="background:#0e7490"></i>外部插件 / MCP</span>
+<span><i style="background:#4b5563"></i>桌面（另一个组合根）</span>
+<span><i style="background:#111827"></i>入口 / 组合根</span>
+<span><i style="background:#0d6b37"></i>模型适配器</span>
+</div>
+<p style="margin-top:16px"><input id="search" type="search" placeholder="搜索模块名…"></p>
+</header><div class="wrap">
+<style>
+nav{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0}nav a{color:#1c46c8}
+.arch{border:2px solid #4a6ee0;border-radius:16px;background:#f8faff;padding:22px;margin:20px 0}
+.archrow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:14px 0}
+.archnode{background:white;border:1px solid #c9ced6;border-radius:10px;padding:16px}
+.archnode strong{display:block;font-size:18px;margin-bottom:7px}.archnode small{display:block;color:#6b7280}
+.archbar{background:#ebefff;border:2px solid #4a6ee0;border-radius:10px;padding:16px;text-align:center}
+.archarrow{text-align:center;color:#1c46c8;font-weight:bold;margin:10px 0}
+@media(max-width:850px){.archrow{grid-template-columns:1fr}.wrap{padding:0 16px 40px}.band{display:block}.blab{margin-bottom:8px}.steps{grid-template-columns:1fr}}
+</style>
+<nav><a href="#target">目标架构</a><a href="#flow">一次任务怎么走</a><a href="#lifecycle">插件如何装卸</a><a href="#actual">实际源码关系</a></nav>
+<h2 id="target">目标架构：产品运行时带插件，而不是插件写进核心</h2>
+<p class="note">下面是待实现的目标，不是完成声明。编排、蜂群、SoL-Pi 分别是插件；技能、记忆、提示词也不归蜂群独占。</p>
+<div class="arch">
+<div class="archrow">
+<div class="archnode"><strong>桌面入口</strong>聊天、会话选择、工作区、审批、状态展示<small>只调用公开服务，不自己再造一套执行循环。</small></div>
+<div class="archnode"><strong>命令行入口</strong>交互、参数、输出与取消<small>与桌面使用同一个运行时和同一套插件契约。</small></div>
+<div class="archnode"><strong>启动装配</strong>读取可信配置、发现插件、检查依赖、启动插件树<small>新增插件改配置或插件清单，不修改循环代码。</small></div>
+</div>
+<div class="archarrow">通过公开服务调用 ↓</div>
+<div class="archbar"><strong>小核心 / 插件宿主</strong><br>共享词汇与服务契约 · 服务注册与依赖检查 · 事件分发 · 插件作用域与资源撤销<br><small>安全底线仍由核心掌握：可信根、权限上限、审批判定；插件不能给自己放权。</small></div>
+<div class="archarrow">声明需要的服务 / 提供服务 / 订阅事件 ↕</div>
+<div class="archrow">
+<div class="archnode"><strong>执行循环插件</strong>一次任务的步骤、模型请求、工具批次、取消与继续<small>只依赖服务契约，不按名字认识编排或蜂群。</small></div>
+<div class="archnode"><strong>模型插件</strong>提供统一模型调用；连接兼容接口、离线模型替身等<small>凭据与模型设置由产品管理，不由能力插件私自覆盖。</small></div>
+<div class="archnode"><strong>会话插件</strong>消息日志、恢复、事件追加、状态投影<small>对话日志仍是对话唯一事实源；投影可以重建。</small></div>
+<div class="archnode"><strong>工具插件</strong>工具目录、参数校验、执行分发、结果回传<small>文件、命令、后台作业按各自插件注册；执行仍过核心权限门。</small></div>
+<div class="archnode"><strong>提示词 / 技能 / 记忆插件</strong>提示词分段、技能目录、显式记忆、任务状态<small>按服务与事件协作，不强行合成一个蜂群插件。</small></div>
+<div class="archnode"><strong>外部连接器插件</strong>外部工具发现、协议桥接、连接管理<small>外部返回内容按不可信数据处理，不能改变权限。</small></div>
+</div>
+<div class="archrow">
+<div class="archnode" style="border-color:#9a5a00"><strong>编排插件</strong>理解任务 → 匹配技能 / 提示词 → 组装本步输入<small>接入：进入步骤之前；可返回组装后的消息或明确拒绝。</small></div>
+<div class="archnode" style="border-color:#9a5a00"><strong>蜂群插件</strong>选择方法 → 周期记录 → 验证 / 评审 → 回灌与演化<small>接入：任务准备、工具执行前后、任务验收；库与成绩属于插件存储。</small></div>
+<div class="archnode" style="border-color:#9a5a00"><strong>SoL-Pi 能力插件</strong>先承接已采用的工具结果投影与按需召回<small>接入：构建模型上下文与召回工具；不是把召回当作整个 SoL-Pi 已完成。</small></div>
+</div>
+<div class="archbar"><strong>三类事件</strong><br>会话事实：追加后可恢复　|　执行过程：进入步骤、请求、停止、继续、验收　|　能力调用：工具执行前后、文件访问、遥测</div>
+</div>
+<h2 id="flow">一次真实任务怎么走（目标流程）</h2>
+<table><tr><th>顺序</th><th>负责者</th><th>交出去什么 / 怎么处理失败</th></tr>
+<tr><td>1</td><td>入口 → 执行循环</td><td>原始请求、工作区、权限档与取消信号；不由仓库配置自动提权。</td></tr>
+<tr><td>2</td><td>编排 → 技能 / 提示词服务</td><td>任务目标、匹配结果和组装后的输入；缺事实就记录缺失，不编造。</td></tr>
+<tr><td>3</td><td>蜂群 → 方法库</td><td>候选方法、选择结果和本轮记录；没有适用方法必须显式说明。</td></tr>
+<tr><td>4</td><td>会话 / 提示词 / SoL-Pi → 模型</td><td>从日志读取事实、组合提示、投影过大的结果；原始结果保留，可按需召回。</td></tr>
+<tr><td>5</td><td>模型 → 工具服务 → 核心权限门</td><td>工具请求先校验参数与权限，再检查插件约束；任何拒绝均停止该调用，不绕过。</td></tr>
+<tr><td>6</td><td>工具执行 → 会话 / 蜂群</td><td>结果与实际写入证据；日志保留事实，蜂群记消耗与验证，不只相信口头声明。</td></tr>
+<tr><td>7</td><td>验收 → 蜂群回灌 → 入口展示</td><td>产物、验证证据、评审结果；欠验证就不宣称完成，真实结果再进入成绩。</td></tr></table>
+<h2 id="lifecycle">插件装卸与存储边界</h2>
+<div class="archrow">
+<div class="archnode"><strong>启动</strong>读取可信插件清单 → 检查依赖 → 按依赖启动 → 注册服务与事件<small>缺服务、依赖成环、重复注册或启动失败必须明确报错，撤销已经注册的资源。</small></div>
+<div class="archnode"><strong>运行与停止</strong>每个插件拥有自己的作用域；监听、作业、连接都登记撤销动作<small>停止时取消正在执行的工作，按依赖逆序卸载；卸载不能留下旧监听或重复工具。</small></div>
+<div class="archnode"><strong>存储</strong>会话插件保管对话事实；蜂群保管方法与成绩；记忆插件保管显式记忆<small>不复制同一份对话真相。迁移需有格式版本与恢复验证，卸载不等于删数据。</small></div>
+</div>
+<div class="card green"><strong>完整验收，不只看“能加载”</strong><br>新增和替换插件不改核心；移除可选插件能正常运行；缺必需服务明确失败；卸载后无残留；两种入口走同一边界；插件不能越权；既有任务恢复与产物验收仍通过。</div>
+<h2 id="actual">以下是现状测量，不是目标完成声明</h2>
+
+<h2>一、实测依赖分层（全部 64 个模块）</h2>
+<p class="note">上层的模块依赖下层的。数字是 <code>in</code>（有多少模块依赖它）和 <code>out</code>（它依赖多少模块）。<b>点一个方块</b>：会画出它的上下游，并在下面列出明细。</p>
+<p class="note"><b>线的读法：</b>橙色线 = 它依赖别人（向下）　·　蓝色线 = 别人依赖它（向上）　·　<b>虚线 = 只借了类型</b>（搬起来最便宜）　·　实线 = 借了行为（要接缝真的接住）。明细里每个名字后面都标了 <span style="color:#0d6b37">[仅类型]</span> / <span style="color:#ab2318">[行为]</span> / <span style="color:#9a5a00">[混合]</span>。</p>
+<div class="mapbox"><svg id="edges"></svg>
+<div class="band"><div class="blab"><b>深度 10</b>1 个模块</div><div class="chips">
+<span class="chip" data-name="cli" style="border-color:#111827;background:#e8eaee;color:#111827" title="">cli<span class="kb">41.6K</span><span class="deg">in0 out25</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 9</b>2 个模块</div><div class="chips">
+<span class="chip" data-name="interactive" style="border-color:#111827;background:#e8eaee;color:#111827" title="">interactive<span class="kb">8.3K</span><span class="deg">in1 out6</span></span>
+<span class="chip" data-name="mcp-plugin" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="Runtime wiring for MCP plugins (M4 路 C, 丙-4): the last slice.">mcp-plugin<span class="kb">8.1K</span><span class="deg">in1 out6</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 8</b>3 个模块</div><div class="chips">
+<span class="chip" data-name="runtime" style="border-color:#111827;background:#e8eaee;color:#111827" title="">runtime<span class="kb">91.2K</span><span class="deg">in2 out20</span></span>
+<span class="chip" data-name="infra-remote" style="border-color:#111827;background:#e8eaee;color:#111827" title="Server operations via ssh (D51).">infra-remote<span class="kb">14.5K</span><span class="deg">in0 out1</span></span>
+<span class="chip" data-name="mcp-bridge" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="Bridge an MCP server&#x27;s tools into this project&#x27;s `Tool` interface (M4 路 C, 丙-3).">mcp-bridge<span class="kb">12.7K</span><span class="deg">in1 out3</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 7</b>2 个模块</div><div class="chips">
+<span class="chip" data-name="tools" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Tools the model may ask for.">tools<span class="kb">69.2K</span><span class="deg">in5 out13</span></span>
+<span class="chip" data-name="config" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="Operator configuration (D26).">config<span class="kb">11.6K</span><span class="deg">in1 out2</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 6</b>3 个模块</div><div class="chips">
+<span class="chip" data-name="session-store" style="border-color:#0f766e;background:#e0f2f1;color:#0f766e" title="">session-store<span class="kb">56.6K</span><span class="deg">in4 out6</span></span>
+<span class="chip" data-name="gene-store" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Append-only persistence for the gene library (D14).">gene-store<span class="kb">39K</span><span class="deg">in2 out6</span></span>
+<span class="chip" data-name="tiers" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Named permission tiers (D22, D26, D32, D48).">tiers<span class="kb">19.5K</span><span class="deg">in2 out3</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 5</b>5 个模块</div><div class="chips">
+<span class="chip" data-name="openai-adapter" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">openai-adapter<span class="kb">22.5K</span><span class="deg">in1 out3</span></span>
+<span class="chip" data-name="task-state" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Task state: what the task is, how far it got, and what would prove each step.">task-state<span class="kb">18K</span><span class="deg">in5 out3</span></span>
+<span class="chip" data-name="induct" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Success induction (D17).">induct<span class="kb">8.8K</span><span class="deg">in2 out3</span></span>
+<span class="chip" data-name="distill" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Failure archive and distillation (D16).">distill<span class="kb">6.1K</span><span class="deg">in2 out3</span></span>
+<span class="chip" data-name="file-policy" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="">file-policy<span class="kb">4.2K</span><span class="deg">in2 out3</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 4</b>6 个模块</div><div class="chips">
+<span class="chip" data-name="gene" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Genes: compact, immutable capability units, and the selection math (D14).">gene<span class="kb">19K</span><span class="deg">in7 out2</span></span>
+<span class="chip" data-name="skill-catalogue" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="The skill catalogue: which capability prompts exist, and when each one fires">skill-catalogue<span class="kb">17.2K</span><span class="deg">in1 out1</span></span>
+<span class="chip" data-name="validation" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Structured validation claims (D20).">validation<span class="kb">10.9K</span><span class="deg">in2 out1</span></span>
+<span class="chip" data-name="obs-recall" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Reading an omitted tool result back out of the session log (D52).">obs-recall<span class="kb">9.1K</span><span class="deg">in2 out1</span></span>
+<span class="chip" data-name="echo-adapter" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">echo-adapter<span class="kb">3.6K</span><span class="deg">in1 out1</span></span>
+<span class="chip" data-name="response-validation" style="border-color:#1c46c8;background:#ebefff;color:#1c46c8" title="">response-validation<span class="kb">2.3K</span><span class="deg">in3 out1</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 3</b>2 个模块</div><div class="chips">
+<span class="chip" data-name="types" style="border-color:#1c46c8;background:#ebefff;color:#1c46c8" title="Core message, tool and model contracts.">types<span class="kb">15.2K</span><span class="deg">in13 out1</span></span>
+<span class="chip" data-name="taskspec-prompt" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="TaskSpec → prompt assembly.">taskspec-prompt<span class="kb">6.4K</span><span class="deg">in2 out1</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 2</b>4 个模块</div><div class="chips">
+<span class="chip" data-name="shell-tool" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Running a command (D46).">shell-tool<span class="kb">11K</span><span class="deg">in2 out1</span></span>
+<span class="chip" data-name="mcp-client" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="MCP client over a stdio subprocess (M4 路 C, 丙-2).">mcp-client<span class="kb">9.2K</span><span class="deg">in2 out2</span></span>
+<span class="chip" data-name="taskspec" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="TaskSpec: what this send is for, decided before the model is called.">taskspec<span class="kb">5.7K</span><span class="deg">in5 out1</span></span>
+<span class="chip" data-name="cycle-store" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="The cycle journal: an append-only log of PDRI events, folded on read (D15).">cycle-store<span class="kb">3.4K</span><span class="deg">in2 out1</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 1</b>7 个模块</div><div class="chips">
+<span class="chip" data-name="cycle" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="The PDRI cycle: one explicit, replayable unit of work per send (D15).">cycle<span class="kb">15.6K</span><span class="deg">in6 out1</span></span>
+<span class="chip" data-name="plugin-manifest" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="Plugin discovery and manifest parsing (M4, D118 — 乙-1).">plugin-manifest<span class="kb">12.8K</span><span class="deg">in1 out1</span></span>
+<span class="chip" data-name="trusted-roots" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="Remembered readable roots (D35).">trusted-roots<span class="kb">6.1K</span><span class="deg">in3 out1</span></span>
+<span class="chip" data-name="cli-config" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="">cli-config<span class="kb">5.8K</span><span class="deg">in1 out2</span></span>
+<span class="chip" data-name="tool-environment" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">tool-environment<span class="kb">3.6K</span><span class="deg">in6 out1</span></span>
+<span class="chip" data-name="intent-classifier" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Intent classifier distilled from Jev (D124).">intent-classifier<span class="kb">3.4K</span><span class="deg">in1 out1</span></span>
+<span class="chip" data-name="session-lease" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="">session-lease<span class="kb">2K</span><span class="deg">in1 out1</span></span>
+</div></div>
+<div class="band"><div class="blab"><b>深度 0</b>29 个模块</div><div class="chips">
+<span class="chip" data-name="skill-packages" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="">skill-packages<span class="kb">24.5K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="write-budget" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Per-cycle write budget (D18).">write-budget<span class="kb">24K</span><span class="deg">in5 out0</span></span>
+<span class="chip" data-name="preflight" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Preflight for a *real* integration run (live provider + real terminal).">preflight<span class="kb">22.1K</span><span class="deg">in1 out0</span></span>
+<span class="chip" data-name="desktop-model" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-model<span class="kb">21.3K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-capabilities" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-capabilities<span class="kb">18.7K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="inspection-tools" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Named read-only inspection tools (D41).">inspection-tools<span class="kb">12.5K</span><span class="deg">in1 out0</span></span>
+<span class="chip" data-name="mcp-oauth" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="">mcp-oauth<span class="kb">12.1K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-providers" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-providers<span class="kb">11.1K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="security-config" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="">security-config<span class="kb">9.2K</span><span class="deg">in10 out0</span></span>
+<span class="chip" data-name="mcp-jsonrpc" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="JSON-RPC 2.0 encoding/decoding for the MCP stdio transport (M4 路 C, 丙-1).">mcp-jsonrpc<span class="kb">8.7K</span><span class="deg">in1 out0</span></span>
+<span class="chip" data-name="constraints" style="border-color:#9a5a00;background:#fdf2e0;color:#9a5a00" title="Operator standing constraints (D55 采用清单第 1 项，取证见 D53/D55/D57).">constraints<span class="kb">8.6K</span><span class="deg">in1 out0</span></span>
+<span class="chip" data-name="background-jobs" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">background-jobs<span class="kb">8.3K</span><span class="deg">in2 out0</span></span>
+<span class="chip" data-name="mcp-config" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="">mcp-config<span class="kb">8.1K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-tasks" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-tasks<span class="kb">7.9K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-task-flow" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-task-flow<span class="kb">7K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-tools" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-tools<span class="kb">6.8K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="mcp-http-client" style="border-color:#0e7490;background:#e0f2fe;color:#0e7490" title="">mcp-http-client<span class="kb">6.6K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-memory" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-memory<span class="kb">5.7K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-session-management" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-session-management<span class="kb">4.9K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="write-tools" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Which tools read, and which tools write.">write-tools<span class="kb">4.8K</span><span class="deg">in2 out0</span></span>
+<span class="chip" data-name="rule-table" style="border-color:#6b21a8;background:#f3e8ff;color:#6b21a8" title="The permission rule table (D23, D31).">rule-table<span class="kb">3.5K</span><span class="deg">in7 out0</span></span>
+<span class="chip" data-name="terminal" style="border-color:#111827;background:#e8eaee;color:#111827" title="">terminal<span class="kb">2.6K</span><span class="deg">in3 out0</span></span>
+<span class="chip" data-name="desktop-usage" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-usage<span class="kb">2.4K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="core-tools" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">core-tools<span class="kb">2.2K</span><span class="deg">in1 out0</span></span>
+<span class="chip" data-name="process-tree" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="">process-tree<span class="kb">2K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-sessions" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-sessions<span class="kb">1.7K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-tool-probe" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-tool-probe<span class="kb">1.6K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="desktop-echo" style="border-color:#4b5563;background:#f1f2f4;color:#4b5563" title="">desktop-echo<span class="kb">1.3K</span><span class="deg">in0 out0</span></span>
+<span class="chip" data-name="bounded-read" style="border-color:#0d6b37;background:#e6f5ec;color:#0d6b37" title="Read a byte stream into text, refusing to buffer more than `maxBytes`.">bounded-read<span class="kb">1K</span><span class="deg">in2 out0</span></span>
+</div></div>
+</div><div id="panel"><h4>选一个模块</h4><div class="row">点上面任意方块：这里会列出它依赖谁、谁依赖它，并在图上画出连线。</div></div>
+<h2>二、实测发现一个环 —— 架构文档的立论之一已经过期</h2>
+<div class="card red">
+<h3>架构文档 §3.4 ① 写着「36 个文件的内部 import 图无环」，并说「这一条决定性地回答了是否在错误的地基上建造」。<br>现在有环了。</h3>
+<p class="mono">taskspec.ts:15&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;import { classifyIntent } from "./intent-classifier.ts"<br>intent-classifier.ts:24&nbsp;import { extractSignals } from "./taskspec.ts"<br>intent-classifier.ts:25&nbsp;import type { TaskIntent } from "./taskspec.ts"<br>types.ts:13&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;import type { TaskIntent } from "./taskspec.ts"　<span style="color:#6b7280">← 词汇表反过来依赖了要变成插件的文件</span></p>
+<p><b>根因：</b><code>TaskIntent</code> 这五个词（建 / 修 / 查 / 验 / 运维）是<b>整套蜂群的词汇</b>（基因的意图、周期的意图、选择策略都在用它），却住在 <code>taskspec.ts</code> 里 —— 而那个文件在 D173 里是要变成插件的。</p>
+<p><b>修法就是这个文档自己写过的配方</b>（§3.4 ③：共享词汇进 <code>types.ts</code>，行为留在外面）。两处搬家：</p>
+<ol><li><code>TaskIntent</code> 搬进 <code>types.ts</code>　→　<code>types</code> 不再依赖 <code>taskspec</code>，<code>intent-classifier</code> 的类型那一半也解掉</li><li><code>extractSignals</code> 搬进一个独立小模块　→　<code>taskspec.ts:122</code> 和 <code>intent-classifier.ts:53</code> 都指它，环消失</li></ol>
+<p class="note">注意第二条是<b>必要的</b>：<code>extractSignals</code> 定义在 <code>taskspec.ts:71</code>，但它同时被 <code>taskspec</code> 自己（生成 signals）和 <code>intent-classifier</code>（分类前先切词）使用 —— 所以只搬类型不够，行为也得搬出来。</p>
+<p class="note">脚本扫出的环：<code>taskspec -&gt; intent-classifier -&gt; taskspec</code></p>
+</div>
+<h2>三、按族看：哪些仅在本次静态扫描中未发现跨组引用；不能据此证明已经插件化，哪些被粘住</h2>
+<p class="note"><b>跨族边</b>是实测的：一个族往外伸几条、被外面抓几条。<b>两个数都是 0 的族，今天就已经是一个插件了。</b>这两个数是判断"能不能整体搬走"的硬指标。</p>
+<table><tr><th>族</th><th class="n">模块</th><th class="n">KB</th><th class="n">跨族出</th><th class="n">跨族入</th><th>能不能整体搬走</th></tr>
+<tr><td><b style="color:#4b5563">桌面一族</b></td><td class="n">12</td><td class="n">90</td><td class="n">0</td><td class="n">0</td><td><span class="ok">仅在本次静态扫描中未发现跨组引用；不能据此证明已经插件化</span> —— 谁都不认识它，它也不认识谁</td></tr>
+<tr><td><b style="color:#0e7490">外部插件 / MCP</b></td><td class="n">8</td><td class="n">78</td><td class="n">7</td><td class="n">1</td><td>两头都连 —— 要先解掉这 8 条边</td></tr>
+<tr><td><b style="color:#9a5a00">蜂群纪律层</b></td><td class="n">17</td><td class="n">242</td><td class="n">6</td><td class="n">27</td><td>两头都连 —— 要先解掉这 33 条边</td></tr>
+<tr><td><b style="color:#0d6b37">能力（工具）</b></td><td class="n">10</td><td class="n">134</td><td class="n">11</td><td class="n">16</td><td>两头都连 —— 要先解掉这 27 条边</td></tr>
+<tr><td><b style="color:#6b21a8">策略与安全</b></td><td class="n">7</td><td class="n">42</td><td class="n">4</td><td class="n">20</td><td>两头都连 —— 要先解掉这 24 条边</td></tr>
+<tr><td><b style="color:#0f766e">会话与存储</b></td><td class="n">1</td><td class="n">57</td><td class="n">6</td><td class="n">4</td><td>两头都连 —— 要先解掉这 10 条边</td></tr>
+<tr><td><b style="color:#1c46c8">词汇表</b></td><td class="n">2</td><td class="n">18</td><td class="n">1</td><td class="n">15</td><td>两头都连 —— 要先解掉这 16 条边</td></tr>
+<tr><td><b style="color:#111827">入口 / 组合根</b></td><td class="n">5</td><td class="n">158</td><td class="n">47</td><td class="n">1</td><td>两头都连 —— 要先解掉这 48 条边</td></tr>
+<tr><td><b style="color:#0d6b37">模型适配器</b></td><td class="n">2</td><td class="n">26</td><td class="n">4</td><td class="n">2</td><td>两头都连 —— 要先解掉这 6 条边</td></tr>
+</table>
+<div class="card green"><h3>最重要的一条实测：桌面那一族已经是独立的</h3>
+<p>12 个 <code>desktop-*</code> 模块，全部 <code>in 0 / out 0</code>。扫描范围仅为同级源码的静态引用；桌面入口 <code>desktop/main.cjs</code> 不在这张图中。<b>因此 0 / 0 只表示本次图中没有边，不能证明不存在运行时依赖或已经可装卸。</b></p>
+<p><b>所以已经有两条组合根了</b>：一条是 <code>cli.ts</code>，一条是 <code>desktop/main.cjs</code>。插件化不是从零开始 —— <b>桌面入口需要纳入完整追踪</b>；插件化必须以服务契约、加载与卸载、替换测试证明，不能由零引用推断。</p></div>
+<h3>把边分成「仅类型」和「行为」—— 这决定搬家便宜还是贵</h3>
+<p>文档里那条配方是：<b>共享词汇（类型）进 <code>types.ts</code>，行为留在外面</b>。所以一条边是"仅类型"就便宜（挪个类型就解掉），是"行为"就贵（得让接缝真的把它接住）。全部 64 个模块之间：</p>
+<p class="mono">内部边共 128 条　·　仅类型 <b>25</b>　·　行为 <b>82</b>　·　混合 <b>21</b></p>
+<div class="card orange">
+<h3>最重要的一个数：蜂群那一族被外面抓 27 条边，其中仅类型只有 2 条，真行为 22 条</h3>
+<p>也就是说：<b>光挪类型救不了蜂群</b>。它被 22 条行为边缝在核心里。但这些边不是均匀分布的 —— 一半是组合根本来就该认识的：</p>
+<table><tr><th>谁伸的手</th><th class="n">几条</th><th>这一族认了蜂群的什么</th></tr>
+<tr><td><code>runtime</code></td><td class="n">11</td><td>循环层 —— 这是真正的纠缠：循环按名字认识纪律层，正是要解掉的那些<br><span class="note">mixed/type/value：<code>constraints</code> <code>task-state</code> <code>taskspec</code> <code>taskspec-prompt</code> <code>skill-catalogue</code> <code>write-budget</code> <code>obs-recall</code> <code>validation</code> <code>gene-store</code> <code>cycle-store</code> <code>cycle</code></span></td></tr>
+<tr><td><code>cli</code></td><td class="n">8</td><td>组合根 —— 它本来就该认识全部模块，这几条不算纠缠（但它将来要改成从插件树组装）<br><span class="note">mixed/value：<code>task-state</code> <code>cycle</code> <code>gene</code> <code>gene-store</code> <code>cycle-store</code> <code>distill</code> <code>induct</code> <code>preflight</code></span></td></tr>
+<tr><td><code>tools</code></td><td class="n">2</td><td>工具层认识了 task-state 与 obs-recall<br><span class="note">value：<code>task-state</code> <code>obs-recall</code></span></td></tr>
+<tr><td><code>session-store</code></td><td class="n">2</td><td>会话日志认识了 gene 与 task-state —— 正是 §3.4 ③ 记的「词汇表泄漏进核心」<br><span class="note">value：<code>gene</code> <code>task-state</code></span></td></tr>
+<tr><td><code>interactive</code></td><td class="n">2</td><td>交互层认识了 task-state 与 cycle<br><span class="note">value：<code>task-state</code> <code>cycle</code></span></td></tr>
+<tr><td><code>types</code></td><td class="n">1</td><td>词汇表反过来依赖 taskspec —— 这就是第二节那个环<br><span class="note">type：<code>taskspec</code></span></td></tr>
+<tr><td><code>file-policy</code></td><td class="n">1</td><td>策略层认识了 gene —— 策略不该认识纪律层<br><span class="note">value：<code>gene</code></span></td></tr>
+</table>
+<p><b>去掉组合根 cli 那 8 条，真正的纠缠是 19 条</b>（仅类型 2 · 行为 15 · 混合 2）。</p>
+<p><b>这 19 条就是第 4 步的工作清单，不是"不可能"。</b>每一条的修法是同一个：把"按名字 import"换成"向接缝要这个服务"。接缝接住了，这条边就没了。数量看着多，形状只有一种。</p></div>
+<h2>四、接缝层的真实签名（源码实读，不是设计稿）</h2>
+<div class="card blue"><h3>签名已经存在，缺的只是把它推广出去</h3>
+<p><b>① 模型适配器</b> —— 教科书式正确的那条</p>
+<p class="mono">types.ts:371&nbsp;&nbsp;export interface ModelAdapter {<br>&nbsp;&nbsp;readonly id: string;<br>&nbsp;&nbsp;readonly defaultModel: string;<br>&nbsp;&nbsp;chat(request: ChatRequest, signal?: AbortSignal): Promise&lt;ChatResponse&gt;;<br>}</p>
+<p class="note"><code>runtime.ts</code> 不 import 任何具体适配器；<code>cli.ts</code> 挑实现。接口在词汇表、行为在外面 —— 这就是要推广的形状。</p>
+<p><b>② 工具注册表</b> —— 第二条，但它不在独立文件里</p>
+<p class="mono">tools.ts:1339&nbsp;&nbsp;export class ToolRegistry {<br>&nbsp;&nbsp;constructor(tools: readonly Tool[] = [], available?: readonly string[])<br>&nbsp;&nbsp;has(name: string): boolean<br>&nbsp;&nbsp;register(tool: Tool): void<br>&nbsp;&nbsp;definitions(): ToolDefinition[]<br>&nbsp;&nbsp;execute(args, context): Promise&lt;ToolResult&gt;<br>}</p>
+<p><b style="color:#9a5a00">注意：它是 <code>tools.ts</code>（1432 行）的最后一段，不是独立文件。</b>所以 D173 第 ② 步是「拆文件」，不是「搬文件」。</p>
+<p><b>③ 事件与投影</b> —— 形状有了，缺共享上下文与卸载语义</p>
+<p class="mono">session-store.ts:418&nbsp;&nbsp;export interface SessionEventMap {<br>&nbsp;&nbsp;session · message · usage · "tool/call" · "tool/result" · summary · "task-state" · audit<br>}<br><br>session-store.ts:246&nbsp;&nbsp;registerEventKind(kind, handler) → () =&gt; void<br>session-store.ts:313&nbsp;&nbsp;registerSessionProjection(unit) → () =&gt; void</p>
+<p><b>撤销句柄的形状已经在用了</b>（注册就返回一个能撤销的函数）。缺的是三样：<b>共享上下文</b>（provide / get / on / effect）、<b>飞行中的工作事件</b>、<b>能力策略事件</b>。三样都能用标准库写出来，零依赖。</p></div>
+<h2>五、五步走（D173）—— 用实测的模块名</h2>
+<p class="note">顺序的判据是实测的 out-degree：<b>依赖别人越少，越早移</b>。每一步都必须同时设计三个角色：谁定义服务 · 谁提供 · 谁消费。</p>
+<div class="steps">
+<div class="step" style="border-color:#0d6b37;background:#e6f5ec"><h4><span class="n" style="background:#0d6b37">1</span><span style="color:#0d6b37">接缝层本身</span></h4><ul>
+<li>共享上下文：provide / get / on / effect</li>
+<li>三类事件：会话 · 飞行中的工作 · 能力策略</li>
+<li>撤销句柄（形状已在用）</li>
+<li>零依赖、纯标准库</li>
+<li>核心先当第一个消费者：把已有的 registerEventKind / registerSessionProjection 挂上去</li>
+</ul><div class="why" style="border-color:#0d6b37;color:#0d6b37"><b>为什么</b><br>不改任何模块的行为，所以能单独验证：既有测试全绿 + 一个示例插件能注册与卸载</div></div>
+<div class="step" style="border-color:#0d6b37;background:#e6f5ec"><h4><span class="n" style="background:#0d6b37">2</span><span style="color:#0d6b37">已经有缝的两条</span></h4><ul>
+<li>openai-adapter 22.5K</li>
+<li>echo-adapter 3.6K</li>
+<li>ToolRegistry（在 tools.ts 里，所以这步是拆文件）</li>
+</ul><div class="why" style="border-color:#0d6b37;color:#0d6b37"><b>为什么</b><br>迁移量最小、回归面最小，用它验证接缝本身 —— 错了立刻知道</div></div>
+<div class="step" style="border-color:#1c46c8;background:#ebefff"><h4><span class="n" style="background:#1c46c8">3</span><span style="color:#1c46c8">最独立的</span></h4><ul>
+<li>叶子（out 0）：inspection-tools 12.5K · background-jobs 8.3K · write-tools 4.8K · core-tools 2.2K · bounded-read 1.0K · process-tree 2.0K</li>
+<li>近叶子：shell-tool 11K out1 · preflight 22.1K in1 · tiers 19.5K out3</li>
+</ul><div class="why" style="border-color:#1c46c8;color:#1c46c8"><b>为什么</b><br>几乎不依赖别人，先移风险最小 —— 走能力策略事件</div></div>
+<div class="step" style="border-color:#9a5a00;background:#fdf2e0"><h4><span class="n" style="background:#9a5a00">4</span><span style="color:#9a5a00">中间层（最大的一块）</span></h4><ul>
+<li>会话：session-store 56.6K out6（整族）</li>
+<li>工具：tools 69.2K out13</li>
+<li>蜂群纪律层（整族一个插件，17 个）：gene 19K · gene-store 39K · cycle 15.6K · cycle-store 3.4K · distill 6.1K · induct 8.8K · write-budget 24K · validation 10.9K · task-state 18K · constraints 8.6K · obs-recall 9.1K · preflight 22.1K · skill-catalogue 17.2K · skill-packages 24.5K · taskspec · taskspec-prompt · intent-classifier</li>
+<li>MCP 一族 8 个 · 桌面一族 12 个（桌面那族已经独立，见上）</li>
+</ul><div class="why" style="border-color:#9a5a00;color:#9a5a00"><b>为什么</b><br>词汇表泄漏进核心就在这一层，要连词汇表一起搬；<b>先修那个环</b>（见第二节）</div></div>
+<div class="step" style="border-color:#ab2318;background:#fdeae7"><h4><span class="n" style="background:#ab2318">5</span><span style="color:#ab2318">最纠缠的</span></h4><ul>
+<li>runtime 91.2K，out 20 in 2 → agent-loop 插件</li>
+<li>cli.ts 留在核心，但改成从插件树组装，不再按名字 import</li>
+</ul><div class="why" style="border-color:#ab2318;color:#ab2318"><b>为什么</b><br>它 import 别人最多，必须最后动 —— 否则前面每一步都要改它两次</div></div>
+</div>
+<h2>六、验收判据（只有一条）</h2>
+<div class="card green"><h3 style="font-size:23px;color:#0d6b37">新加一个插件，核心一行都不改，全部测试照样绿。</h3>
+<p>今天不通过 —— <code>runtime.ts</code> 按名字认识 <b>20</b> 个模块，<code>cli.ts</code> 认识 <b>25</b> 个，<code>tools.ts</code> 认识 <b>13</b> 个。</p>
+<p class="note">这条不通过，「插件化」就还没到。它也是唯一能用测试证明"按架构走了"的东西 —— 文档是主张，测试才是证据。</p></div>
+<h2>七、要接入的三个内核：挂上接缝，不是写进核心</h2>
+<table><tr><th>内核</th><th>接入方式</th><th>现在的状态（实测）</th></tr>
+<tr><td><b>编排（TaskSpec）</b></td><td>上游的编排插件就是挂在「进入这一步」的钩子上，必要时改写要发给模型的消息</td><td>已落地，但是核心模块：taskspec · intent-classifier · taskspec-prompt · constraints。<br><span class="no">而且它现在是那个环的一半。</span></td></tr>
+<tr><td><b>蜂群纪律层</b></td><td>基因库 + RSI 闭环；PDRI 是骨架不是核心。它是一个插件，不是核心的多 Agent 框架</td><td>已接进桌面入口（提交 <code>a7caa5a</code>），<b>但是作为核心模块接的</b>。整族 17 个模块、约 220 KB。</td></tr>
+<tr><td><b>SoL-Pi</b></td><td>先接一个只读能力，走现有 Schema、Policy 和批准；不让它成为独立 agent</td><td>只落了召回一半：<code>obs-recall</code>。<span class="no">而且实测它一次都没触发过</span>（D168 量 0/230），D169 已把门槛降到一页。</td></tr>
+</table>
+<h2>八、明确不做（两条不许被插件化动摇）</h2>
+<div class="card"><p><b>ADR-0001</b>：会话日志是对话的唯一事实源。插件可以有自己存储（任务状态、周期账本），但<b>对话事实只在会话日志里</b>。</p>
+<p><b>独立运行</b>：接缝层优先用标准库，不依赖 DSH 宿主或 Cordis 运行时。不能把历史的“零生产依赖”当成现状：本轮已发现产品有 YAML 与压缩包读取依赖。</p>
+<p><b>不做 loader / overlay 三层分发</b>：那是为多 profile 分发设计的，本项目一个 profile 都没有。也不把上游代码原样接进来。<b>借鉴形状，不引依赖。</b></p></div>
+<h2>九、本页的口径</h2>
+<p class="note"><b>限制：</b>这不是全项目依赖解析器：未覆盖桌面入口、动态加载与宿主注入；类型边只识别整条类型引用，混在普通引用里的类型仍需逐条确认。存在环时深度仅作排版参考，不是可靠拓扑排序。下方分组是审计分组，不意味着编排、技能、召回都应塞进蜂群插件；最终插件职责以前面的目标图为准。</p>
+<p class="note">数字全部来自 <code>_research/measure-the-module-map.mjs</code> 本轮跑出来的结果：解析 <code>src/*.ts</code> 里 <code>from "./x.ts"</code> 形式的内部 import，算 in / out / 深度 / 环。<b>尺寸、度数、深度、环是实测量；"角色"和"族"是我的归类，不是测出来的。</b>要引用这些数就重跑那个脚本 —— 文件数还在长，这份数是当下的。</p>
+<script>
+const DATA = {"types": {"kb": 15.2, "lines": 376, "depth": 3, "imports": ["taskspec"], "importedBy": ["cli", "echo-adapter", "gene-store", "gene", "induct", "obs-recall", "openai-adapter", "response-validation", "runtime", "session-store", "task-state", "tools", "validation"], "kind": {"taskspec": "type"}, "doc": "Core message, tool and model contracts.", "role": "vocabulary"}, "security-config": {"kb": 9.2, "lines": 182, "depth": 0, "imports": [], "importedBy": ["cli-config", "cli", "interactive", "plugin-manifest", "runtime", "session-lease", "session-store", "tool-environment", "tools", "trusted-roots"], "kind": {}, "doc": "", "role": "policy"}, "gene": {"kb": 19, "lines": 379, "depth": 4, "imports": ["taskspec", "types"], "importedBy": ["cli", "distill", "file-policy", "gene-store", "induct", "session-store", "task-state"], "kind": {"taskspec": "value", "types": "mixed"}, "doc": "Genes: compact, immutable capability units, and the selection math (D14).", "role": "swarm"}, "rule-table": {"kb": 3.5, "lines": 90, "depth": 0, "imports": [], "importedBy": ["config", "file-policy", "mcp-bridge", "mcp-plugin", "runtime", "tiers", "tools"], "kind": {}, "doc": "The permission rule table (D23, D31).", "role": "policy"}, "cycle": {"kb": 15.6, "lines": 331, "depth": 1, "imports": ["write-budget"], "importedBy": ["cli", "cycle-store", "distill", "gene-store", "interactive", "runtime"], "kind": {"write-budget": "value"}, "doc": "The PDRI cycle: one explicit, replayable unit of work per send (D15).", "role": "swarm"}, "tool-environment": {"kb": 3.6, "lines": 79, "depth": 1, "imports": ["security-config"], "importedBy": ["cli", "mcp-client", "mcp-plugin", "runtime", "shell-tool", "tools"], "kind": {"security-config": "mixed"}, "doc": "", "role": "capability"}, "tools": {"kb": 69.2, "lines": 1432, "depth": 7, "imports": ["types", "tool-environment", "security-config", "trusted-roots", "file-policy", "rule-table", "bounded-read", "inspection-tools", "shell-tool", "background-jobs", "session-store", "task-state", "obs-recall"], "importedBy": ["cli", "infra-remote", "mcp-bridge", "mcp-plugin", "runtime"], "kind": {"types": "value", "tool-environment": "mixed", "security-config": "value", "trusted-roots": "value", "file-policy": "mixed", "rule-table": "mixed", "bounded-read": "value", "inspection-tools": "value", "shell-tool": "value", "background-jobs": "value", "session-store": "type", "task-state": "value", "obs-recall": "value"}, "doc": "Tools the model may ask for.", "role": "capability"}, "task-state": {"kb": 18, "lines": 361, "depth": 5, "imports": ["gene", "validation", "types"], "importedBy": ["cli", "interactive", "runtime", "session-store", "tools"], "kind": {"gene": "value", "validation": "value", "types": "mixed"}, "doc": "Task state: what the task is, how far it got, and what would prove each step.", "role": "swarm"}, "taskspec": {"kb": 5.7, "lines": 138, "depth": 2, "imports": ["intent-classifier"], "importedBy": ["gene", "intent-classifier", "runtime", "taskspec-prompt", "types"], "kind": {"intent-classifier": "value"}, "doc": "TaskSpec: what this send is for, decided before the model is called.", "role": "swarm"}, "write-budget": {"kb": 24, "lines": 474, "depth": 0, "imports": [], "importedBy": ["cycle", "distill", "gene-store", "induct", "runtime"], "kind": {}, "doc": "Per-cycle write budget (D18).", "role": "swarm"}, "session-store": {"kb": 56.6, "lines": 1301, "depth": 6, "imports": ["session-lease", "response-validation", "security-config", "types", "gene", "task-state"], "importedBy": ["cli", "interactive", "runtime", "tools"], "kind": {"session-lease": "value", "response-validation": "value", "security-config": "value", "types": "type", "gene": "value", "task-state": "value"}, "doc": "", "role": "session"}, "response-validation": {"kb": 2.3, "lines": 41, "depth": 4, "imports": ["types"], "importedBy": ["openai-adapter", "runtime", "session-store"], "kind": {"types": "type"}, "doc": "", "role": "vocabulary"}, "trusted-roots": {"kb": 6.1, "lines": 138, "depth": 1, "imports": ["security-config"], "importedBy": ["cli", "runtime", "tools"], "kind": {"security-config": "value"}, "doc": "Remembered readable roots (D35).", "role": "policy"}, "terminal": {"kb": 2.6, "lines": 63, "depth": 0, "imports": [], "importedBy": ["cli-config", "cli", "interactive"], "kind": {}, "doc": "", "role": "entry"}, "runtime": {"kb": 91.2, "lines": 1716, "depth": 8, "imports": ["types", "session-store", "tools", "rule-table", "tool-environment", "security-config", "trusted-roots", "constraints", "task-state", "response-validation", "taskspec", "taskspec-prompt", "skill-catalogue", "write-budget", "obs-recall", "validation", "shell-tool", "gene-store", "cycle-store", "cycle"], "importedBy": ["cli", "interactive"], "kind": {"types": "mixed", "session-store": "type", "tools": "type", "rule-table": "value", "tool-environment": "mixed", "security-config": "value", "trusted-roots": "value", "constraints": "value", "task-state": "value", "response-validation": "value", "taskspec": "mixed", "taskspec-prompt": "value", "skill-catalogue": "value", "write-budget": "value", "obs-recall": "value", "validation": "value", "shell-tool": "value", "gene-store": "value", "cycle-store": "type", "cycle": "mixed"}, "doc": "", "role": "entry"}, "gene-store": {"kb": 39, "lines": 760, "depth": 6, "imports": ["gene", "cycle", "distill", "types", "induct", "write-budget"], "importedBy": ["cli", "runtime"], "kind": {"gene": "value", "cycle": "type", "distill": "type", "types": "type", "induct": "type", "write-budget": "value"}, "doc": "Append-only persistence for the gene library (D14).", "role": "swarm"}, "distill": {"kb": 6.1, "lines": 147, "depth": 5, "imports": ["gene", "cycle", "write-budget"], "importedBy": ["cli", "gene-store"], "kind": {"gene": "value", "cycle": "type", "write-budget": "value"}, "doc": "Failure archive and distillation (D16).", "role": "swarm"}, "file-policy": {"kb": 4.2, "lines": 97, "depth": 5, "imports": ["gene", "rule-table", "write-tools"], "importedBy": ["tiers", "tools"], "kind": {"gene": "value", "rule-table": "mixed", "write-tools": "value"}, "doc": "", "role": "policy"}, "induct": {"kb": 8.8, "lines": 177, "depth": 5, "imports": ["gene", "write-budget", "types"], "importedBy": ["cli", "gene-store"], "kind": {"gene": "value", "write-budget": "value", "types": "type"}, "doc": "Success induction (D17).", "role": "swarm"}, "tiers": {"kb": 19.5, "lines": 459, "depth": 6, "imports": ["rule-table", "file-policy", "write-tools"], "importedBy": ["cli", "config"], "kind": {"rule-table": "mixed", "file-policy": "value", "write-tools": "value"}, "doc": "Named permission tiers (D22, D26, D32, D48).", "role": "capability"}, "mcp-client": {"kb": 9.2, "lines": 224, "depth": 2, "imports": ["mcp-jsonrpc", "tool-environment"], "importedBy": ["mcp-bridge", "mcp-plugin"], "kind": {"mcp-jsonrpc": "value", "tool-environment": "type"}, "doc": "MCP client over a stdio subprocess (M4 路 C, 丙-2).", "role": "mcp"}, "cycle-store": {"kb": 3.4, "lines": 91, "depth": 2, "imports": ["cycle"], "importedBy": ["cli", "runtime"], "kind": {"cycle": "value"}, "doc": "The cycle journal: an append-only log of PDRI events, folded on read (D15).", "role": "swarm"}, "obs-recall": {"kb": 9.1, "lines": 195, "depth": 4, "imports": ["types"], "importedBy": ["runtime", "tools"], "kind": {"types": "type"}, "doc": "Reading an omitted tool result back out of the session log (D52).", "role": "swarm"}, "shell-tool": {"kb": 11, "lines": 250, "depth": 2, "imports": ["tool-environment"], "importedBy": ["runtime", "tools"], "kind": {"tool-environment": "value"}, "doc": "Running a command (D46).", "role": "capability"}, "taskspec-prompt": {"kb": 6.4, "lines": 124, "depth": 3, "imports": ["taskspec"], "importedBy": ["runtime", "skill-catalogue"], "kind": {"taskspec": "type"}, "doc": "TaskSpec → prompt assembly.", "role": "swarm"}, "validation": {"kb": 10.9, "lines": 230, "depth": 4, "imports": ["types"], "importedBy": ["runtime", "task-state"], "kind": {"types": "mixed"}, "doc": "Structured validation claims (D20).", "role": "swarm"}, "background-jobs": {"kb": 8.3, "lines": 151, "depth": 0, "imports": [], "importedBy": ["cli", "tools"], "kind": {}, "doc": "", "role": "capability"}, "bounded-read": {"kb": 1, "lines": 27, "depth": 0, "imports": [], "importedBy": ["openai-adapter", "tools"], "kind": {}, "doc": "Read a byte stream into text, refusing to buffer more than `maxBytes`.", "role": "capability"}, "write-tools": {"kb": 4.8, "lines": 97, "depth": 0, "imports": [], "importedBy": ["file-policy", "tiers"], "kind": {}, "doc": "Which tools read, and which tools write.", "role": "capability"}, "interactive": {"kb": 8.3, "lines": 136, "depth": 9, "imports": ["session-store", "runtime", "task-state", "cycle", "terminal", "security-config"], "importedBy": ["cli"], "kind": {"session-store": "value", "runtime": "mixed", "task-state": "value", "cycle": "value", "terminal": "type", "security-config": "value"}, "doc": "", "role": "entry"}, "mcp-plugin": {"kb": 8.1, "lines": 166, "depth": 9, "imports": ["plugin-manifest", "mcp-client", "mcp-bridge", "tools", "rule-table", "tool-environment"], "importedBy": ["cli"], "kind": {"plugin-manifest": "mixed", "mcp-client": "value", "mcp-bridge": "value", "tools": "type", "rule-table": "type", "tool-environment": "type"}, "doc": "Runtime wiring for MCP plugins (M4 路 C, 丙-4): the last slice.", "role": "mcp"}, "mcp-bridge": {"kb": 12.7, "lines": 245, "depth": 8, "imports": ["mcp-client", "rule-table", "tools"], "importedBy": ["mcp-plugin"], "kind": {"mcp-client": "type", "rule-table": "mixed", "tools": "mixed"}, "doc": "Bridge an MCP server's tools into this project's `Tool` interface (M4 路 C, 丙-3).", "role": "mcp"}, "openai-adapter": {"kb": 22.5, "lines": 416, "depth": 5, "imports": ["types", "response-validation", "bounded-read"], "importedBy": ["cli"], "kind": {"types": "type", "response-validation": "value", "bounded-read": "value"}, "doc": "", "role": "adapter"}, "cli-config": {"kb": 5.8, "lines": 100, "depth": 1, "imports": ["security-config", "terminal"], "importedBy": ["cli"], "kind": {"security-config": "value", "terminal": "type"}, "doc": "", "role": "policy"}, "config": {"kb": 11.6, "lines": 262, "depth": 7, "imports": ["rule-table", "tiers"], "importedBy": ["cli"], "kind": {"rule-table": "value", "tiers": "value"}, "doc": "Operator configuration (D26).", "role": "policy"}, "echo-adapter": {"kb": 3.6, "lines": 101, "depth": 4, "imports": ["types"], "importedBy": ["cli"], "kind": {"types": "type"}, "doc": "", "role": "adapter"}, "intent-classifier": {"kb": 3.4, "lines": 83, "depth": 1, "imports": ["taskspec"], "importedBy": ["taskspec"], "kind": {"taskspec": "mixed"}, "doc": "Intent classifier distilled from Jev (D124).", "role": "swarm"}, "plugin-manifest": {"kb": 12.8, "lines": 268, "depth": 1, "imports": ["security-config"], "importedBy": ["mcp-plugin"], "kind": {"security-config": "value"}, "doc": "Plugin discovery and manifest parsing (M4, D118 — 乙-1).", "role": "mcp"}, "session-lease": {"kb": 2, "lines": 38, "depth": 1, "imports": ["security-config"], "importedBy": ["session-store"], "kind": {"security-config": "value"}, "doc": "", "role": "policy"}, "skill-catalogue": {"kb": 17.2, "lines": 352, "depth": 4, "imports": ["taskspec-prompt"], "importedBy": ["runtime"], "kind": {"taskspec-prompt": "value"}, "doc": "The skill catalogue: which capability prompts exist, and when each one fires", "role": "swarm"}, "constraints": {"kb": 8.6, "lines": 178, "depth": 0, "imports": [], "importedBy": ["runtime"], "kind": {}, "doc": "Operator standing constraints (D55 采用清单第 1 项，取证见 D53/D55/D57).", "role": "swarm"}, "core-tools": {"kb": 2.2, "lines": 37, "depth": 0, "imports": [], "importedBy": ["cli"], "kind": {}, "doc": "", "role": "capability"}, "inspection-tools": {"kb": 12.5, "lines": 303, "depth": 0, "imports": [], "importedBy": ["tools"], "kind": {}, "doc": "Named read-only inspection tools (D41).", "role": "capability"}, "mcp-jsonrpc": {"kb": 8.7, "lines": 216, "depth": 0, "imports": [], "importedBy": ["mcp-client"], "kind": {}, "doc": "JSON-RPC 2.0 encoding/decoding for the MCP stdio transport (M4 路 C, 丙-1).", "role": "mcp"}, "preflight": {"kb": 22.1, "lines": 486, "depth": 0, "imports": [], "importedBy": ["cli"], "kind": {}, "doc": "Preflight for a *real* integration run (live provider + real terminal).", "role": "swarm"}, "cli": {"kb": 41.6, "lines": 631, "depth": 10, "imports": ["session-store", "runtime", "task-state", "cycle", "echo-adapter", "openai-adapter", "tiers", "trusted-roots", "tools", "core-tools", "gene", "background-jobs", "gene-store", "cycle-store", "distill", "induct", "tool-environment", "mcp-plugin", "security-config", "cli-config", "config", "terminal", "interactive", "preflight", "types"], "importedBy": [], "kind": {"session-store": "value", "runtime": "value", "task-state": "value", "cycle": "value", "echo-adapter": "value", "openai-adapter": "value", "tiers": "value", "trusted-roots": "value", "tools": "value", "core-tools": "value", "gene": "mixed", "background-jobs": "value", "gene-store": "value", "cycle-store": "value", "distill": "value", "induct": "value", "tool-environment": "value", "mcp-plugin": "mixed", "security-config": "value", "cli-config": "value", "config": "value", "terminal": "mixed", "interactive": "value", "preflight": "value", "types": "type"}, "doc": "", "role": "entry"}, "infra-remote": {"kb": 14.5, "lines": 301, "depth": 8, "imports": ["tools"], "importedBy": [], "kind": {"tools": "value"}, "doc": "Server operations via ssh (D51).", "role": "entry"}, "desktop-capabilities": {"kb": 18.7, "lines": 215, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-echo": {"kb": 1.3, "lines": 25, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-memory": {"kb": 5.7, "lines": 77, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-model": {"kb": 21.3, "lines": 245, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-providers": {"kb": 11.1, "lines": 167, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-session-management": {"kb": 4.9, "lines": 83, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-sessions": {"kb": 1.7, "lines": 27, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-task-flow": {"kb": 7, "lines": 63, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-tasks": {"kb": 7.9, "lines": 59, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-tool-probe": {"kb": 1.6, "lines": 17, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-tools": {"kb": 6.8, "lines": 130, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "desktop-usage": {"kb": 2.4, "lines": 45, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "desktop"}, "mcp-config": {"kb": 8.1, "lines": 94, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "mcp"}, "mcp-http-client": {"kb": 6.6, "lines": 107, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "mcp"}, "mcp-oauth": {"kb": 12.1, "lines": 106, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "mcp"}, "process-tree": {"kb": 2, "lines": 40, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "capability"}, "skill-packages": {"kb": 24.5, "lines": 311, "depth": 0, "imports": [], "importedBy": [], "kind": {}, "doc": "", "role": "swarm"}};
+const chips=[...document.querySelectorAll('.chip')];
+const svg=document.getElementById('edges'), panel=document.getElementById('panel');
+const mapbox=document.querySelector('.mapbox');
+const NS='http://www.w3.org/2000/svg';
+let sel=null;
+function chipOf(n){return chips.find(c=>c.dataset.name===n);}
+function clearEdges(){svg.innerHTML='';}
+function ptOf(el,base){const r=el.getBoundingClientRect();
+  return {x:r.left-base.left+r.width/2, y:r.top-base.top+r.height/2};}
+function line(base,p,q,color,dashed){
+  const my=(p.y+q.y)/2;
+  const path=document.createElementNS(NS,'path');
+  path.setAttribute('d','M '+p.x+' '+p.y+' C '+p.x+' '+my+', '+q.x+' '+my+', '+q.x+' '+q.y);
+  path.setAttribute('stroke',color);
+  path.setAttribute('stroke-width',dashed?'1.3':'1.9');
+  if(dashed) path.setAttribute('stroke-dasharray','5 4');
+  path.setAttribute('fill','none'); path.setAttribute('opacity','.8');
+  svg.appendChild(path);
+}
+function draw(name){
+  const c=chipOf(name); if(!c) return;
+  const base=mapbox.getBoundingClientRect();
+  const p0=ptOf(c,base), kind=DATA[name].kind;
+  DATA[name].imports.forEach(t=>{const e=chipOf(t);
+    if(e && e.getClientRects().length) line(base,p0,ptOf(e,base),'#9a5a00',kind[t]==='type');});
+  DATA[name].importedBy.forEach(t=>{const e=chipOf(t);
+    if(e && e.getClientRects().length) line(base,ptOf(e,base),p0,'#1c46c8',DATA[t].kind[name]==='type');});
+}
+function tagOf(k){
+  if(k==='type') return ' <span style="color:#0d6b37;font-size:11px">[仅类型]</span>';
+  if(k==='mixed') return ' <span style="color:#9a5a00;font-size:11px">[混合]</span>';
+  return ' <span style="color:#ab2318;font-size:11px">[行为]</span>';
+}
+function show(name){
+  const d=DATA[name];
+  const out=d.imports.length?d.imports.map(x=>'<code>'+x+'</code>'+tagOf(d.kind[x])).join(' '):'<span style="color:#6b7280">（没有）</span>';
+  const back=d.importedBy.length?d.importedBy.map(x=>{
+    const k=(DATA[x]&&DATA[x].kind[name])||'value';
+    return '<code>'+x+'</code>'+tagOf(k);}).join(' '):'<span style="color:#6b7280">（没有）</span>';
+  panel.innerHTML='<h4>'+name+'　<span style="font-weight:400;color:#6b7280;font-size:13px">'
+    +d.kb+' KB · '+d.lines+' 行 · 深度 '+d.depth+'</span></h4>'
+    +'<div class="row">'+(d.doc?d.doc.replace(/[<>]/g,''):'')+'</div>'
+    +'<div class="row"><b style="color:#9a5a00">它依赖（'+d.imports.length+'）：</b> '+out+'</div>'
+    +'<div class="row"><b style="color:#1c46c8">依赖它（'+d.importedBy.length+'）：</b> '+back+'</div>';
+}
+function select(name){
+  sel=name; clearEdges();
+  chips.forEach(c=>c.classList.remove('sel'));
+  if(!name){chips.forEach(c=>c.classList.remove('dim'));return;}
+  const keep=new Set([name].concat(DATA[name].imports,DATA[name].importedBy));
+  chips.forEach(c=>c.classList.toggle('dim',!keep.has(c.dataset.name)));
+  const c=chipOf(name); if(c) c.classList.add('sel');
+  draw(name); show(name);
+}
+chips.forEach(c=>c.addEventListener('click',()=>select(sel===c.dataset.name?null:c.dataset.name)));
+document.getElementById('search').addEventListener('input',e=>{
+  const q=e.target.value.trim().toLowerCase();
+  chips.forEach(c=>{c.style.display=(!q||c.dataset.name.toLowerCase().includes(q))?'':'none';});
+  clearEdges(); if(sel && chipOf(sel).getClientRects().length) draw(sel);
+});
+window.addEventListener('resize',()=>{clearEdges();if(sel)draw(sel);});
+chips.forEach(c=>{c.setAttribute('tabindex','0');c.setAttribute('role','button');c.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(sel===c.dataset.name?null:c.dataset.name);}});});
+
+</script></div></body></html>
