@@ -100,14 +100,14 @@ ctx.on?.('agent/pre-step', handler, { prepend:true }) // 订阅事件
 
 | 文件 | 为什么必须留 |
 |---|---|
-| `types.ts` | 消息与流词汇表 —— 插件与核心共同的语言 |
+| `types.ts` | 消息与流词汇表 —— 插件与核心共同的语言。⚠️ **（D174 / D176）词汇表本身应当是一个独立插件，与三个内核同级。** 实测跨簇边 **1 出 / 15 入**：被所有人读、只读一个人 ⇒ **"大家都要用的说法"不该住在任何一个使用者的家里**（住进去之后，改措辞等于改那个使用者的地基）。**且 `TaskIntent` 属于这里、不属于 `taskspec.ts`** —— 实测 `taskspec.ts:13` 定义它、`types.ts:13` 反过来 import 它（**词汇表依赖实现，方向是反的**；`types.ts` in-degree 13，`taskspec.ts` 只是它的消费者） |
 | `security-config.ts` | 路径策略与 canonicalization；`decide()` 的地基 |
 | `file-policy.ts` / `rule-table.ts` / `trusted-roots.ts` | 单一优先级规则表（D31）；**策略必须是核心，否则插件可以给自己放权** |
 | `config.ts` / `cli-config.ts` | 配置解析与 agent home 断言 |
 | `session-lease.ts` | 租约（同一 agent home 不可双写） |
 | `response-validation.ts` | 适配器响应的最小校验 |
 | `bounded-read.ts` | 有界读取原语 |
-| `cli.ts` / `interactive.ts` / `terminal.ts` | 入口（对应 DSH 的 profile 启动） |
+| `cli.ts` / `interactive.ts` / `terminal.ts` | 入口（对应 DSH 的 profile 启动）。⚠️ **（D175）这是第一个组合根，`desktop/main.cjs`（43.9 KB）是第二个。** 实测 12 个 `desktop-*` 模块 **in 0 / out 0**，**而 0/0 只说明它们不在这张图里、不说明它们不属于这张图**；D173⑤ 只点了 `cli.ts` ⇒ **验收判据"新加一个插件、核心一行不改、测试全绿"必须在两个组合根上都成立**，否则"插件化"只是"命令行那一半插件化了" |
 
 ### 3.2 应当移到接缝后面（第一批插件）
 
@@ -117,8 +117,9 @@ ctx.on?.('agent/pre-step', handler, { prepend:true }) // 订阅事件
 | `tools.ts`（63 KB）+ `tool-environment.ts` + `write-tools.ts` | **tools 插件**（`ctx.tools`） | DSH `core/tools` |
 | `runtime.ts`（58 KB） | **agent-loop 插件**（`ctx.agentLoop`） | DSH `core/agent-loop` —— *"The default driver implementing that interface"*，**"default" 意味着可换** |
 | 散在 `runtime.ts`/`constraints.ts`/`task-state.ts` 的注入块 | **system-prompt 插件**（`ctx.systemPrompt.section`） | DSH `core/system-prompt`；上游 `dsh-orchestrator` 正是用 `section({name, order, text})` |
-| `taskspec.ts`（4.6 KB） | **TaskSpec 插件** | 上游 `dsh-orchestrator` **本身就是插件** |
-| `gene.ts`/`gene-store.ts`/`cycle.ts`/`cycle-store.ts`/`distill.ts`/`induct.ts`/`validation.ts`/`write-budget.ts` | **蜂群纪律层插件** | 上游 `dsh-swarm` **也是插件**（`SWARM_LOOP.md:173` 曾把 "Cordis 宿主" 列为不做，已撤销） |
+| `taskspec.ts`（4.6 KB） | **TaskSpec 插件** | 上游 `dsh-orchestrator` **本身就是插件**。⚠️ **（D174）搬之前先分家**：`TaskIntent` 搬去 `types.ts`（那是词汇），`extractSignals`（定义在 `taskspec.ts:71`，另被 `:122` 与 `intent-classifier.ts:53` 使用）**另立一个模块**。**且意图理解必须留痕：原始输入与转换后发给大模型的提示词都要记** —— 只记转换后的，事后回答不了"它当时到底收到了什么"；只记原始的，回答不了"它为什么那样答" |
+| `gene.ts`/`gene-store.ts`/`cycle.ts`/`cycle-store.ts`/`distill.ts`/`induct.ts`/`validation.ts`/`write-budget.ts` | **蜂群纪律层插件** | 上游 `dsh-swarm` **也是插件**（`SWARM_LOOP.md:173` 曾把 "Cordis 宿主" 列为不做，已撤销）。⚠️ **（D178 / D179）这两条改的正是这一层的两条上限**：**周期预算按工作量计费、不按墙上的钟**（逐间隔计费、每间隔封顶 10 分钟、等待不计；实测 3640 个间隔中位数 **8.8 秒**、p90 **441.5 秒**，**99 个周期里单个间隔就超过整个 30 分钟预算**，⚠️ 单机单账本、方向性数据；**`replay()` 在生产里没有调用者 ⇒ 历史那 1335 个周期不重判**）；**行数是参考值不是墙**（**字段与校验都留着，只拆"拒绝"**，改成在"允许"上带一句话 —— 字段进内容地址，删了会把全库重新编址、战绩全丢；**`line-budget` 规则名不能删**，账本里的历史失败记录还叫着它） |
+| （尚无） | **召回 / 投影插件**（SoL-Pi） | ⚠️ **（D177）这个内核今天只算落了一半**：投影已落（D128 §九），**召回端 `obs-recall` 从未触发，0/230**（D168 记，D169 降了阈值）⇒ **接入必须两端一起算，并给出"召回真的被触发、且改变了输出"的证据**。只接投影**看起来是成功的**（无报错、无空结果警示、日志干净）—— **一条被报成成功的部分失败，比一次失败更糟** |
 | `constraints.ts`（8.8 KB） | **约束注册表插件**（提示词段） | `ctx.systemPrompt.section` |
 | `task-state.ts`（17 KB） | **任务状态插件**（自带存储） | 上游 journal 由 `config.taskSpecJournalRoot` 决定 ⇒ **插件拥有自己的存储** |
 | `inspection-tools.ts`（12 KB） | **只读检查能力插件** | capability events（`tools/*`） |
@@ -242,5 +243,24 @@ tools.ts         -> … session-store.ts, task-state.ts
 - **⚠️ 新增未决项（D69）**：`migrateEvent` 的 8-case 封闭 switch **可以**照 `:143`（*"Add durable session state → extend `SessionEventMap`"*）+ 声明合并改成开放扩展点。**但本项目是 `node --experimental-strip-types` 直跑 TS，声明合并在此模式下的可用性未验证** —— 这是采用前必须先测的一条。
 - **插件的分发格式**（是否要 bundle/profile/patch 三层，还是只要"一个目录一个插件"）**尚未决定**。DSH 的三层是为多 profile 分发设计的，本项目是否需要**未评估**。
 - **迁移顺序**（26 个模块先移哪个）**尚未决定**。候选判据：先移已经有缝的（模型适配器），再移最独立的（`inspection-tools.ts`、`shell-tool.ts`），最后移最纠缠的（`runtime.ts`、`tools.ts`）。
+  > **✅ 已决定（D173，2026-10-13）：顺序定为五步，验收判据只有一条。完整取证见 [REFERENCE_DECISIONS.md](REFERENCE_DECISIONS.md) D173。**
+  >
+  > | 步 | 移什么 | 为什么排在这一步 |
+  > |---|---|---|
+  > | **1** | **接缝层本身**：共享 context（`provide`/`get`/`on`/`effect`）+ 三类事件 + 撤销句柄。**零依赖、纯标准库。** 核心自己先当第一个消费者 —— 把已有的 `registerEventKind` / `registerSessionProjection` 挂上去 | **没有它，后面每一步都无处可落**；而它本身**不改任何模块的行为**，所以能单独验证 |
+  > | **2** | **已经有缝的那两条**：`openai-adapter` / `echo-adapter`（接口已在 `types.ts`、`runtime.ts` 不 import 具体实现、`cli.ts` 挑实现），以及 `ToolRegistry` | **用它验证接缝本身**：迁移量最小、回归面最小，**错了立刻知道** |
+  > | **3** | **最独立的**：`inspection-tools`、`shell-tool`、`background-jobs`、`preflight`、`tiers` | 它们几乎不依赖别人（§3.4 ⑤ 的 out-degree 前三名里没有它们），走 capability events |
+  > | **4** | **中间层**：`session-store`（session 插件）、`tools`（tools 插件）、system-prompt 段、`taskspec`/`taskspec-prompt`、`constraints`、`task-state`、`write-budget`、`validation`、`cycle*`/`gene*`/`distill`/`induct`（**蜂群纪律层整体作为一个插件**） | §3.4 ③ 记的"词汇表泄漏进核心"就在这一层，**要连词汇表一起搬** |
+  > | **5** | **最纠缠的**：`runtime.ts`（agent-loop 插件）。`cli.ts` **留在核心**，但改成**从插件树组装**，不再按名字 import | 它 import 别人最多，**必须最后动**，否则前面每一步都要改它两次 |
+  >
+  > **⚠️ 每一步都必须同时设计三个角色**（谁定义服务、谁提供、谁消费）—— `:117` 原文：*"one role alone is not a seam; adding a capability means designing all three"*。**我上一轮"把 `ModelAdapter` 的模式推广到 tools"的说法按此不完整，本表已按三角色写。**
+  >
+  > **✅ 验收判据只有一条，可证伪、可复跑**：**新加一个插件，核心一行都不改，全部测试照样绿。** 今天做不到 —— `runtime.ts` 按名字认识每一个内核。**这一条不通过，"插件化"就还没到。**
+  >
+  > **⚠️ 要接入的三个内核是"挂上接缝"，不是"写进核心"**：① **编排**（`dsh-orchestrator` 的 TaskSpec 那一套）② **蜂群纪律层** ③ **SoL-Pi**（先接只读召回）。**② 已接进桌面入口（提交 `a7caa5a`），但它是作为核心模块接的** —— 第 4 步就是把它改成插件。**这三件是 §1 目标形态的验收对象，不是额外需求。**
+  >
+  > **⚠️ 一处必须如实说的过期**：§3.1 / §3.2 那张"哪些留核心、哪些移出去"的表是**按 36 个文件量的，现在 64 个**。所以"26 个模块"是旧数，上面第 3/4/5 步点的模块名也是**旧清单里的**。**顺序（先独立、后纠缠）不受影响，但"哪几个模块归哪一步"必须在第 1 步做完后重新量一遍** —— 本轮**没有**重做那张表，那需要一次独立的测量。
+  >
+  > **本轮实测（2026-10-13，可重跑）**：`src/` 下 **64 个 `.ts` 文件，全部平铺，一个子目录都没有**；按名字 import **不同模块**：`cli.ts` **25**、`runtime.ts` **20**、`tools.ts` **13**（9-30 那次是 23 / 16 / 12 ⇒ **`runtime.ts` 从 16 涨到 20**）。**⚠️ 方向性数据**：文件数还在长，**要引用就重跑**。
 - **零生产依赖是否仍能维持** —— 接缝层本身应当能用标准库实现，但**未验证**。
 - **`node:sqlite` 与插件存储的关系**：D68 已验出 `engines: node >=22.6` 处需要 `--experimental-sqlite`（v22.13.0 起免除），且"只许 INSERT/SELECT"规则与"原子条件更新"不可兼得。**若任务状态成为插件并自带存储，这个决定归插件，不归核心。**
